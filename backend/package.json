@@ -1,0 +1,50 @@
+{
+  "name": "backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test src/**/*.test.ts",
+    "db:migrate:pg": "tsx src/scripts/migrate-postgres.ts",
+    "db:check:shadow": "tsx src/scripts/check-shadow-consistency.ts",
+    "db:check:content-parity": "tsx src/scripts/check-content-parity.ts",
+    "db:check:rollout-guardrails": "tsx src/scripts/check-rollout-guardrails.ts",
+    "db:check:slo-escalation": "tsx src/scripts/check-slo-escalation.ts",
+    "db:promote:via-parity": "tsx src/scripts/promote-via-parity.ts",
+    "db:check:pilot-rollout": "tsx src/scripts/check-pilot-rollout.ts",
+    "db:check:failover-readiness": "tsx src/scripts/check-failover-readiness.ts",
+    "db:check:canary-deployment": "tsx src/scripts/check-canary-deployment.ts",
+    "db:check:incident-recovery": "tsx src/scripts/check-incident-recovery.ts",
+    "db:check:chaos-resilience": "tsx src/scripts/check-chaos-resilience.ts",
+    "db:check:game-day-readiness": "tsx src/scripts/check-game-day-readiness.ts",
+    "db:check:compliance-evidence": "tsx src/scripts/check-compliance-evidence.ts",
+    "db:check:rollback-policy": "tsx src/scripts/check-rollback-policy.ts",
+    "db:check:anomaly-remediation": "tsx src/scripts/check-anomaly-remediation.ts",
+    "db:check:governance-exceptions": "tsx src/scripts/check-governance-exceptions.ts"
+  },
+  "dependencies": {
+    "@types/pg": "^8.20.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.5.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.8.0",
+    "multer": "^1.4.5-lts.1",
+    "pg": "^8.20.0",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.7",
+    "@types/multer": "^1.4.12",
+    "@types/node": "^22.9.0",
+    "mongodb-memory-server": "^11.0.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

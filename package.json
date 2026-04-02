@@ -1,0 +1,23 @@
+{
+  "name": "remote_screen",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "backend",
+    "dashboard"
+  ],
+  "scripts": {
+    "dev": "npm run dev:backend",
+    "dev:backend": "npm run dev -w backend",
+    "dev:dashboard": "npm run dev -w dashboard",
+    "lint": "npm run lint -w backend && npm run lint -w dashboard",
+    "test": "npm run test -w backend && npm run test -w dashboard",
+    "build": "npm run build -w backend && npm run build -w dashboard",
+    "test:e2e": "powershell -ExecutionPolicy Bypass -File tests/scripts/run-dashboard-browser-e2e.ps1",
+    "check:kotlin": "powershell -ExecutionPolicy Bypass -File scripts/check-kotlin-quality.ps1",
+    "quality": "npm run lint && npm run test && npm run build && npm run check:kotlin"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.51.0"
+  }
+}
