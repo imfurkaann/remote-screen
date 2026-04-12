@@ -2,6 +2,7 @@ package com.signage.player.commands
 
 import android.content.Context
 import android.media.AudioManager
+import com.signage.player.ui.PlayerUiStateStore
 import java.io.File
 
 class CommandExecutor(
@@ -27,6 +28,17 @@ class CommandExecutor(
                 }
 
                 "FORCE_REFRESH" -> {
+                    val showConnectionInfo = when (val raw = command.payload["show_device_config"]) {
+                        is Boolean -> raw
+                        is String -> raw.equals("true", ignoreCase = true)
+                        else -> null
+                    }
+
+                    if (showConnectionInfo != null) {
+                        PlayerUiStateStore.setShowConnectionInfo(showConnectionInfo)
+                        return CommandAckPayload(deviceId, command.commandId, "COMPLETED")
+                    }
+
                     onForceRefresh()
                     CommandAckPayload(deviceId, command.commandId, "COMPLETED")
                 }

@@ -1,47 +1,41 @@
 package com.signage.player
 
-import android.graphics.BitmapFactory
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Card
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
 import com.signage.player.boot.StartupCoordinator
+import com.signage.player.config.AppDefaults
+import com.signage.player.network.DeviceSessionRequest
 import com.signage.player.network.PairingRequest
 import com.signage.player.network.RetrofitFactory
-import com.signage.player.ui.theme.SignageplayerTheme
 import com.signage.player.storage.HardwareIdStore
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.graphics.asImageBitmap
-import kotlinx.coroutines.launch
-import java.io.File
+import com.signage.player.ui.PlayerUiStateStore
+import com.signage.player.ui.theme.SignageplayerTheme
+import kotlinx.coroutines.delay
+import retrofit2.HttpException
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -65,188 +59,106 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun PairingScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
     val hardwareId = remember(context) { HardwareIdStore(context).getOrCreateHardwareId() }
+    val uiState by PlayerUiStateStore.state.collectAsState()
 
-    var backendBaseUrl by remember { mutableStateOf("http://10.0.2.2:4100") }
-    var bootstrapKey by remember { mutableStateOf("test-bootstrap-key") }
-    var tenantId by remember { mutableStateOf("tenant-demo") }
-    var pairingCode by remember { mutableStateOf<String?>(null) }
-    var expiresAt by remember { mutableStateOf<String?>(null) }
-    var deviceId by remember { mutableStateOf<String?>(null) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-    var loading by remember { mutableStateOf(false) }
-    var activeMediaPath by remember { mutableStateOf<String?>(null) }
+    var pairingCode by remember { mutableStateOf("------") }
+    var isPaired by remember { mutableStateOf(false) }
+    var lastPairingRequestAt by remember { mutableLongStateOf(0L) }
 
-    androidx.compose.runtime.LaunchedEffect(Unit) {
+    androidx.compose.runtime.LaunchedEffect(hardwareId) {
+        val api = RetrofitFactory.create(AppDefaults.BACKEND_BASE_URL)
+
+        suspend fun requestFreshPairingCode() {
+            val now = System.currentTimeMillis()
+            runCatching {
+                api.requestPairingCode(
+                    bootstrapKey = AppDefaults.BOOTSTRAP_KEY,
+                    request = PairingRequest(
+                        hardware_id = hardwareId,
+                        tenant_id = AppDefaults.TENANT_ID
+                    )
+                )
+            }.onSuccess { response ->
+                pairingCode = response.code
+                lastPairingRequestAt = now
+            }
+        }
+
         while (true) {
-            activeMediaPath = findActiveMediaPath(context)
-            withFrameNanos { }
+            val now = System.currentTimeMillis()
+
+            runCatching {
+                api.refreshDeviceSession(
+                    bootstrapKey = AppDefaults.BOOTSTRAP_KEY,
+                    request = DeviceSessionRequest(
+                        hardware_id = hardwareId,
+                        tenant_id = AppDefaults.TENANT_ID
+                    )
+                )
+            }.onSuccess {
+                isPaired = true
+            }.onFailure { error ->
+                if (error is HttpException && (error.code() == 404 || error.code() == 409)) {
+                    // 404: device was deleted, 409: exists but currently unpaired.
+                    isPaired = false
+                    pairingCode = "------"
+                    lastPairingRequestAt = 0L
+                    requestFreshPairingCode()
+                }
+            }
+
+            if (!isPaired) {
+                if (pairingCode != "------" && now - lastPairingRequestAt >= 300_000L) {
+                    pairingCode = "------"
+                }
+
+                // Keep validating/refreshing code every minute while unpaired.
+                if (pairingCode == "------" || now - lastPairingRequestAt >= 60_000L) {
+                    requestFreshPairingCode()
+                }
+            }
+
+            delay(5000)
         }
     }
 
     Column(
         modifier = modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
             .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text(text = "Remote Screen Player", fontWeight = FontWeight.Bold)
-        Text(text = "Generate a pairing code from the backend and display it here.")
+        if (!isPaired) {
+            Text(
+                text = pairingCode,
+                fontSize = 64.sp,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+                lineHeight = 68.sp
+            )
+        } else {
+            Text(
+                text = "Medya bekleniyor",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+        }
 
-        Text(text = "Hardware ID", fontWeight = FontWeight.Bold)
-        Text(text = hardwareId)
-
-        OutlinedTextField(
-            value = backendBaseUrl,
-            onValueChange = { backendBaseUrl = it },
-            label = { Text("Backend Base URL") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true
-        )
-
-        OutlinedTextField(
-            value = bootstrapKey,
-            onValueChange = { bootstrapKey = it },
-            label = { Text("Bootstrap Key") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true
-        )
-
-        OutlinedTextField(
-            value = tenantId,
-            onValueChange = { tenantId = it },
-            label = { Text("Tenant ID") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true
-        )
-
-        Button(
-            onClick = {
-                loading = true
-                errorMessage = null
-                pairingCode = null
-                expiresAt = null
-                deviceId = null
-
-                coroutineScope.launch {
-                    try {
-                        val api = RetrofitFactory.create(backendBaseUrl.trim())
-                        val response = api.requestPairingCode(
-                            bootstrapKey = bootstrapKey.trim(),
-                            request = PairingRequest(
-                                hardware_id = hardwareId,
-                                tenant_id = tenantId.trim()
-                            )
-                        )
-                        pairingCode = response.code
-                        expiresAt = response.expires_at
-                        deviceId = response.device_id
-                    } catch (error: Exception) {
-                        errorMessage = error.message ?: error::class.java.simpleName
-                    } finally {
-                        loading = false
-                    }
-                }
-            },
-            enabled = !loading,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            if (loading) {
-                CircularProgressIndicator(modifier = Modifier.size(18.dp))
-                Text(text = "  Requesting pairing code")
-            } else {
-                Text(text = "Generate Pairing Code")
+        if (uiState.showConnectionInfo) {
+            Column(
+                modifier = Modifier.padding(top = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(text = AppDefaults.BACKEND_BASE_URL, textAlign = TextAlign.Center)
+                Text(text = AppDefaults.BOOTSTRAP_KEY, textAlign = TextAlign.Center)
+                Text(text = AppDefaults.TENANT_ID, textAlign = TextAlign.Center)
             }
         }
-
-        pairingCode?.let { code ->
-            Text(text = "Pairing Code", fontWeight = FontWeight.Bold)
-            Text(text = code, fontWeight = FontWeight.Bold)
-            Text(text = "Device ID: ${deviceId.orEmpty()}")
-            Text(text = "Expires At: ${expiresAt.orEmpty()}")
-        }
-
-        activeMediaPath?.let { mediaPath ->
-            val mediaFile = remember(mediaPath) { File(mediaPath) }
-            val bitmap = remember(mediaPath, mediaFile.lastModified(), mediaFile.length()) {
-                runCatching { decodePreviewBitmap(mediaPath, maxDimension = 2048) }.getOrNull()
-            }
-
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(text = "Active Media Preview", fontWeight = FontWeight.Bold)
-                    Text(text = mediaPath)
-                    if (bitmap != null) {
-                        Image(
-                            bitmap = bitmap.asImageBitmap(),
-                            contentDescription = "Synced media preview",
-                            modifier = Modifier.fillMaxWidth(),
-                            contentScale = ContentScale.Fit
-                        )
-                    } else {
-                        Text(text = "Synced file is not an image or failed to decode.")
-                    }
-                }
-            }
-        }
-
-        errorMessage?.let { message ->
-            Text(text = "Error: $message")
-        }
-
-        TextButton(onClick = {
-            backendBaseUrl = "http://10.0.2.2:4100"
-            bootstrapKey = "test-bootstrap-key"
-            tenantId = "tenant-demo"
-        }) {
-            Text("Reset Defaults")
-        }
     }
-}
-
-private fun findActiveMediaPath(context: android.content.Context): String? {
-    val activeDir = File(context.filesDir, "content/active")
-    if (!activeDir.exists()) {
-        return null
-    }
-
-    return activeDir
-        .listFiles()
-        ?.filter { it.isFile }
-        ?.sortedByDescending { it.lastModified() }
-        ?.firstOrNull()
-        ?.absolutePath
-}
-
-private fun decodePreviewBitmap(path: String, maxDimension: Int): android.graphics.Bitmap? {
-    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    BitmapFactory.decodeFile(path, bounds)
-
-    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-        return BitmapFactory.decodeFile(path)
-    }
-
-    val sampleSize = calculateInSampleSize(bounds.outWidth, bounds.outHeight, maxDimension, maxDimension)
-    val options = BitmapFactory.Options().apply {
-        inSampleSize = sampleSize
-        inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
-    }
-
-    return BitmapFactory.decodeFile(path, options)
-}
-
-private fun calculateInSampleSize(sourceWidth: Int, sourceHeight: Int, targetWidth: Int, targetHeight: Int): Int {
-    var sampleSize = 1
-    var halfHeight = sourceHeight / 2
-    var halfWidth = sourceWidth / 2
-
-    while ((halfHeight / sampleSize) >= targetHeight && (halfWidth / sampleSize) >= targetWidth) {
-        sampleSize *= 2
-    }
-
-    return sampleSize.coerceAtLeast(1)
 }
 
 @Preview(showBackground = true)

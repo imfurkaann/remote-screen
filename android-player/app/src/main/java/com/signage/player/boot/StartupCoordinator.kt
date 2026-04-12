@@ -3,6 +3,7 @@ package com.signage.player.boot
 import android.content.Context
 import com.signage.player.commands.CommandDispatchPayload
 import com.signage.player.commands.CommandExecutor
+import com.signage.player.config.AppDefaults
 import com.signage.player.mediaplayer.PlaybackCoordinator
 import com.signage.player.network.SocketClientManager
 import com.signage.player.storage.PlayerDatabaseProvider
@@ -25,11 +26,11 @@ object StartupCoordinator {
     ) {
         val hardwareId = HardwareIdStore(context).getOrCreateHardwareId()
         val socketDeviceId = runtimeDeviceId ?: hardwareId
-        val resolvedSocketBaseUrl = socketBaseUrl ?: "http://10.0.2.2:4100"
+        val resolvedSocketBaseUrl = socketBaseUrl ?: AppDefaults.BACKEND_BASE_URL
         val telemetryReporter = DeviceTelemetryReporter(
             baseUrl = resolvedSocketBaseUrl,
-            bootstrapKey = "test-bootstrap-key",
-            tenantId = "tenant-demo",
+            bootstrapKey = AppDefaults.BOOTSTRAP_KEY,
+            tenantId = AppDefaults.TENANT_ID,
             hardwareId = hardwareId,
             deviceIdHint = runtimeDeviceId
         )
