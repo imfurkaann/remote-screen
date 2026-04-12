@@ -1,6 +1,7 @@
 package com.signage.player.sync
 
 import android.content.Context
+import android.util.Log
 import com.signage.player.storage.PlaylistEntity
 import com.signage.player.storage.PlaylistRepository
 import java.io.File
@@ -17,7 +18,10 @@ class ContentSyncManager(
     private val playlistRepository: PlaylistRepository,
     private val onError: (source: String, message: String, details: Map<String, Any?>) -> Unit = { _, _, _ -> }
 ) {
+    private val tag = "ContentSyncManager"
+
     suspend fun applySyncPayload(payload: SyncContentPayload) {
+        Log.d(tag, "Applying SYNC_CONTENT playlist=${payload.playlistId} version=${payload.playlistVersion} items=${payload.items.size}")
         val contentRoot = File(appContext.filesDir, "content")
         val activeDir = File(contentRoot, "active")
         val stagingDir = File(contentRoot, "staging-${payload.playlistVersion}")
@@ -37,6 +41,7 @@ class ContentSyncManager(
                 downloadToFile(resolveMediaUrl(item.mediaUrl), targetFile)
                 downloaded = true
             } catch (error: Exception) {
+                Log.e(tag, "Download failed for ${item.filename}: ${error.message}")
                 onError(
                     "sync_download",
                     error.message ?: "Download failed",
@@ -52,6 +57,7 @@ class ContentSyncManager(
                 val repaired = tryRepairFromActive(activeDir, item, targetFile)
                 if (!repaired) {
                     val reason = if (downloaded) "Checksum mismatch" else "Download failed"
+                    Log.e(tag, "$reason for ${item.filename}")
                     onError(
                         "sync_integrity",
                         reason,
@@ -90,11 +96,13 @@ class ContentSyncManager(
                 StandardCopyOption.ATOMIC_MOVE
             )
             playlistRepository.replacePlaylist(rows)
+            Log.d(tag, "Activated playlist version=${payload.playlistVersion} rows=${rows.size}")
             if (backupDir.exists()) {
                 backupDir.deleteRecursively()
             }
             enforceCacheQuota(contentRoot)
         } catch (error: Exception) {
+            Log.e(tag, "Atomic activation failed: ${error.message}")
             onError(
                 "sync_activate",
                 error.message ?: "Atomic activation failed",

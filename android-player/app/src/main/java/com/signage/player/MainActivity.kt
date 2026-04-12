@@ -1,10 +1,13 @@
 package com.signage.player
 
 import android.os.Bundle
+import android.net.Uri
+import android.widget.ImageView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -18,14 +21,18 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.ui.PlayerView
 import com.signage.player.boot.StartupCoordinator
 import com.signage.player.config.AppDefaults
 import com.signage.player.network.DeviceSessionRequest
@@ -36,6 +43,7 @@ import com.signage.player.ui.PlayerUiStateStore
 import com.signage.player.ui.theme.SignageplayerTheme
 import kotlinx.coroutines.delay
 import retrofit2.HttpException
+import java.io.File
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -43,6 +51,7 @@ class MainActivity : ComponentActivity() {
         val runtimeDeviceId = intent?.getStringExtra("device_id")?.trim().orEmpty().ifBlank { null }
         val socketBaseUrl = intent?.getStringExtra("socket_base_url")?.trim().orEmpty().ifBlank { null }
         StartupCoordinator.enqueueStartup(this, runtimeDeviceId, socketBaseUrl)
+        StartupCoordinator.getPlayerController()?.let { lifecycle.addObserver(it) }
         enableEdgeToEdge()
         setContent {
             SignageplayerTheme {
@@ -61,6 +70,8 @@ fun PairingScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val hardwareId = remember(context) { HardwareIdStore(context).getOrCreateHardwareId() }
     val uiState by PlayerUiStateStore.state.collectAsState()
+    val playerController = remember { StartupCoordinator.getPlayerController() }
+    var activeMediaPath by remember { mutableStateOf<String?>(null) }
 
     var pairingCode by remember { mutableStateOf("------") }
     var isPaired by remember { mutableStateOf(false) }
@@ -123,14 +134,48 @@ fun PairingScreen(modifier: Modifier = Modifier) {
         }
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
+    LaunchedEffect(isPaired) {
         if (!isPaired) {
+            activeMediaPath = null
+            return@LaunchedEffect
+        }
+
+        while (true) {
+            val activeDir = File(context.filesDir, "content/active")
+            val nextPath = activeDir
+                .listFiles()
+                ?.filter { file -> file.isFile }
+                ?.sortedBy { file -> file.name }
+                ?.firstOrNull()
+                ?.absolutePath
+
+            if (nextPath != activeMediaPath) {
+                activeMediaPath = nextPath
+            }
+
+            delay(1000)
+        }
+    }
+
+    fun isImagePath(path: String): Boolean {
+        val lower = path.lowercase()
+        return lower.endsWith(".png") ||
+            lower.endsWith(".jpg") ||
+            lower.endsWith(".jpeg") ||
+            lower.endsWith(".webp") ||
+            lower.endsWith(".gif") ||
+            lower.endsWith(".bmp") ||
+            lower.endsWith(".avif")
+    }
+
+    if (!isPaired) {
+        Column(
+            modifier = modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
             Text(
                 text = pairingCode,
                 fontSize = 64.sp,
@@ -138,18 +183,71 @@ fun PairingScreen(modifier: Modifier = Modifier) {
                 textAlign = TextAlign.Center,
                 lineHeight = 68.sp
             )
-        } else {
-            Text(
-                text = "Medya bekleniyor",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center
+
+            if (uiState.showConnectionInfo) {
+                Column(
+                    modifier = Modifier.padding(top = 24.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(text = AppDefaults.BACKEND_BASE_URL, textAlign = TextAlign.Center)
+                    Text(text = AppDefaults.BOOTSTRAP_KEY, textAlign = TextAlign.Center)
+                    Text(text = AppDefaults.TENANT_ID, textAlign = TextAlign.Center)
+                }
+            }
+        }
+        return
+    }
+
+    Box(modifier = modifier.fillMaxSize()) {
+        if (!activeMediaPath.isNullOrBlank() && isImagePath(activeMediaPath!!)) {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { androidContext ->
+                    ImageView(androidContext).apply {
+                        scaleType = ImageView.ScaleType.FIT_CENTER
+                        adjustViewBounds = true
+                    }
+                },
+                update = { imageView ->
+                    imageView.setImageURI(Uri.fromFile(File(activeMediaPath!!)))
+                }
             )
+        } else if (playerController != null) {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { androidContext ->
+                    PlayerView(androidContext).apply {
+                        useController = false
+                        player = playerController.asExoPlayer()
+                    }
+                },
+                update = { view ->
+                    view.player = playerController.asExoPlayer()
+                }
+            )
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Medya bekleniyor",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+            }
         }
 
         if (uiState.showConnectionInfo) {
             Column(
-                modifier = Modifier.padding(top = 24.dp),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 24.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {

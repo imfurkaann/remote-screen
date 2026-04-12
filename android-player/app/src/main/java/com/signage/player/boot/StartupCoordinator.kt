@@ -5,6 +5,7 @@ import com.signage.player.commands.CommandDispatchPayload
 import com.signage.player.commands.CommandExecutor
 import com.signage.player.config.AppDefaults
 import com.signage.player.mediaplayer.PlaybackCoordinator
+import com.signage.player.mediaplayer.PlayerController
 import com.signage.player.network.SocketClientManager
 import com.signage.player.storage.PlayerDatabaseProvider
 import com.signage.player.storage.HardwareIdStore
@@ -18,6 +19,10 @@ import kotlinx.coroutines.launch
 
 object StartupCoordinator {
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    @Volatile
+    private var playerControllerRef: PlayerController? = null
+
+    fun getPlayerController(): PlayerController? = playerControllerRef
 
     fun enqueueStartup(
         context: Context,
@@ -39,7 +44,13 @@ object StartupCoordinator {
         val syncManager = ContentSyncManager(context, playlistRepository) { source, message, details ->
             telemetryReporter.reportError(source, message, details)
         }
-        val playbackCoordinator = PlaybackCoordinator(context, playlistRepository) { source, message, details ->
+        val playerController = PlayerController(context)
+        playerControllerRef = playerController
+        val playbackCoordinator = PlaybackCoordinator(
+            context = context,
+            playlistRepository = playlistRepository,
+            playerController = playerController
+        ) { source, message, details ->
             telemetryReporter.reportError(source, message, details)
         }
         val commandExecutor = CommandExecutor(

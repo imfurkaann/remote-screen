@@ -48,6 +48,10 @@ class PlayerController(context: Context) : DefaultLifecycleObserver {
         )
     }
 
+    fun asExoPlayer(): ExoPlayer {
+        return player
+    }
+
     override fun onStop(owner: LifecycleOwner) {
         player.pause()
     }
