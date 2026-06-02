@@ -188,6 +188,42 @@ export class DeviceRepository {
       pairedOwnerUserId: input.pairedOwnerUserId
     });
   }
+
+  /**
+   * Update device status by hardware ID
+   */
+  async updateStatusByHardware(tenantId: string, hardwareId: string, status: string): Promise<void> {
+    if (!isPostgresConnected()) {
+      return;
+    }
+
+    try {
+      const pool = getPostgresPool();
+      await pool.query(
+        `UPDATE devices
+         SET status = $1,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE tenant_id = $2
+           AND hardware_id = $3
+           AND deleted_at IS NULL`,
+        [status, tenantId, hardwareId]
+      );
+
+      logger.debug('Device status updated in PostgreSQL', {
+        operation: 'updateStatusByHardware',
+        tenantId,
+        hardwareId,
+        status
+      });
+    } catch (error) {
+      logger.error('Failed to update device status in PostgreSQL', error instanceof Error ? error : new Error(String(error)), {
+        operation: 'updateStatusByHardware',
+        tenantId,
+        hardwareId,
+        status
+      });
+    }
+  }
 }
 
 export const deviceRepository = new DeviceRepository();

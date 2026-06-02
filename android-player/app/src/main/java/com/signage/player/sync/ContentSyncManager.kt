@@ -2,6 +2,7 @@ package com.signage.player.sync
 
 import android.content.Context
 import android.util.Log
+import com.signage.player.config.AppDefaults
 import com.signage.player.storage.PlaylistEntity
 import com.signage.player.storage.PlaylistRepository
 import java.io.File
@@ -16,6 +17,7 @@ import java.security.MessageDigest
 class ContentSyncManager(
     private val appContext: Context,
     private val playlistRepository: PlaylistRepository,
+    private val mediaBaseUrl: String = DEFAULT_MEDIA_BASE_URL,
     private val onError: (source: String, message: String, details: Map<String, Any?>) -> Unit = { _, _, _ -> }
 ) {
     private val tag = "ContentSyncManager"
@@ -211,9 +213,9 @@ class ContentSyncManager(
         }
 
         return if (trimmed.startsWith("/")) {
-            "$DEFAULT_MEDIA_BASE_URL$trimmed"
+            "$mediaBaseUrl$trimmed"
         } else {
-            "$DEFAULT_MEDIA_BASE_URL/$trimmed"
+            "$mediaBaseUrl/$trimmed"
         }
     }
 
@@ -234,6 +236,15 @@ class ContentSyncManager(
     }
 
     suspend fun forceRefreshFromActiveCache() {
+        // Prefer reading from the DB so that original durationMs values are preserved.
+        // Filesystem fallback is only used when the DB is empty (first boot or after wipe).
+        val dbRows = playlistRepository.getPlaylist()
+        if (dbRows.isNotEmpty()) {
+            Log.d(tag, "forceRefresh: reusing ${dbRows.size} rows from DB (durationMs preserved)")
+            return  // DB already has correct state; PlaybackCoordinator will reload from it
+        }
+
+        // DB is empty → rebuild from active filesystem cache (durationMs defaults to 10s)
         val contentRoot = File(appContext.filesDir, "content")
         val activeDir = File(contentRoot, "active")
         if (!activeDir.exists()) {
@@ -250,16 +261,18 @@ class ContentSyncManager(
                     filePath = file.absolutePath,
                     position = index,
                     checksumSha256 = computeSha256(file),
-                    durationMs = 10_000
+                    durationMs = 10_000L
                 )
             }
             ?: emptyList()
 
+        Log.d(tag, "forceRefresh: rebuilt ${rows.size} rows from filesystem (DB was empty)")
         playlistRepository.replacePlaylist(rows)
     }
 
     companion object {
         private const val MAX_CACHE_BYTES = 2L * 1024L * 1024L * 1024L
-        private const val DEFAULT_MEDIA_BASE_URL = "http://10.0.2.2:4100"
+        // Default falls back to AppDefaults so there is a single source of truth for the backend URL.
+        val DEFAULT_MEDIA_BASE_URL: String get() = AppDefaults.BACKEND_BASE_URL
     }
 }

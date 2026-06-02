@@ -58,7 +58,9 @@ export const REMOTE_COMMANDS = [
   "REBOOT_APP",
   "SCREENSHOT",
   "SET_VOLUME",
-  "FORCE_REFRESH"
+  "FORCE_REFRESH",
+  "SCREEN_ON",
+  "SCREEN_OFF"
 ] as const;
 
 export type RemoteCommand = (typeof REMOTE_COMMANDS)[number];

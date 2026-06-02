@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { REMOTE_COMMANDS } from "@/lib/mock-data";
 
@@ -20,6 +20,10 @@ type CommandStatus = {
   error_message: string | null;
 };
 
+const TERMINAL_STATUSES = new Set(["completed", "failed", "timeout"]);
+const POLL_INTERVAL_MS = 2500;
+const POLL_MAX_MS = 20_000;
+
 async function fetchDevices(): Promise<DeviceItem[]> {
   const response = await fetch("/api/content/devices", { cache: "no-store" });
   if (!response.ok) {
@@ -37,9 +41,22 @@ export default function RemoteControlPage() {
   const [commandType, setCommandType] = useState("");
   const [payloadText, setPayloadText] = useState('{"volume": 45}');
   const [status, setStatus] = useState<CommandStatus | null>(null);
-  const [feedback, setFeedback] = useState("Ready");
+  const [feedback, setFeedback] = useState("Hazır");
+  const [isPolling, setIsPolling] = useState(false);
 
-  const canSubmit = useMemo(() => Boolean(deviceId && commandType), [deviceId, commandType]);
+  // Refs to allow cleanup of polling timers across renders
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollStartRef = useRef<number>(0);
+  const pollTargetRef = useRef<{ deviceId: string; commandId: string } | null>(null);
+
+  const canSubmit = useMemo(() => Boolean(deviceId && commandType) && !isPolling, [deviceId, commandType, isPolling]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    };
+  }, []);
 
   const loadDevices = async () => {
     setLoadingDevices(true);
@@ -48,25 +65,65 @@ export default function RemoteControlPage() {
     setLoadingDevices(false);
   };
 
-  const refreshCommandStatus = async (targetDeviceId: string, commandId: string) => {
-    const response = await fetch(`/api/commands/status?device_id=${targetDeviceId}&command_id=${commandId}`, {
-      cache: "no-store"
-    });
-    const payload = (await response.json()) as { command?: CommandStatus };
-    if (response.ok && payload.command) {
-      setStatus(payload.command);
+  const fetchCommandStatus = async (targetDeviceId: string, commandId: string): Promise<CommandStatus | null> => {
+    try {
+      const response = await fetch(`/api/commands/status?device_id=${targetDeviceId}&command_id=${commandId}`, {
+        cache: "no-store"
+      });
+      const payload = (await response.json()) as { command?: CommandStatus };
+      if (response.ok && payload.command) return payload.command;
+    } catch {
+      // network error — continue polling
     }
+    return null;
+  };
+
+  /** Poll every POLL_INTERVAL_MS until terminal status or POLL_MAX_MS elapsed */
+  const startPolling = (targetDeviceId: string, commandId: string) => {
+    if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    pollStartRef.current = Date.now();
+    pollTargetRef.current = { deviceId: targetDeviceId, commandId };
+    setIsPolling(true);
+
+    const tick = async () => {
+      const target = pollTargetRef.current;
+      if (!target) return;
+
+      const result = await fetchCommandStatus(target.deviceId, target.commandId);
+      if (result) {
+        setStatus(result);
+        const isTerminal = TERMINAL_STATUSES.has(result.status);
+        const elapsed = Date.now() - pollStartRef.current;
+
+        if (isTerminal || elapsed >= POLL_MAX_MS) {
+          setIsPolling(false);
+          pollTargetRef.current = null;
+          setFeedback(
+            isTerminal
+              ? `Komut ${result.status === "completed" ? "✅ tamamlandı" : `❌ ${result.status}`}`
+              : "⏱ Zaman aşımı"
+          );
+          return;
+        }
+      }
+
+      // Schedule next tick
+      pollTimerRef.current = setTimeout(() => void tick(), POLL_INTERVAL_MS);
+    };
+
+    pollTimerRef.current = setTimeout(() => void tick(), POLL_INTERVAL_MS);
   };
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setFeedback("Dispatching command...");
+    setFeedback("Komut gönderiliyor...");
+    setStatus(null);
 
     let payload: Record<string, unknown> = {};
     try {
       payload = payloadText.trim() ? (JSON.parse(payloadText) as Record<string, unknown>) : {};
     } catch {
-      setFeedback("Payload must be valid JSON");
+      setFeedback("Payload geçerli JSON olmalı");
       return;
     }
 
@@ -86,41 +143,40 @@ export default function RemoteControlPage() {
 
     const result = (await response.json()) as { command?: CommandStatus; message?: string };
     if (!response.ok) {
-      setFeedback(result.message ?? "Command dispatch failed");
+      setFeedback(`Hata: ${result.message ?? "Komut gönderilemedi"}`);
       return;
     }
 
     if (result.command) {
       setStatus(result.command);
-      setFeedback(result.command.status === "completed" ? "Command completed" : "Command dispatched");
+      setFeedback("Komut gönderildi — yanıt bekleniyor...");
     }
 
-    window.setTimeout(() => {
-      void refreshCommandStatus(deviceId, commandId);
-    }, 1200);
+    // Begin polling until terminal status
+    startPolling(deviceId, commandId);
   };
 
   return (
     <section className="card grid" style={{ gap: 16 }}>
       <header>
-        <h3 style={{ margin: 0 }}>Remote Command Panel</h3>
+        <h3 style={{ margin: 0 }}>Uzak Komut Paneli</h3>
         <p className="muted" style={{ marginBottom: 0 }}>
-          Send REBOOT_APP, SCREENSHOT, SET_VOLUME, FORCE_REFRESH commands and observe lifecycle status.
+          SCREEN_ON/OFF, REBOOT_APP, SCREENSHOT, SET_VOLUME, FORCE_REFRESH komutları gönderin. Durum otomatik güncellenir.
         </p>
       </header>
 
-      <div style={{ display: "flex", gap: 8 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <button type="button" onClick={loadDevices} disabled={loadingDevices}>
-          {loadingDevices ? "Loading devices..." : "Load Devices"}
+          {loadingDevices ? "Yükleniyor..." : "Cihazları Yükle"}
         </button>
-        <small className="muted">Loaded: {devices.length}</small>
+        <small className="muted">Bulunan: {devices.length}</small>
       </div>
 
       <form className="grid" style={{ maxWidth: 620 }} onSubmit={onSubmit}>
         <label className="grid">
-          Target Screen
+          Hedef Ekran
           <select value={deviceId} onChange={(event) => setDeviceId(event.target.value)} required>
-            <option value="">Select a screen</option>
+            <option value="">Ekran seçin</option>
             {devices.map((screen) => (
               <option key={screen.id} value={screen.id}>
                 {screen.hardware_id} ({screen.status})
@@ -130,9 +186,9 @@ export default function RemoteControlPage() {
         </label>
 
         <label className="grid">
-          Command Type
+          Komut Tipi
           <select value={commandType} onChange={(event) => setCommandType(event.target.value)} required>
-            <option value="">Select a command</option>
+            <option value="">Komut seçin</option>
             {REMOTE_COMMANDS.map((command) => (
               <option key={command} value={command}>
                 {command}
@@ -147,25 +203,42 @@ export default function RemoteControlPage() {
         </label>
 
         <button type="submit" disabled={!canSubmit}>
-          Send Command
+          {isPolling ? "Yanıt bekleniyor..." : "Komutu Gönder"}
         </button>
       </form>
 
-      <small>{feedback}</small>
+      <small style={{ color: isPolling ? "#ca8a04" : undefined }}>{feedback}</small>
 
       {status ? (
         <article className="card" style={{ padding: 12 }}>
           <div>
-            <strong>{status.command_type}</strong> - {status.command_id}
+            <strong>{status.command_type}</strong>
+            <span className="muted" style={{ marginLeft: 8, fontSize: "0.8em" }}>
+              {status.command_id}
+            </span>
           </div>
-          <div>Status: {status.status}</div>
+          <div style={{ marginTop: 6 }}>
+            Durum:{" "}
+            <strong
+              style={{
+                color:
+                  status.status === "completed"
+                    ? "#16a34a"
+                    : status.status === "failed" || status.status === "timeout"
+                      ? "#dc2626"
+                      : "#ca8a04"
+              }}
+            >
+              {status.status.toUpperCase()}
+            </strong>
+          </div>
           <div>
-            Attempts: {status.attempts}/{status.max_attempts}
+            Deneme: {status.attempts}/{status.max_attempts}
           </div>
-          {status.error_message ? <div style={{ color: "#b91c1c" }}>Error: {status.error_message}</div> : null}
+          {status.error_message ? <div style={{ color: "#b91c1c", marginTop: 4 }}>Hata: {status.error_message}</div> : null}
           {status.screenshot_url ? (
-            <div>
-              Screenshot: <a href={status.screenshot_url}>Open Preview</a>
+            <div style={{ marginTop: 4 }}>
+              Ekran görüntüsü: <a href={status.screenshot_url}>Önizlemeyi Aç</a>
             </div>
           ) : null}
         </article>

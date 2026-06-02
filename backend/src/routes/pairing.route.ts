@@ -23,9 +23,10 @@ type PairingRouteDeps = {
 export function buildPairingRouter(deps: PairingRouteDeps): Router {
   const router = Router();
 
+  const isDev = process.env.NODE_ENV === "development";
   const pairingLimiter = rateLimit({
     windowMs: 60_000,
-    max: 15,
+    max: isDev ? 1000 : 15,
     standardHeaders: true,
     legacyHeaders: false
   });
@@ -142,7 +143,7 @@ export function buildPairingRouter(deps: PairingRouteDeps): Router {
 
         await DeviceModel.updateOne(
           { _id: doc.deviceId, tenantId: req.auth?.tenantId },
-          { $set: { pairedOwnerUserId: req.auth?.userId } }
+          { $set: { pairedOwnerUserId: req.auth?.userId, status: "online", lastSeenAt: new Date() } }
         );
 
         const mongoDevice = await DeviceModel.findOne({ _id: doc.deviceId, tenantId: req.auth?.tenantId })

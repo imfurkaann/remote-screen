@@ -41,7 +41,26 @@ try {
     $userHeaders = @{ Authorization = "Bearer $userToken"; "Content-Type" = "application/json" }
 
     $pairReqBody = @{ hardware_id = "HW-SOCKET-SMOKE-001"; tenant_id = "tenant-demo" } | ConvertTo-Json
-    $pairReq = Invoke-RestMethod -Method Post -Uri "$BaseUrl/pairing/request-code" -Headers @{ "x-device-bootstrap-key" = $BootstrapKey; "Content-Type" = "application/json" } -Body $pairReqBody
+    $bootstrapCandidates = @($BootstrapKey, "local-bootstrap-key") | Select-Object -Unique
+    $pairReq = $null
+    $activeBootstrap = $null
+
+    foreach ($candidateKey in $bootstrapCandidates) {
+        try {
+            $pairReq = Invoke-RestMethod -Method Post -Uri "$BaseUrl/pairing/request-code" -Headers @{ "x-device-bootstrap-key" = $candidateKey; "Content-Type" = "application/json" } -Body $pairReqBody
+            $activeBootstrap = $candidateKey
+            break
+        }
+        catch {
+            if (-not $_.Exception.Message.Contains("(401)")) {
+                throw
+            }
+        }
+    }
+
+    if (-not $pairReq) {
+        throw "Pairing request failed for all bootstrap key candidates"
+    }
 
     $pairConfirmBody = @{ pairing_code = $pairReq.code } | ConvertTo-Json
     $null = Invoke-RestMethod -Method Post -Uri "$BaseUrl/pairing/confirm" -Headers $userHeaders -Body $pairConfirmBody
@@ -129,6 +148,9 @@ catch {
     $script:lines += ""
     $script:lines += "## Gate Decision"
     $script:lines += "- BLOCKED"
+    $script:lines | Set-Content -Path $report -Encoding UTF8
+    Get-Content $report
+    exit 1
 }
 
 $script:lines | Set-Content -Path $report -Encoding UTF8

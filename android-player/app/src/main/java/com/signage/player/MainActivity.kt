@@ -3,9 +3,11 @@ package com.signage.player
 import android.os.Bundle
 import android.net.Uri
 import android.widget.ImageView
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -51,6 +54,9 @@ class MainActivity : ComponentActivity() {
         val runtimeDeviceId = intent?.getStringExtra("device_id")?.trim().orEmpty().ifBlank { null }
         val socketBaseUrl = intent?.getStringExtra("socket_base_url")?.trim().orEmpty().ifBlank { null }
         StartupCoordinator.enqueueStartup(this, runtimeDeviceId, socketBaseUrl)
+        // Register PlayerController as lifecycle observer so ExoPlayer is paused/released
+        // with this Activity's lifecycle. Observer is removed in onDestroy to prevent leak
+        // when the system recreates the Activity (e.g. config change).
         StartupCoordinator.getPlayerController()?.let { lifecycle.addObserver(it) }
         enableEdgeToEdge()
         setContent {
@@ -63,6 +69,12 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // Remove the observer so the old PlayerController is not retained after Activity death.
+        StartupCoordinator.getPlayerController()?.let { lifecycle.removeObserver(it) }
+    }
 }
 
 @Composable
@@ -71,17 +83,19 @@ fun PairingScreen(modifier: Modifier = Modifier) {
     val hardwareId = remember(context) { HardwareIdStore(context).getOrCreateHardwareId() }
     val uiState by PlayerUiStateStore.state.collectAsState()
     val playerController = remember { StartupCoordinator.getPlayerController() }
-    var activeMediaPath by remember { mutableStateOf<String?>(null) }
 
     var pairingCode by remember { mutableStateOf("------") }
     var isPaired by remember { mutableStateOf(false) }
     var lastPairingRequestAt by remember { mutableLongStateOf(0L) }
 
     androidx.compose.runtime.LaunchedEffect(hardwareId) {
-        val api = RetrofitFactory.create(AppDefaults.BACKEND_BASE_URL)
+        val backendUrl = StartupCoordinator.getBackendBaseUrl()
+        val api = RetrofitFactory.create(backendUrl)
+        Log.d("PairingScreen", "Initializing pairing APIs against base URL: $backendUrl")
 
         suspend fun requestFreshPairingCode() {
             val now = System.currentTimeMillis()
+            Log.d("PairingScreen", "Requesting fresh pairing code...")
             runCatching {
                 api.requestPairingCode(
                     bootstrapKey = AppDefaults.BOOTSTRAP_KEY,
@@ -93,6 +107,9 @@ fun PairingScreen(modifier: Modifier = Modifier) {
             }.onSuccess { response ->
                 pairingCode = response.code
                 lastPairingRequestAt = now
+                Log.d("PairingScreen", "Retrieved fresh pairing code: ${response.code}")
+            }.onFailure { error ->
+                Log.e("PairingScreen", "Pairing code request failed", error)
             }
         }
 
@@ -107,24 +124,26 @@ fun PairingScreen(modifier: Modifier = Modifier) {
                         tenant_id = AppDefaults.TENANT_ID
                     )
                 )
-            }.onSuccess {
+            }.onSuccess { response ->
                 isPaired = true
+                Log.d("PairingScreen", "Device session refreshed successfully. Device is paired.")
             }.onFailure { error ->
                 if (error is HttpException && (error.code() == 404 || error.code() == 409)) {
-                    // 404: device was deleted, 409: exists but currently unpaired.
                     isPaired = false
-                    pairingCode = "------"
-                    lastPairingRequestAt = 0L
-                    requestFreshPairingCode()
+                    Log.d("PairingScreen", "Device session refresh: device is unpaired or not found (HTTP ${error.code()})")
+                } else {
+                    isPaired = false
+                    Log.e("PairingScreen", "Unexpected error refreshing device session", error)
                 }
             }
 
             if (!isPaired) {
+                // If code is older than 5 minutes, clear it
                 if (pairingCode != "------" && now - lastPairingRequestAt >= 300_000L) {
                     pairingCode = "------"
                 }
 
-                // Keep validating/refreshing code every minute while unpaired.
+                // If code is empty or needs refresh (every 60 seconds), request a new one
                 if (pairingCode == "------" || now - lastPairingRequestAt >= 60_000L) {
                     requestFreshPairingCode()
                 }
@@ -134,38 +153,13 @@ fun PairingScreen(modifier: Modifier = Modifier) {
         }
     }
 
-    LaunchedEffect(isPaired) {
-        if (!isPaired) {
-            activeMediaPath = null
-            return@LaunchedEffect
-        }
-
-        while (true) {
-            val activeDir = File(context.filesDir, "content/active")
-            val nextPath = activeDir
-                .listFiles()
-                ?.filter { file -> file.isFile }
-                ?.sortedBy { file -> file.name }
-                ?.firstOrNull()
-                ?.absolutePath
-
-            if (nextPath != activeMediaPath) {
-                activeMediaPath = nextPath
-            }
-
-            delay(1000)
-        }
-    }
-
-    fun isImagePath(path: String): Boolean {
-        val lower = path.lowercase()
-        return lower.endsWith(".png") ||
-            lower.endsWith(".jpg") ||
-            lower.endsWith(".jpeg") ||
-            lower.endsWith(".webp") ||
-            lower.endsWith(".gif") ||
-            lower.endsWith(".bmp") ||
-            lower.endsWith(".avif")
+    if (uiState.isScreenOff) {
+        Box(
+            modifier = modifier
+                .fillMaxSize()
+                .background(Color.Black)
+        )
+        return
     }
 
     if (!isPaired) {
@@ -190,7 +184,7 @@ fun PairingScreen(modifier: Modifier = Modifier) {
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text(text = AppDefaults.BACKEND_BASE_URL, textAlign = TextAlign.Center)
+                    Text(text = StartupCoordinator.getBackendBaseUrl(), textAlign = TextAlign.Center)
                     Text(text = AppDefaults.BOOTSTRAP_KEY, textAlign = TextAlign.Center)
                     Text(text = AppDefaults.TENANT_ID, textAlign = TextAlign.Center)
                 }
@@ -200,7 +194,8 @@ fun PairingScreen(modifier: Modifier = Modifier) {
     }
 
     Box(modifier = modifier.fillMaxSize()) {
-        if (!activeMediaPath.isNullOrBlank() && isImagePath(activeMediaPath!!)) {
+        val mediaPath = uiState.currentMediaFilePath
+        if (!mediaPath.isNullOrBlank() && uiState.currentMediaIsImage) {
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
                 factory = { androidContext ->
@@ -210,10 +205,10 @@ fun PairingScreen(modifier: Modifier = Modifier) {
                     }
                 },
                 update = { imageView ->
-                    imageView.setImageURI(Uri.fromFile(File(activeMediaPath!!)))
+                    imageView.setImageURI(Uri.fromFile(File(mediaPath)))
                 }
             )
-        } else if (playerController != null) {
+        } else if (!mediaPath.isNullOrBlank() && !uiState.currentMediaIsImage && playerController != null) {
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
                 factory = { androidContext ->
@@ -251,7 +246,7 @@ fun PairingScreen(modifier: Modifier = Modifier) {
                 verticalArrangement = Arrangement.spacedBy(6.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text(text = AppDefaults.BACKEND_BASE_URL, textAlign = TextAlign.Center)
+                Text(text = StartupCoordinator.getBackendBaseUrl(), textAlign = TextAlign.Center)
                 Text(text = AppDefaults.BOOTSTRAP_KEY, textAlign = TextAlign.Center)
                 Text(text = AppDefaults.TENANT_ID, textAlign = TextAlign.Center)
             }

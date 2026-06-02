@@ -148,7 +148,8 @@ export function buildOpsRouter(deps: OpsRouteDeps): Router {
         },
         top_failing_devices_last_24h: topFailingDevices
       });
-    } catch {
+    } catch (err) {
+      console.error("[metrics] Error computing metrics", err);
       res.status(500).json({ code: "OPS_METRICS_FAILED", message: "Failed to compute metrics" });
     }
   });

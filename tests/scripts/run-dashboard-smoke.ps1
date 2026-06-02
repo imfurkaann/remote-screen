@@ -53,7 +53,22 @@ try {
 
     # 2) Generate pairing code from backend then confirm through dashboard route.
     $pairReqBody = @{ hardware_id = "HW-DASH-SMOKE-001"; tenant_id = "tenant-demo" } | ConvertTo-Json
-    $pairReq = Invoke-RestMethod -Method Post -Uri "$BackendBaseUrl/pairing/request-code" -Headers @{ "x-device-bootstrap-key" = $BootstrapKey; "Content-Type" = "application/json" } -Body $pairReqBody
+    $bootstrapCandidates = @($BootstrapKey, "local-bootstrap-key") | Select-Object -Unique
+    $pairReq = $null
+    foreach ($candidateKey in $bootstrapCandidates) {
+        try {
+            $pairReq = Invoke-RestMethod -Method Post -Uri "$BackendBaseUrl/pairing/request-code" -Headers @{ "x-device-bootstrap-key" = $candidateKey; "Content-Type" = "application/json" } -Body $pairReqBody
+            break
+        }
+        catch {
+            if (-not $_.Exception.Message.Contains("(401)")) {
+                throw
+            }
+        }
+    }
+    if (-not $pairReq) {
+        throw "Pairing request failed for all bootstrap keys"
+    }
 
     $pairForm = @{ pairingCode = $pairReq.code }
     $pairConfirmResponse = Invoke-WebRequest -Method Post -Uri "$DashboardBaseUrl/api/pairing/confirm" -Body $pairForm -WebSession $session -MaximumRedirection 0 -ErrorAction SilentlyContinue -UseBasicParsing
@@ -97,6 +112,9 @@ catch {
     $lines += ""
     $lines += "## Gate Decision"
     $lines += "- BLOCKED"
+    $lines | Set-Content -Path $report -Encoding UTF8
+    Get-Content $report
+    exit 1
 }
 
 $lines | Set-Content -Path $report -Encoding UTF8

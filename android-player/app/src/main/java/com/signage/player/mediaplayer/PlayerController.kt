@@ -29,6 +29,18 @@ class PlayerController(context: Context) : DefaultLifecycleObserver {
         player.prepare()
     }
 
+    fun setSingleVideo(localFilePath: String) {
+        val file = File(localFilePath)
+        require(file.exists() && file.isFile) { "Local media file not found: $localFilePath" }
+        require(file.canonicalPath.startsWith(appFilesPath)) {
+            "Playback from non-local cache path is not allowed: $localFilePath"
+        }
+        val item = MediaItem.fromUri(file.toURI().toString())
+        player.setMediaItem(item)
+        player.repeatMode = Player.REPEAT_MODE_OFF
+        player.prepare()
+    }
+
     fun play() {
         player.playWhenReady = true
     }

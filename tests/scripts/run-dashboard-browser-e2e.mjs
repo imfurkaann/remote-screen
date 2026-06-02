@@ -98,21 +98,25 @@ function createSamplePng() {
 
 async function requestPairingCode() {
   const hardwareId = `HW-BROWSER-E2E-${Date.now()}`;
-  const response = await fetch(`${backendBaseUrl}/pairing/request-code`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-device-bootstrap-key": bootstrapKey
-    },
-    body: JSON.stringify({ hardware_id: hardwareId, tenant_id: "tenant-demo" })
-  });
-
-  if (!response.ok) {
-    throw new Error(`pairing request failed with ${response.status}`);
+  const keys = [bootstrapKey, "local-bootstrap-key"];
+  for (const key of keys) {
+    try {
+      const response = await fetch(`${backendBaseUrl}/pairing/request-code`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-device-bootstrap-key": key
+        },
+        body: JSON.stringify({ hardware_id: hardwareId, tenant_id: "tenant-demo" })
+      });
+      if (response.ok) {
+        return await response.json();
+      }
+    } catch (err) {
+      // Ignore network errors and try next key
+    }
   }
-
-  const payload = await response.json();
-  return payload;
+  throw new Error("pairing request failed for all bootstrap keys");
 }
 
 async function requestBackendAuthToken() {

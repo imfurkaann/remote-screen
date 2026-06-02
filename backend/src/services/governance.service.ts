@@ -198,11 +198,11 @@ export async function evaluateGovernancePolicy(options: {
           ? "warning"
           : "ok";
 
-  const policyEvaluations = [
+  const policyEvaluations: GovernanceEvaluation["policies"] = [
     {
       name: "rollout_guardrail",
       severity: rolloutSeverity,
-      status: rolloutSeverity === "ok" ? "healthy" : rolloutSeverity,
+      status: rolloutSeverity === "ok" ? "healthy" : (rolloutSeverity as "warning" | "critical"),
       reason:
         rolloutSeverity === "critical"
           ? "current telemetry exceeds rollout guardrails"
@@ -225,7 +225,7 @@ export async function evaluateGovernancePolicy(options: {
     {
       name: "rollback_policy",
       severity: rollbackSeverity,
-      status: rollbackSeverity === "ok" ? "healthy" : rollbackSeverity,
+      status: rollbackSeverity === "ok" ? "healthy" : (rollbackSeverity as "warning" | "critical"),
       reason:
         rollbackSeverity === "critical"
           ? "rollback policy requires immediate exception review"
@@ -244,7 +244,7 @@ export async function evaluateGovernancePolicy(options: {
     {
       name: "anomaly_remediation",
       severity: anomalySeverity,
-      status: anomalySeverity === "ok" ? "healthy" : anomalySeverity,
+      status: anomalySeverity === "ok" ? "healthy" : (anomalySeverity as "warning" | "critical"),
       reason:
         anomalySeverity === "critical"
           ? "tenant anomalies exceed safe baseline"
@@ -282,7 +282,7 @@ export async function evaluateGovernancePolicy(options: {
     .map((item) =>
       buildException(
         item.name as GovernanceException["policy"],
-        item.severity,
+        item.severity as "warning" | "critical",
         item.reason,
         {
           thresholds: item.thresholds,

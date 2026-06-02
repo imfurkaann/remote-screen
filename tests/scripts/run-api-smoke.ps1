@@ -116,6 +116,9 @@ catch {
     $lines += ""
     $lines += "## Gate Decision"
     $lines += "- BLOCKED"
+    $lines | Set-Content -Path $report -Encoding UTF8
+    Get-Content $report
+    exit 1
 }
 
 $lines | Set-Content -Path $report -Encoding UTF8

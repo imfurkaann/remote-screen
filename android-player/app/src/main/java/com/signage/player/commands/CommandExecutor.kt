@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.AudioManager
 import com.signage.player.ui.PlayerUiStateStore
 import java.io.File
+import java.io.FileOutputStream
 
 class CommandExecutor(
     private val appContext: Context,
@@ -14,8 +15,20 @@ class CommandExecutor(
         return try {
             when (command.commandType) {
                 "REBOOT_APP" -> {
-                    // In kiosk mode we usually restart the foreground activity/service;
-                    // here we only signal success and leave restart orchestration to app shell code.
+                    // Restart the app by launching a fresh instance of the main activity
+                    // and killing the current process cleanly.
+                    val intent = appContext.packageManager
+                        .getLaunchIntentForPackage(appContext.packageName)
+                        ?.apply {
+                            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                                     android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                        }
+                    if (intent != null) {
+                        appContext.startActivity(intent)
+                    }
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        android.os.Process.killProcess(android.os.Process.myPid())
+                    }, 500)
                     CommandAckPayload(deviceId, command.commandId, "COMPLETED")
                 }
 
@@ -40,6 +53,16 @@ class CommandExecutor(
                     }
 
                     onForceRefresh()
+                    CommandAckPayload(deviceId, command.commandId, "COMPLETED")
+                }
+
+                "SCREEN_OFF" -> {
+                    PlayerUiStateStore.setScreenOff(true)
+                    CommandAckPayload(deviceId, command.commandId, "COMPLETED")
+                }
+
+                "SCREEN_ON" -> {
+                    PlayerUiStateStore.setScreenOff(false)
                     CommandAckPayload(deviceId, command.commandId, "COMPLETED")
                 }
 
@@ -92,8 +115,37 @@ class CommandExecutor(
 
     private fun writePlaceholderScreenshot(deviceId: String, commandId: String): String {
         val screenshotDir = File(appContext.filesDir, "screenshots").apply { mkdirs() }
-        val screenshotFile = File(screenshotDir, "$deviceId-$commandId.txt")
-        screenshotFile.writeText("SCREENSHOT_PLACEHOLDER")
+        val screenshotFile = File(screenshotDir, "$deviceId-$commandId.png")
+        try {
+            val bitmap = android.graphics.Bitmap.createBitmap(800, 600, android.graphics.Bitmap.Config.ARGB_8888)
+            val canvas = android.graphics.Canvas(bitmap)
+            val paint = android.graphics.Paint()
+            
+            paint.color = android.graphics.Color.DKGRAY
+            canvas.drawRect(0f, 0f, 800f, 600f, paint)
+            
+            paint.color = android.graphics.Color.WHITE
+            paint.textSize = 36f
+            paint.isAntiAlias = true
+            canvas.drawText("Device Screenshot", 50f, 100f, paint)
+            
+            paint.color = android.graphics.Color.LTGRAY
+            paint.textSize = 24f
+            canvas.drawText("Device ID: $deviceId", 50f, 180f, paint)
+            canvas.drawText("Command ID: $commandId", 50f, 230f, paint)
+            canvas.drawText("Timestamp: ${java.util.Date()}", 50f, 280f, paint)
+            
+            paint.color = android.graphics.Color.GREEN
+            canvas.drawCircle(700f, 100f, 30f, paint)
+            
+            FileOutputStream(screenshotFile).use { out ->
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+            }
+        } catch (e: Exception) {
+            val txtFile = File(screenshotDir, "$deviceId-$commandId.txt")
+            txtFile.writeText("SCREENSHOT_FALLBACK_PLACEHOLDER")
+            return txtFile.toURI().toString()
+        }
         return screenshotFile.toURI().toString()
     }
 }

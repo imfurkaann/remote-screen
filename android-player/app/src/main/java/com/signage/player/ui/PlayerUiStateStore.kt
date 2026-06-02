@@ -5,7 +5,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 data class PlayerUiState(
-    val showConnectionInfo: Boolean = false
+    val showConnectionInfo: Boolean = false,
+    val currentMediaFilePath: String? = null,
+    val currentMediaIsImage: Boolean = false,
+    val isScreenOff: Boolean = false
 )
 
 object PlayerUiStateStore {
@@ -14,5 +17,16 @@ object PlayerUiStateStore {
 
     fun setShowConnectionInfo(show: Boolean) {
         _state.value = _state.value.copy(showConnectionInfo = show)
+    }
+
+    fun setCurrentMedia(filePath: String?, isImage: Boolean) {
+        _state.value = _state.value.copy(
+            currentMediaFilePath = filePath,
+            currentMediaIsImage = isImage
+        )
+    }
+
+    fun setScreenOff(off: Boolean) {
+        _state.value = _state.value.copy(isScreenOff = off)
     }
 }

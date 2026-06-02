@@ -10,6 +10,8 @@ import io.socket.client.Socket
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -21,11 +23,13 @@ object SocketClientManager {
     private const val TAG = "SocketClientManager"
     private const val BASE_DELAY_MS = 1_000L
     private const val MAX_DELAY_MS = 30_000L
+    private const val HEARTBEAT_INTERVAL_MS = 30_000L
     private val socketScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var reconnectAttempt: Int = 0
     private var syncHandler: (suspend (SyncContentPayload) -> Unit)? = null
     private var commandHandler: (suspend (CommandDispatchPayload) -> Unit)? = null
     private var socket: Socket? = null
+    private var heartbeatJob: kotlinx.coroutines.Job? = null
 
     fun registerSyncHandler(handler: suspend (SyncContentPayload) -> Unit) {
         syncHandler = handler
@@ -68,6 +72,7 @@ object SocketClientManager {
         newSocket.on(Socket.EVENT_CONNECT) {
             Log.d(TAG, "Connected socket for device_id=$deviceId")
             onConnected()
+            startHeartbeat()
         }
 
         newSocket.on(Socket.EVENT_CONNECT_ERROR) { args ->
@@ -76,6 +81,8 @@ object SocketClientManager {
 
         newSocket.on(Socket.EVENT_DISCONNECT) { args ->
             Log.w(TAG, "Socket disconnected: ${args.firstOrNull()}")
+            heartbeatJob?.cancel()
+            heartbeatJob = null
         }
 
         newSocket.on("SYNC_CONTENT") { args ->
@@ -100,13 +107,8 @@ object SocketClientManager {
         newSocket.connect()
     }
 
-    suspend fun dispatchSyncPayload(payload: SyncContentPayload) {
-        syncHandler?.invoke(payload)
-    }
-
-    suspend fun dispatchCommandPayload(payload: CommandDispatchPayload) {
-        commandHandler?.invoke(payload)
-    }
+    // Remove unused public dispatchers — sync and commands are handled via socket events only.
+    // (Dead code removed: dispatchSyncPayload / dispatchCommandPayload)
 
     fun emitCommandAck(ack: CommandAckPayload) {
         val payload = JSONObject().apply {
@@ -135,6 +137,17 @@ object SocketClientManager {
 
     fun onConnected() {
         reconnectAttempt = 0
+    }
+
+    private fun startHeartbeat() {
+        heartbeatJob?.cancel()
+        heartbeatJob = socketScope.launch {
+            while (isActive) {
+                delay(HEARTBEAT_INTERVAL_MS)
+                socket?.emit("HEARTBEAT")
+                Log.d(TAG, "HEARTBEAT emitted")
+            }
+        }
     }
 
     private fun mapCommandPayload(json: JSONObject): CommandDispatchPayload? {

@@ -5,6 +5,8 @@ export type DeviceStatus = "online" | "offline" | "degraded";
 export type DeviceDoc = {
   tenantId: string;
   hardwareId: string;
+  name: string | null;
+  location: string | null;
   status: DeviceStatus;
   pairedOwnerUserId: string | null;
   currentPlaylistId: string | null;
@@ -16,6 +18,8 @@ const DeviceSchema = new Schema<DeviceDoc>(
   {
     tenantId: { type: String, required: true, index: true },
     hardwareId: { type: String, required: true, unique: true },
+    name: { type: String, default: null },
+    location: { type: String, default: null },
     status: {
       type: String,
       enum: ["online", "offline", "degraded"],

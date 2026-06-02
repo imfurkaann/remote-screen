@@ -21,8 +21,11 @@ object StartupCoordinator {
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     @Volatile
     private var playerControllerRef: PlayerController? = null
+    @Volatile
+    private var backendBaseUrl: String = AppDefaults.BACKEND_BASE_URL
 
     fun getPlayerController(): PlayerController? = playerControllerRef
+    fun getBackendBaseUrl(): String = backendBaseUrl
 
     fun enqueueStartup(
         context: Context,
@@ -32,6 +35,7 @@ object StartupCoordinator {
         val hardwareId = HardwareIdStore(context).getOrCreateHardwareId()
         val socketDeviceId = runtimeDeviceId ?: hardwareId
         val resolvedSocketBaseUrl = socketBaseUrl ?: AppDefaults.BACKEND_BASE_URL
+        backendBaseUrl = resolvedSocketBaseUrl
         val telemetryReporter = DeviceTelemetryReporter(
             baseUrl = resolvedSocketBaseUrl,
             bootstrapKey = AppDefaults.BOOTSTRAP_KEY,
@@ -41,7 +45,11 @@ object StartupCoordinator {
         )
         val db = PlayerDatabaseProvider.getDatabase(context)
         val playlistRepository = PlaylistRepository(db.playlistDao())
-        val syncManager = ContentSyncManager(context, playlistRepository) { source, message, details ->
+        val syncManager = ContentSyncManager(
+            appContext = context,
+            playlistRepository = playlistRepository,
+            mediaBaseUrl = resolvedSocketBaseUrl
+        ) { source, message, details ->
             telemetryReporter.reportError(source, message, details)
         }
         val playerController = PlayerController(context)

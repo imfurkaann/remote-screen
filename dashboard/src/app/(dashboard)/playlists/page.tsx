@@ -43,6 +43,15 @@ export default function PlaylistsPage() {
 
   const sortedMedia = useMemo(() => [...media].sort((a, b) => a.filename.localeCompare(b.filename)), [media]);
 
+  const loadMedia = async () => {
+    try {
+      const payload = await fetchJson<{ media?: UploadedMedia[] }>("/api/content/media", { cache: "no-store" });
+      setMedia(payload.media ?? []);
+    } catch {
+      // Non-fatal: media list may be empty on first load
+    }
+  };
+
   const loadPlaylists = async () => {
     const payload = await fetchJson<{ playlists?: PlaylistRow[] }>("/api/content/playlists", { cache: "no-store" });
     setPlaylists(payload.playlists ?? []);
@@ -56,7 +65,7 @@ export default function PlaylistsPage() {
   useEffect(() => {
     const run = async () => {
       try {
-        await Promise.all([loadPlaylists(), loadDevices()]);
+        await Promise.all([loadMedia(), loadPlaylists(), loadDevices()]);
       } catch {
         setStatusMessage("Failed to load playlist or device data.");
       }
@@ -87,12 +96,9 @@ export default function PlaylistsPage() {
         throw new Error("upload_failed");
       }
 
-      setMedia((prev) => {
-        const next = prev.filter((item) => item.id !== payload.media?.id);
-        next.push(payload.media as UploadedMedia);
-        return next;
-      });
       setStatusMessage(`Uploaded ${payload.media.filename}`);
+      // Reload full media list from backend so it persists across page refreshes
+      await loadMedia();
     } catch (error) {
       setStatusMessage(`Upload failed: ${(error as Error).message}`);
     } finally {
@@ -169,7 +175,7 @@ export default function PlaylistsPage() {
           Upload Media
           <input type="file" accept="image/*,video/*" onChange={handleFileUpload} disabled={isBusy} />
         </label>
-        <small className="muted">Uploaded in this session: {media.length}</small>
+        <small className="muted">Toplam medya: {media.length}</small>
       </div>
 
       <form className="grid" style={{ gap: 10 }} onSubmit={handleCreatePlaylist}>

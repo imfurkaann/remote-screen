@@ -107,12 +107,43 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
         devices: devices.map((device) => ({
           id: String(device._id),
           hardware_id: device.hardwareId,
+          name: device.name,
+          location: device.location,
           status: device.status,
-          current_playlist_id: device.currentPlaylistId
+          current_playlist_id: device.currentPlaylistId,
+          last_seen_at: device.lastSeenAt ? device.lastSeenAt.toISOString() : null,
+          last_heartbeat_at: device.lastHeartbeatAt ? device.lastHeartbeatAt.toISOString() : null
         }))
       });
     } catch {
       res.status(500).json({ code: "DEVICE_LIST_FAILED", message: "Failed to fetch devices" });
+    }
+  });
+
+  router.get("/media", async (req, res) => {
+    try {
+      const tenantId = req.auth?.tenantId;
+      if (!tenantId) {
+        res.status(401).json({ code: "UNAUTHORIZED", message: "Missing auth context" });
+        return;
+      }
+
+      const mediaList = await MediaModel.find({ tenantId, status: "ready" })
+        .sort({ createdAt: -1 })
+        .lean();
+
+      res.json({
+        media: mediaList.map((m) => ({
+          id: String(m._id),
+          filename: m.filename,
+          mime_type: m.mimeType,
+          size_bytes: m.sizeBytes,
+          checksum_sha256: m.checksumSha256,
+          media_url: m.publicUrl
+        }))
+      });
+    } catch {
+      res.status(500).json({ code: "MEDIA_LIST_FAILED", message: "Failed to list media" });
     }
   });
 
