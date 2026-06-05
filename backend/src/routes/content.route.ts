@@ -13,6 +13,7 @@ import { MediaModel } from "../models/media.model.js";
 import { PlaylistModel } from "../models/playlist.model.js";
 import { contentRepository } from "../repositories/content.repository.js";
 import { emitSyncContent, type SyncContentPayload } from "../sockets/registry.js";
+import { queueCommand } from "../services/command.service.js";
 
 type ContentRouteDeps = {
   jwtSecret: string;
@@ -110,13 +111,141 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
           name: device.name,
           location: device.location,
           status: device.status,
+          orientation: device.orientation ?? 0,
+          timezone: device.timezone ?? "Europe/Istanbul",
+          screen_group: device.screenGroup ?? "Ungrouped",
+          operating_hours: device.operatingHours ?? "Use Space's hours",
           current_playlist_id: device.currentPlaylistId,
           last_seen_at: device.lastSeenAt ? device.lastSeenAt.toISOString() : null,
-          last_heartbeat_at: device.lastHeartbeatAt ? device.lastHeartbeatAt.toISOString() : null
+          last_heartbeat_at: device.lastHeartbeatAt ? device.lastHeartbeatAt.toISOString() : null,
+          ip_address: device.ipAddress ?? null,
+          player_version: device.playerVersion ?? null,
+          os_version: device.osVersion ?? null,
+          resolution: device.resolution ?? null,
+          memory_total: device.memoryTotal ?? null,
+          memory_used: device.memoryUsed ?? null
         }))
       });
     } catch {
       res.status(500).json({ code: "DEVICE_LIST_FAILED", message: "Failed to fetch devices" });
+    }
+  });
+
+  router.put("/devices/:deviceId", async (req, res) => {
+    try {
+      const tenantId = req.auth?.tenantId;
+      const deviceId = req.params.deviceId;
+      const name = req.body?.name === undefined ? undefined : String(req.body.name || "").trim() || null;
+      const location = req.body?.location === undefined ? undefined : String(req.body.location || "").trim() || null;
+      const orientation = req.body?.orientation === undefined ? undefined : Number(req.body.orientation);
+      const timezone = req.body?.timezone === undefined ? undefined : String(req.body.timezone || "").trim();
+      const screenGroup = req.body?.screen_group === undefined ? undefined : String(req.body.screen_group || "").trim();
+      const operatingHours = req.body?.operating_hours === undefined ? undefined : String(req.body.operating_hours || "").trim();
+
+      if (!tenantId || !deviceId) {
+        res.status(400).json({ code: "VALIDATION_ERROR", message: "deviceId is required" });
+        return;
+      }
+
+      const oldDevice = await DeviceModel.findOne({ _id: deviceId, tenantId });
+      if (!oldDevice) {
+        res.status(404).json({ code: "DEVICE_NOT_FOUND", message: "Device not found" });
+        return;
+      }
+
+      const updateFields: Record<string, any> = {};
+      if (name !== undefined) updateFields.name = name;
+      if (location !== undefined) updateFields.location = location;
+      if (orientation !== undefined && [0, 90, 180, 270].includes(orientation)) {
+        updateFields.orientation = orientation;
+      }
+      if (timezone !== undefined) updateFields.timezone = timezone;
+      if (screenGroup !== undefined) updateFields.screenGroup = screenGroup;
+      if (operatingHours !== undefined) updateFields.operatingHours = operatingHours;
+
+      const updatedDevice = await DeviceModel.findOneAndUpdate(
+        { _id: deviceId, tenantId },
+        { $set: updateFields },
+        { new: true }
+      );
+
+      if (!updatedDevice) {
+        res.status(404).json({ code: "DEVICE_NOT_FOUND", message: "Device not found" });
+        return;
+      }
+
+      if (orientation !== undefined && oldDevice.orientation !== updatedDevice.orientation) {
+        try {
+          const commandId = randomUUID();
+          await queueCommand({
+            tenantId,
+            deviceId,
+            commandId,
+            commandType: "SET_ORIENTATION",
+            payload: { orientation: updatedDevice.orientation },
+            maxAttempts: 2,
+            timeoutMs: 15_000
+          });
+          logger.info("Dispatched SET_ORIENTATION command", { deviceId, orientation: updatedDevice.orientation, commandId });
+        } catch (cmdErr) {
+          logger.warn("Failed to dispatch SET_ORIENTATION command during device update", { deviceId }, cmdErr instanceof Error ? cmdErr : new Error(String(cmdErr)));
+        }
+      }
+
+      if (operatingHours !== undefined && oldDevice.operatingHours !== updatedDevice.operatingHours) {
+        try {
+          const commandId = randomUUID();
+          await queueCommand({
+            tenantId,
+            deviceId,
+            commandId,
+            commandType: "SET_OPERATING_HOURS",
+            payload: { operating_hours: updatedDevice.operatingHours },
+            maxAttempts: 2,
+            timeoutMs: 15_000
+          });
+          logger.info("Dispatched SET_OPERATING_HOURS command", { deviceId, operatingHours: updatedDevice.operatingHours, commandId });
+        } catch (cmdErr) {
+          logger.warn("Failed to dispatch SET_OPERATING_HOURS command during device update", { deviceId }, cmdErr instanceof Error ? cmdErr : new Error(String(cmdErr)));
+        }
+      }
+
+      res.json({
+        success: true,
+        device: {
+          id: String(updatedDevice._id),
+          hardware_id: updatedDevice.hardwareId,
+          name: updatedDevice.name,
+          location: updatedDevice.location,
+          status: updatedDevice.status,
+          orientation: updatedDevice.orientation,
+          timezone: updatedDevice.timezone,
+          screen_group: updatedDevice.screenGroup,
+          operating_hours: updatedDevice.operatingHours
+        }
+      });
+    } catch {
+      res.status(500).json({ code: "DEVICE_UPDATE_FAILED", message: "Failed to update device" });
+    }
+  });
+
+  router.delete("/devices/:deviceId", async (req, res) => {
+    try {
+      const tenantId = req.auth?.tenantId;
+      const deviceId = req.params.deviceId;
+      if (!tenantId || !deviceId) {
+        res.status(400).json({ code: "VALIDATION_ERROR", message: "deviceId is required" });
+        return;
+      }
+      const deleted = await DeviceModel.findOneAndDelete({ _id: deviceId, tenantId });
+      if (!deleted) {
+        res.status(404).json({ code: "DEVICE_NOT_FOUND", message: "Device not found" });
+        return;
+      }
+      logger.info("Device deleted", { deviceId, tenantId });
+      res.status(204).send();
+    } catch {
+      res.status(500).json({ code: "DEVICE_DELETE_FAILED", message: "Failed to delete device" });
     }
   });
 
@@ -255,7 +384,16 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
           name: playlist.name,
           version: playlist.version,
           item_count: playlist.items.length,
-          updated_at: (playlist as { updatedAt?: Date }).updatedAt ?? new Date(0)
+          updated_at: (playlist as { updatedAt?: Date }).updatedAt ?? new Date(0),
+          items: playlist.items.map((item) => ({
+            media_id: item.mediaId,
+            filename: item.filename,
+            media_url: item.mediaUrl,
+            checksum_sha256: item.checksumSha256,
+            mime_type: item.mimeType,
+            duration_ms: item.durationMs,
+            position: item.position
+          }))
         }))
       });
     } catch (error) {

@@ -48,6 +48,71 @@ export function createSocketServer(httpServer: HttpServer, deps: SocketDeps): Se
         } catch (shadowErr) {
           console.error("[sockets] postgres status sync failed on connect", shadowErr);
         }
+
+        // Push current orientation to device on connection
+        if (device.orientation !== undefined && device.orientation !== null) {
+          socket.emit("COMMAND_DISPATCH", {
+            command_id: `init-orient-${Date.now()}`,
+            command_type: "SET_ORIENTATION",
+            payload: { orientation: device.orientation },
+            timeout_ms: 10_000,
+            attempt: 1
+          });
+        }
+
+        // Push current operating hours to device on connection
+        if (device.operatingHours !== undefined && device.operatingHours !== null) {
+          socket.emit("COMMAND_DISPATCH", {
+            command_id: `init-hours-${Date.now()}`,
+            command_type: "SET_OPERATING_HOURS",
+            payload: { operating_hours: device.operatingHours },
+            timeout_ms: 10_000,
+            attempt: 1
+          });
+        }
+
+        // Push active playlist content to device on connection (for offline synchronization)
+        if (device.currentPlaylistId) {
+          try {
+            const { PlaylistModel } = await import("../models/playlist.model.js");
+            const { createHash } = await import("node:crypto");
+
+            const playlist = await PlaylistModel.findById(device.currentPlaylistId).lean();
+            if (playlist) {
+              const playlistChecksum = createHash("sha256")
+                .update(
+                  JSON.stringify(
+                    playlist.items.map((item) => ({
+                      mediaId: item.mediaId,
+                      checksumSha256: item.checksumSha256,
+                      position: item.position
+                    }))
+                  )
+                )
+                .digest("hex");
+
+              const syncPayload = {
+                playlist_id: String(playlist._id),
+                playlist_version: playlist.version,
+                checksum_sha_256: playlistChecksum,
+                items: playlist.items.map((item) => ({
+                  media_id: item.mediaId,
+                  filename: item.filename,
+                  media_url: item.mediaUrl,
+                  checksum_sha_256: item.checksumSha256,
+                  mime_type: item.mimeType,
+                  duration_ms: item.durationMs,
+                  position: item.position
+                }))
+              };
+
+              socket.emit("SYNC_CONTENT", syncPayload);
+              console.log(`[sockets] Sent SYNC_CONTENT to device ${deviceId} on connection`);
+            }
+          } catch (syncErr) {
+            console.error("[sockets] Failed to push active playlist on connection", syncErr);
+          }
+        }
       }
     } catch (err) {
       console.error("[sockets] failed to update device status to online on connect", err);
@@ -65,13 +130,27 @@ export function createSocketServer(httpServer: HttpServer, deps: SocketDeps): Se
 
     // Heartbeat: device sends PING every ~30s; we update lastSeenAt so the
     // Screens page always shows a fresh "Last Seen" timestamp.
-    socket.on("HEARTBEAT", async () => {
+    socket.on("HEARTBEAT", async (payload?: any) => {
       try {
         const query = deviceId.match(/^[0-9a-fA-F]{24}$/)
           ? { _id: deviceId }
           : { hardwareId: deviceId };
 
-        await DeviceModel.updateOne(query, { $set: { lastSeenAt: new Date(), status: "online" } });
+        const updateFields: Record<string, any> = {
+          lastSeenAt: new Date(),
+          status: "online"
+        };
+
+        if (payload && typeof payload === "object") {
+          if (payload.ipAddress !== undefined) updateFields.ipAddress = payload.ipAddress;
+          if (payload.playerVersion !== undefined) updateFields.playerVersion = payload.playerVersion;
+          if (payload.osVersion !== undefined) updateFields.osVersion = payload.osVersion;
+          if (payload.resolution !== undefined) updateFields.resolution = payload.resolution;
+          if (payload.memoryTotal !== undefined) updateFields.memoryTotal = payload.memoryTotal;
+          if (payload.memoryUsed !== undefined) updateFields.memoryUsed = payload.memoryUsed;
+        }
+
+        await DeviceModel.updateOne(query, { $set: updateFields });
       } catch {
         // Non-fatal: ignore heartbeat errors
       }

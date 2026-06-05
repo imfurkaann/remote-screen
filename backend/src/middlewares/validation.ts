@@ -15,7 +15,7 @@ export function requireObjectJsonBody(options: JsonBodyValidationOptions = {}) {
       return;
     }
 
-    if (skipPaths.has(req.path) || skipPaths.has(req.originalUrl)) {
+    if (skipPaths.has(req.path) || skipPaths.has(req.originalUrl) || req.path.endsWith("/screenshot")) {
       next();
       return;
     }

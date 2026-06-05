@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
 
-export async function POST() {
-  const response = NextResponse.json({ ok: true });
+export async function POST(request: NextRequest) {
+  const loginUrl = new URL("/login", request.url);
+  const response = NextResponse.redirect(loginUrl, { status: 303 });
+
   response.cookies.set("dashboard_session", "", {
     httpOnly: true,
     sameSite: "lax",
@@ -19,3 +22,4 @@ export async function POST() {
 
   return response;
 }
+

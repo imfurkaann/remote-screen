@@ -37,6 +37,21 @@ async function bootstrap(): Promise<void> {
     console.log("[backend] PostgreSQL connection established");
   }
 
+  // Reset all devices status to offline in MongoDB and PostgreSQL on server boot
+  try {
+    const { DeviceModel } = await import("./models/device.model.js");
+    const { deviceRepository } = await import("./repositories/device.repository.js");
+
+    await DeviceModel.updateMany({}, { $set: { status: "offline" } });
+    console.log("[backend] MongoDB device statuses reset to offline");
+
+    if (env.pgEnabled) {
+      await deviceRepository.resetAllStatusesToOffline();
+    }
+  } catch (err) {
+    console.error("[backend] Failed to reset device statuses on startup", err);
+  }
+
   const app = buildApp(env);
   const server = createServer(app);
   const io = createSocketServer(server, { corsOrigin: env.corsOrigin });

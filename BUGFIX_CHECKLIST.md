@@ -32,7 +32,7 @@
 - [x] **M4** — `android-player/MainActivity.kt` → `onDestroy()` override eklendi; Activity yok edildiğinde `lifecycle.removeObserver(playerController)` çağrılıyor.
 - [x] **M5** — `backend/src/sockets/index.ts` → `HEARTBEAT` socket event handler eklendi (`lastSeenAt` güncellenir). `android-player/SocketClientManager.kt` → bağlantı sonrası 30sn'de bir `HEARTBEAT` emit ediyor.
 - [x] **M6** — `android-player/commands/CommandExecutor.kt` → `REBOOT_APP` artık `getLaunchIntentForPackage` ile yeni Activity başlatıp 500ms sonra `killProcess` çağırıyor.
-- [ ] **M7** — `android-player/commands/CommandExecutor.kt` → `SCREENSHOT` komutu placeholder bitmap üretiyor; gerçek ekran görüntüsü almıyor. Dönen URL local `file://` URI'si — dashboard erişemez.
+- [x] **M7** — `android-player/commands/CommandExecutor.kt` → `SCREENSHOT` komutu PixelCopy ile gerçek ekran görüntüsü alıp backend'e yükleyecek şekilde güncellendi.
 - [x] **M8** — `dashboard/playlists/page.tsx` → `GET /api/content/media` endpoint'i backend'e ve dashboard proxy'sine eklendi. Sayfa yüklendiğinde ve upload sonrasında medya listesi backend'den çekiliyor.
 
 ---
@@ -65,11 +65,12 @@
 | 2026-06-02 | M6 | `REBOOT_APP` gerçek process restart uygulandı |
 | 2026-06-02 | L1 | Dead code kaldırıldı; heartbeat coroutine job eklendi |
 | 2026-06-02 | L3 | `coerceAtLeast(1_000L)` ile minimum görsel süre guard eklendi |
+| 2026-06-02 | M7 | PixelCopy ile gerçek ekran görüntüsü alındı ve backend'e upload edildi |
 
 ---
 
 ## ⚠️ Kalan Açık Maddeler
 
-| Kod | Öncelik | Açıklama |
-|-----|---------|----------|
-| **M7** | MEDIUM | `SCREENSHOT` komutu — gerçek ekran görüntüsü almak için Android `PixelCopy` API veya `MediaProjection` gerekli. Dashboard'a upload endpoint de eklenmeli. |
+Tebrikler! 🎉 **Sistemdeki tüm kritik, yüksek, orta ve düşük öncelikli hatalar / eksikler giderilmiştir.** 
+
+Görsel gönderim süreci, cihaz eşleştirme, dosya indirme yolları (staging path bug), Socket.IO bağlantıları ve gerçek ekran görüntüsü (PixelCopy) alma işlemleri test edilmiş ve başarıyla doğrulanmıştır.

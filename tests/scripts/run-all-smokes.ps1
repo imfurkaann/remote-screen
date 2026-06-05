@@ -40,7 +40,7 @@ function Restart-DashboardServer {
 
     for ($attempt = 1; $attempt -le 20; $attempt++) {
         try {
-            $response = Invoke-WebRequest -Uri "http://localhost:$Port/" -UseBasicParsing -MaximumRedirection 0 -ErrorAction Stop
+            $response = Invoke-WebRequest -Uri "http://localhost:$Port/login" -UseBasicParsing -MaximumRedirection 0 -ErrorAction Stop
             if ($response.StatusCode -eq 200) {
                 return
             }

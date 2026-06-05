@@ -3,6 +3,7 @@ package com.signage.player.commands
 import android.content.Context
 import android.media.AudioManager
 import com.signage.player.ui.PlayerUiStateStore
+import com.signage.player.boot.StartupCoordinator
 import java.io.File
 import java.io.FileOutputStream
 
@@ -66,13 +67,63 @@ class CommandExecutor(
                     CommandAckPayload(deviceId, command.commandId, "COMPLETED")
                 }
 
+                "SET_ORIENTATION" -> {
+                    val angle = (command.payload["orientation"] as? Number)?.toInt() ?: 0
+                    PlayerUiStateStore.setOrientation(angle)
+                    CommandAckPayload(deviceId, command.commandId, "COMPLETED")
+                }
+
+                "SET_OPERATING_HOURS" -> {
+                    val config = command.payload["operating_hours"] as? String ?: "Always On"
+                    com.signage.player.storage.OperatingHoursStore(appContext).saveOperatingHours(config)
+                    com.signage.player.config.OperatingHoursManager.checkAndApply(appContext)
+                    CommandAckPayload(deviceId, command.commandId, "COMPLETED")
+                }
+
                 "SCREENSHOT" -> {
-                    val screenshotUrl = writePlaceholderScreenshot(deviceId, command.commandId)
+                    val screenshotFile = StartupCoordinator.takeScreenshot()
+                    val fileToUpload = if (screenshotFile == null) {
+                        writePlaceholderScreenshot(deviceId, command.commandId)
+                        File(File(appContext.filesDir, "screenshots"), "$deviceId-${command.commandId}.png")
+                    } else {
+                        screenshotFile
+                    }
+
+                    var finalUrl: String? = null
+                    try {
+                        val backendUrl = StartupCoordinator.getBackendBaseUrl()
+                        val api = com.signage.player.network.RetrofitFactory.create(backendUrl)
+                        val reporter = StartupCoordinator.getTelemetryReporter()
+                        val token = reporter?.getAccessToken()
+                        val resolvedDeviceId = reporter?.getDeviceId() ?: deviceId
+
+                        if (!token.isNullOrBlank()) {
+                            val requestFile = okhttp3.RequestBody.create(okhttp3.MediaType.parse("image/png"), fileToUpload)
+                            val multipartBody = okhttp3.MultipartBody.Part.createFormData("file", fileToUpload.name, requestFile)
+                            val response = api.uploadScreenshot(
+                                deviceId = resolvedDeviceId,
+                                authorization = "Bearer $token",
+                                file = multipartBody
+                            )
+                            finalUrl = response.screenshot_url
+                        }
+                    } catch (e: Exception) {
+                        onError("screenshot_upload", e.message ?: "Failed to upload screenshot", emptyMap())
+                    }
+
+                    if (finalUrl == null) {
+                        finalUrl = fileToUpload.toURI().toString()
+                    } else {
+                        if (fileToUpload.name.startsWith("screenshot_")) {
+                            fileToUpload.delete()
+                        }
+                    }
+
                     CommandAckPayload(
                         deviceId = deviceId,
                         commandId = command.commandId,
                         status = "COMPLETED",
-                        screenshotUrl = screenshotUrl
+                        screenshotUrl = finalUrl
                     )
                 }
 

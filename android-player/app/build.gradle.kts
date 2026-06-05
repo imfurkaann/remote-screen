@@ -1,9 +1,24 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     id("org.jetbrains.kotlin.kapt")
 }
+
+// ---------------------------------------------------------------------------
+// Read local.properties so developers can override config without touching
+// committed files. Values are injected as BuildConfig constants at compile
+// time, keeping secrets and environment-specific URLs out of source control.
+// ---------------------------------------------------------------------------
+val localProps = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+
+fun localProp(key: String, default: String): String =
+    (localProps.getProperty(key) ?: default).trim()
 
 android {
     namespace = "com.signage.player"
@@ -17,6 +32,20 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Inject config from local.properties (falls back to emulator defaults)
+        buildConfigField(
+            "String", "BACKEND_BASE_URL",
+            "\"${localProp("BACKEND_BASE_URL", "http://10.0.2.2:4100")}\""
+        )
+        buildConfigField(
+            "String", "BOOTSTRAP_KEY",
+            "\"${localProp("BOOTSTRAP_KEY", "local-bootstrap-key")}\""
+        )
+        buildConfigField(
+            "String", "TENANT_ID",
+            "\"${localProp("TENANT_ID", "tenant-demo")}\""
+        )
     }
 
     buildTypes {
@@ -37,6 +66,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true  // Required to generate the BuildConfig class
     }
 }
 

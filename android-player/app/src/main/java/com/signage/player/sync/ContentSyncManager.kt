@@ -75,7 +75,7 @@ class ContentSyncManager(
 
             PlaylistEntity(
                 mediaId = item.mediaId,
-                filePath = targetFile.absolutePath,
+                filePath = File(activeDir, targetFile.name).absolutePath,
                 position = item.position,
                 checksumSha256 = item.checksumSha256,
                 durationMs = item.durationMs

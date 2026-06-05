@@ -8,10 +8,20 @@ export type DeviceDoc = {
   name: string | null;
   location: string | null;
   status: DeviceStatus;
+  orientation: number;
+  timezone: string;
+  screenGroup: string;
+  operatingHours: string;
   pairedOwnerUserId: string | null;
   currentPlaylistId: string | null;
   lastHeartbeatAt: Date | null;
   lastSeenAt: Date | null;
+  ipAddress: string | null;
+  playerVersion: string | null;
+  osVersion: string | null;
+  resolution: string | null;
+  memoryTotal: string | null;
+  memoryUsed: string | null;
 };
 
 const DeviceSchema = new Schema<DeviceDoc>(
@@ -26,12 +36,27 @@ const DeviceSchema = new Schema<DeviceDoc>(
       required: true,
       default: "offline"
     },
+    orientation: {
+      type: Number,
+      enum: [0, 90, 180, 270],
+      default: 0
+    },
+    timezone: { type: String, default: "Europe/Istanbul" },
+    screenGroup: { type: String, default: "Ungrouped" },
+    operatingHours: { type: String, default: "Use Space's hours" },
     pairedOwnerUserId: { type: String, default: null },
     currentPlaylistId: { type: String, default: null },
     lastHeartbeatAt: { type: Date, default: null, index: true },
-    lastSeenAt: { type: Date, default: null, index: true }
+    lastSeenAt: { type: Date, default: null, index: true },
+    ipAddress: { type: String, default: null },
+    playerVersion: { type: String, default: null },
+    osVersion: { type: String, default: null },
+    resolution: { type: String, default: null },
+    memoryTotal: { type: String, default: null },
+    memoryUsed: { type: String, default: null }
   },
   { timestamps: true }
 );
 
 export const DeviceModel = model<DeviceDoc>("Device", DeviceSchema);
+

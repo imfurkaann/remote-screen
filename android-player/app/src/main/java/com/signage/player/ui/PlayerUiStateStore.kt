@@ -8,7 +8,8 @@ data class PlayerUiState(
     val showConnectionInfo: Boolean = false,
     val currentMediaFilePath: String? = null,
     val currentMediaIsImage: Boolean = false,
-    val isScreenOff: Boolean = false
+    val isScreenOff: Boolean = false,
+    val orientation: Int = 0
 )
 
 object PlayerUiStateStore {
@@ -28,5 +29,9 @@ object PlayerUiStateStore {
 
     fun setScreenOff(off: Boolean) {
         _state.value = _state.value.copy(isScreenOff = off)
+    }
+
+    fun setOrientation(angle: Int) {
+        _state.value = _state.value.copy(orientation = angle)
     }
 }

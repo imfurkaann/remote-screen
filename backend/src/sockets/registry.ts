@@ -23,7 +23,7 @@ export type SyncContentPayload = {
 
 export type CommandDispatchPayload = {
   command_id: string;
-  command_type: "REBOOT_APP" | "SCREENSHOT" | "SET_VOLUME" | "FORCE_REFRESH" | "SCREEN_ON" | "SCREEN_OFF";
+  command_type: "REBOOT_APP" | "SCREENSHOT" | "SET_VOLUME" | "FORCE_REFRESH" | "SCREEN_ON" | "SCREEN_OFF" | "SET_ORIENTATION" | "SET_OPERATING_HOURS";
   payload: Record<string, unknown>;
   timeout_ms: number;
   attempt: number;

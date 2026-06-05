@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { Router } from "express";
+import multer from "multer";
+import path from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
 
 import { requireRoles, requireUserAuth } from "../middlewares/auth.js";
 import { COMMAND_TYPES, CommandModel, type CommandType } from "../models/command.model.js";
@@ -11,6 +14,7 @@ import { commandRepository, type ShadowCommandRow } from "../repositories/comman
 import { queueCommand } from "../services/command.service.js";
 
 const logger = new Logger('CommandRoute');
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 type CommandRouteDeps = {
   jwtSecret: string;
@@ -98,6 +102,49 @@ export function buildCommandRouter(deps: CommandRouteDeps): Router {
   const router = Router();
 
   router.use(requireUserAuth(deps.jwtSecret, { issuer: deps.jwtIssuer, audience: deps.jwtAudience }));
+
+  router.post("/devices/:deviceId/screenshot", upload.single("file"), async (req, res) => {
+    try {
+      const auth = req.auth;
+      const tenantId = auth?.tenantId;
+      const deviceId = String(req.params.deviceId ?? "").trim();
+
+      if (!tenantId || !deviceId) {
+        res.status(400).json({ code: "VALIDATION_ERROR", message: "deviceId is required" });
+        return;
+      }
+
+      if (!req.file) {
+        res.status(400).json({ code: "VALIDATION_ERROR", message: "file is required" });
+        return;
+      }
+
+      const isAllowed = auth.role === "device"
+        ? auth.userId === deviceId
+        : ["tenant_owner", "tenant_admin", "operator"].includes(auth.role);
+
+      if (!isAllowed) {
+        res.status(403).json({ code: "FORBIDDEN", message: "Insufficient permissions to upload device screenshot" });
+        return;
+      }
+
+      const extension = path.extname(req.file.originalname) || ".png";
+      const fileName = `${randomUUID()}${extension}`;
+      const relativePath = path.join("uploads", "screenshots", tenantId, fileName);
+      const absolutePath = path.resolve(process.cwd(), relativePath);
+      await mkdir(path.dirname(absolutePath), { recursive: true });
+      await writeFile(absolutePath, req.file.buffer);
+
+      const screenshotUrl = `/${relativePath.replace(/\\/g, "/")}`;
+
+      res.status(201).json({ screenshot_url: screenshotUrl });
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      logger.error("Screenshot upload failed", err, { deviceId: req.params.deviceId });
+      res.status(500).json({ code: "SCREENSHOT_UPLOAD_FAILED", message: "Failed to upload screenshot" });
+    }
+  });
+
   router.use(requireRoles(["tenant_owner", "tenant_admin", "operator"]));
 
   router.post("/devices/:deviceId/commands", async (req, res) => {

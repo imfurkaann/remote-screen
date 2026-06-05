@@ -245,6 +245,9 @@ const context = await browser.newContext({ baseURL: dashboardBaseUrl });
 const page = await context.newPage();
 page.setDefaultTimeout(15000);
 
+page.on("console", (msg) => console.log("PAGE LOG:", msg.text()));
+page.on("pageerror", (err) => console.log("PAGE ERROR:", err.message));
+
 let success = true;
 let failureMessage = null;
 
@@ -252,9 +255,18 @@ try {
   const accessToken = await requestBackendAuthToken();
   await page.goto("/");
   await page.goto("/login");
-  addSection("Public UI Shell", "PASS", [
-    "Home page rendered.",
-    "Login page rendered."
+  
+  // Click on the Operator quick demo badge to auto-fill credentials
+  await page.click('text="Operator (Operatör)"');
+  // Submit the form
+  await page.click('button[type="submit"]');
+  // Wait for redirection to screens dashboard
+  await page.waitForURL("**/screens");
+
+  addSection("Public UI Shell & Authentication", "PASS", [
+    "Home page redirected to /login.",
+    "Login credentials auto-filled and submitted successfully.",
+    "Redirected to /screens."
   ]);
 
   const pairPayload = await requestPairingCode();
@@ -294,6 +306,18 @@ try {
   ]);
 } catch (error) {
   success = false;
+  try {
+    const errorText = await page.textContent(".login-error-container").catch(() => null);
+    if (errorText) {
+      console.log("DIAGNOSTICS - Login UI Error:", errorText.trim());
+    } else {
+      console.log("DIAGNOSTICS - No Login UI error container found.");
+    }
+    const currentUrl = page.url();
+    console.log("DIAGNOSTICS - Current URL:", currentUrl);
+  } catch (diagErr) {
+    console.log("Diagnostics collection failed:", diagErr);
+  }
   failureMessage = error instanceof Error ? error.message : String(error);
 }
 

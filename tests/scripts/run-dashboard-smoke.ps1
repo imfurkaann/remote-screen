@@ -25,7 +25,7 @@ try {
     $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
 
     # 1) Login through dashboard route to set auth cookies.
-    $loginForm = @{ email = "qa@demo.local"; password = "secret"; redirect = "/screens/pair" }
+    $loginForm = @{ email = "operator@remotescreen.dev"; password = "operator123"; redirect = "/screens/pair" }
     $loginResponse = $null
     for ($attempt = 1; $attempt -le 3; $attempt++) {
         $loginResponse = Invoke-WebRequest -Method Post -Uri "$DashboardBaseUrl/api/auth/login" -Body $loginForm -WebSession $session -MaximumRedirection 0 -ErrorAction SilentlyContinue -UseBasicParsing
@@ -70,20 +70,20 @@ try {
         throw "Pairing request failed for all bootstrap keys"
     }
 
-    $pairForm = @{ pairingCode = $pairReq.code }
-    $pairConfirmResponse = Invoke-WebRequest -Method Post -Uri "$DashboardBaseUrl/api/pairing/confirm" -Body $pairForm -WebSession $session -MaximumRedirection 0 -ErrorAction SilentlyContinue -UseBasicParsing
-    if ($pairConfirmResponse.StatusCode -ne 307) {
-        throw "Expected 307 from /api/pairing/confirm, got $($pairConfirmResponse.StatusCode)"
+    $pairForm = @{ pairingCode = $pairReq.code } | ConvertTo-Json
+    $pairConfirmResponse = Invoke-WebRequest -Method Post -Uri "$DashboardBaseUrl/api/pairing/confirm" -ContentType "application/json" -Body $pairForm -WebSession $session -MaximumRedirection 0 -ErrorAction SilentlyContinue -UseBasicParsing
+    if ($pairConfirmResponse.StatusCode -ne 200) {
+        throw "Expected 200 from /api/pairing/confirm, got $($pairConfirmResponse.StatusCode)"
     }
 
-    $redirectLocation = $pairConfirmResponse.Headers.Location
-    if (-not $redirectLocation -or $redirectLocation -notlike "*status=ok*") {
-        throw "Pairing confirm did not redirect to success state"
+    $pairJson = $pairConfirmResponse.Content | ConvertFrom-Json
+    if (-not $pairJson.linked) {
+        throw "Pairing confirm did not return linked status"
     }
 
     $lines += "## Pairing Confirm Route"
     $lines += "- PASS"
-    $lines += ("- Redirect location: " + $redirectLocation)
+    $lines += ("- Linked: " + $pairJson.linked)
     $lines += ""
 
     # 3) Dispatch command through dashboard proxy route.

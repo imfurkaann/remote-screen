@@ -27,6 +27,20 @@ class DeviceTelemetryReporter(
     @Volatile
     private var accessToken: String? = null
 
+    suspend fun getAccessToken(): String? {
+        try {
+            ensureDeviceSession()
+        } catch (_: Exception) {}
+        return accessToken
+    }
+
+    suspend fun getDeviceId(): String? {
+        try {
+            ensureDeviceSession()
+        } catch (_: Exception) {}
+        return deviceIdHint
+    }
+
     fun reportError(source: String, message: String, details: Map<String, Any?> = emptyMap()) {
         scope.launch {
             try {

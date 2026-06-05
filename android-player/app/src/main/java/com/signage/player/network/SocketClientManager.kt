@@ -30,6 +30,7 @@ object SocketClientManager {
     private var commandHandler: (suspend (CommandDispatchPayload) -> Unit)? = null
     private var socket: Socket? = null
     private var heartbeatJob: kotlinx.coroutines.Job? = null
+    private var appContext: android.content.Context? = null
 
     fun registerSyncHandler(handler: suspend (SyncContentPayload) -> Unit) {
         syncHandler = handler
@@ -39,7 +40,8 @@ object SocketClientManager {
         commandHandler = handler
     }
 
-    fun initialize(deviceId: String, socketBaseUrl: String = "http://10.0.2.2:4100") {
+    fun initialize(context: android.content.Context, deviceId: String, socketBaseUrl: String = "http://10.0.2.2:4100") {
+        appContext = context.applicationContext
         reconnectAttempt = 0
         connect(deviceId, socketBaseUrl)
     }
@@ -143,10 +145,77 @@ object SocketClientManager {
         heartbeatJob?.cancel()
         heartbeatJob = socketScope.launch {
             while (isActive) {
+                val payload = JSONObject().apply {
+                    val ctx = appContext
+                    if (ctx != null) {
+                        try {
+                            put("ipAddress", getIpAddress())
+                            put("playerVersion", getPlayerVersion(ctx))
+                            put("osVersion", "Android " + android.os.Build.VERSION.RELEASE + " (SDK " + android.os.Build.VERSION.SDK_INT + ")")
+                            val metrics = ctx.resources.displayMetrics
+                            put("resolution", "${metrics.widthPixels}x${metrics.heightPixels}")
+                            val (total, used) = getMemoryInfo(ctx)
+                            put("memoryTotal", total)
+                            put("memoryUsed", used)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error compiling heartbeat telemetry", e)
+                        }
+                    }
+                }
+                socket?.emit("HEARTBEAT", payload)
+                Log.d(TAG, "HEARTBEAT emitted: $payload")
                 delay(HEARTBEAT_INTERVAL_MS)
-                socket?.emit("HEARTBEAT")
-                Log.d(TAG, "HEARTBEAT emitted")
             }
+        }
+    }
+
+    private fun getIpAddress(): String {
+        return try {
+            val interfaces = java.util.Collections.list(java.net.NetworkInterface.getNetworkInterfaces())
+            var ip = "Unknown"
+            for (intf in interfaces) {
+                val addrs = java.util.Collections.list(intf.inetAddresses)
+                for (addr in addrs) {
+                    if (!addr.isLoopbackAddress) {
+                        val sAddr = addr.hostAddress
+                        if (sAddr != null) {
+                            val isIPv4 = sAddr.indexOf(':') < 0
+                            if (isIPv4) {
+                                ip = sAddr
+                                break
+                            }
+                        }
+                    }
+                }
+            }
+            ip
+        } catch (ex: Exception) {
+            "Unknown"
+        }
+    }
+
+    private fun getPlayerVersion(context: android.content.Context): String {
+        return try {
+            val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            pInfo.versionName ?: "Unknown"
+        } catch (e: Exception) {
+            "Unknown"
+        }
+    }
+
+    private fun getMemoryInfo(context: android.content.Context): Pair<String, String> {
+        return try {
+            val actManager = context.getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+            val memInfo = android.app.ActivityManager.MemoryInfo()
+            actManager.getMemoryInfo(memInfo)
+            val totalGb = memInfo.totalMem.toDouble() / (1024 * 1024 * 1024)
+            val availGb = memInfo.availMem.toDouble() / (1024 * 1024 * 1024)
+            val usedGb = totalGb - availGb
+            val totalStr = String.format(java.util.Locale.US, "%.1f GB", totalGb)
+            val usedStr = String.format(java.util.Locale.US, "%.1f GB used", usedGb)
+            Pair(totalStr, usedStr)
+        } catch (e: Exception) {
+            Pair("Unknown", "Unknown")
         }
     }
 

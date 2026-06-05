@@ -224,6 +224,32 @@ export class DeviceRepository {
       });
     }
   }
+
+  /**
+   * Reset all devices status to offline in PostgreSQL on startup
+   */
+  async resetAllStatusesToOffline(): Promise<void> {
+    if (!isPostgresConnected()) {
+      return;
+    }
+
+    try {
+      const pool = getPostgresPool();
+      await pool.query(
+        `UPDATE devices
+         SET status = 'offline',
+             updated_at = CURRENT_TIMESTAMP
+         WHERE deleted_at IS NULL`
+      );
+      logger.debug('Reset all PostgreSQL device statuses to offline', {
+        operation: 'resetAllStatusesToOffline'
+      });
+    } catch (error) {
+      logger.error('Failed to reset PostgreSQL device statuses to offline', error instanceof Error ? error : new Error(String(error)), {
+        operation: 'resetAllStatusesToOffline'
+      });
+    }
+  }
 }
 
 export const deviceRepository = new DeviceRepository();
