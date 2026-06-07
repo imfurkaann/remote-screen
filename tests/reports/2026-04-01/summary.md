@@ -1,13 +1,13 @@
 ﻿# Phase Gate Test Summary
 
 - Date: 2026-04-01
-- Generated At: 2026-04-01T22:41:29
+- Generated At: 2026-06-06T11:12:34
 
 ## Command Results
 
-- lint: PASS
+- lint: FAIL (2)
 - test: PASS
-- build: PASS
+- build: FAIL (2)
 - check:kotlin: PASS
 
 ## Log Files
@@ -19,4 +19,4 @@
 
 ## Gate Decision
 
-PASS
+BLOCKED

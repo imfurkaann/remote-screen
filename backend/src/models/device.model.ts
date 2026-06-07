@@ -12,6 +12,8 @@ export type DeviceDoc = {
   timezone: string;
   screenGroup: string;
   operatingHours: string;
+  scaleMode: string;
+  notes: string;
   pairedOwnerUserId: string | null;
   currentPlaylistId: string | null;
   lastHeartbeatAt: Date | null;
@@ -44,6 +46,8 @@ const DeviceSchema = new Schema<DeviceDoc>(
     timezone: { type: String, default: "Europe/Istanbul" },
     screenGroup: { type: String, default: "Ungrouped" },
     operatingHours: { type: String, default: "Use Space's hours" },
+    scaleMode: { type: String, enum: ["fit", "fill", "stretch"], default: "fit" },
+    notes: { type: String, default: "" },
     pairedOwnerUserId: { type: String, default: null },
     currentPlaylistId: { type: String, default: null },
     lastHeartbeatAt: { type: Date, default: null, index: true },

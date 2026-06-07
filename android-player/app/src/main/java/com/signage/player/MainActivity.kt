@@ -7,12 +7,16 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -22,6 +26,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -31,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.AspectRatioFrameLayout
 import com.signage.player.boot.StartupCoordinator
 import com.signage.player.network.DevicePairingState
 import com.signage.player.network.SessionManager
@@ -178,64 +184,114 @@ fun PairingScreen(modifier: Modifier = Modifier) {
     }
 
     // VerifyingSession or Paired: render content.
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .rotate(uiState.orientation.toFloat())
+    //
+    // Improvement 1 — Crossfade animation:
+    // PlaybackCoordinator drives `transitionAlpha` via PlayerUiStateStore.
+    // When a new item begins, alpha is set to 0 (fade out), content is swapped,
+    // then alpha is set back to 1 (fade in). Compose animates the float value
+    // with a tween so the transition is smooth even on lower-end hardware.
+    val animatedAlpha by animateFloatAsState(
+        targetValue = uiState.transitionAlpha,
+        animationSpec = tween(durationMillis = 300),
+        label = "media_crossfade"
+    )
+
+    BoxWithConstraints(
+        modifier = modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
     ) {
-        val mediaPath = uiState.currentMediaFilePath
-        if (!mediaPath.isNullOrBlank() && uiState.currentMediaIsImage) {
-            AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = { androidContext ->
-                    ImageView(androidContext).apply {
-                        scaleType = ImageView.ScaleType.FIT_CENTER
-                        adjustViewBounds = true
-                    }
-                },
-                update = { imageView ->
-                    imageView.setImageURI(Uri.fromFile(File(mediaPath)))
-                }
-            )
-        } else if (!mediaPath.isNullOrBlank() && !uiState.currentMediaIsImage && playerController != null) {
-            AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = { androidContext ->
-                    PlayerView(androidContext).apply {
-                        useController = false
-                        player = playerController.asExoPlayer()
-                    }
-                },
-                update = { view ->
-                    view.player = playerController.asExoPlayer()
-                }
-            )
-        } else {
-            Column(
+        val isLandscape = uiState.orientation == 90 || uiState.orientation == 270
+        val width = if (isLandscape) maxHeight else maxWidth
+        val height = if (isLandscape) maxWidth else maxHeight
+
+        Box(
+            modifier = Modifier
+                .size(width, height)
+                .rotate(uiState.orientation.toFloat())
+        ) {
+            val mediaPath = uiState.currentMediaFilePath
+
+            // Inner Box carries the crossfade alpha so pairing / connection overlays
+            // are never accidentally made transparent during transitions.
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(24.dp),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally
+                    .alpha(animatedAlpha)
             ) {
-                Text(
-                    text = "Medya bekleniyor",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold,
-                    textAlign = TextAlign.Center
-                )
+                if (!mediaPath.isNullOrBlank() && uiState.currentMediaIsImage) {
+                    AndroidView(
+                        modifier = Modifier.fillMaxSize(),
+                        factory = { androidContext ->
+                            ImageView(androidContext).apply {
+                                scaleType = when (uiState.scaleMode) {
+                                    "fill" -> ImageView.ScaleType.CENTER_CROP
+                                    "stretch" -> ImageView.ScaleType.FIT_XY
+                                    else -> ImageView.ScaleType.FIT_CENTER
+                                }
+                                adjustViewBounds = true
+                            }
+                        },
+                        update = { imageView ->
+                            imageView.scaleType = when (uiState.scaleMode) {
+                                "fill" -> ImageView.ScaleType.CENTER_CROP
+                                "stretch" -> ImageView.ScaleType.FIT_XY
+                                else -> ImageView.ScaleType.FIT_CENTER
+                            }
+                            imageView.setImageURI(Uri.fromFile(File(mediaPath)))
+                        }
+                    )
+                } else if (!mediaPath.isNullOrBlank() && !uiState.currentMediaIsImage && playerController != null) {
+                    AndroidView(
+                        modifier = Modifier.fillMaxSize(),
+                        factory = { androidContext ->
+                            PlayerView(androidContext).apply {
+                                useController = false
+                                player = playerController.asExoPlayer()
+                                resizeMode = when (uiState.scaleMode) {
+                                    "fill" -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                                    "stretch" -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+                                    else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+                                }
+                            }
+                        },
+                        update = { view ->
+                            view.player = playerController.asExoPlayer()
+                            view.resizeMode = when (uiState.scaleMode) {
+                                "fill" -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                                "stretch" -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+                                else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+                            }
+                        }
+                    )
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(24.dp),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "Medya bekleniyor",
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
             }
-        }
 
-        if (uiState.showConnectionInfo) {
-            Column(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 24.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(text = StartupCoordinator.getBackendBaseUrl(), textAlign = TextAlign.Center)
+            // Connection info overlay — always fully visible, outside the alpha Box.
+            if (uiState.showConnectionInfo) {
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 24.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(text = StartupCoordinator.getBackendBaseUrl(), textAlign = TextAlign.Center)
+                }
             }
         }
     }

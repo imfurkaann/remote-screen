@@ -10,10 +10,10 @@ const NAV_LINKS: Array<{ href: string; label: string; isPlaceholder?: boolean }>
   { href: "/screens", label: "Screens" },
   { href: "/channels", label: "Channels", isPlaceholder: true },
   { href: "/playlists", label: "Playlists" },
-  { href: "/media", label: "Media", isPlaceholder: true },
+  { href: "/media", label: "Media" },
   { href: "/links", label: "Links", isPlaceholder: true },
   { href: "/dashboards", label: "Dashboards", isPlaceholder: true },
-  { href: "/canvas", label: "Canvas", isPlaceholder: true },
+  { href: "/canvas", label: "Templates", isPlaceholder: true },
   { href: "/apps", label: "Apps", isPlaceholder: true },
   { href: "/quick-post", label: "Quick Post", isPlaceholder: true },
   { href: "/operations", label: "Operations" }

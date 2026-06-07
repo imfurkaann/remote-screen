@@ -8,7 +8,8 @@ import {
   useState,
 } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useParams } from "next/navigation";
+import PublishModal from "../../../../components/PublishModal";
 
 /* ─── Types ──────────────────────────────────────────────── */
 type MediaFile = {
@@ -609,9 +610,13 @@ function PlaylistItemRow({
 }
 
 /* ─── Main Page ──────────────────────────────────────────── */
-export default function NewPlaylistPage() {
+export default function EditPlaylistPage() {
   const router = useRouter();
-  const [playlistName, setPlaylistName] = useState("New Playlist");
+  const params = useParams();
+  const playlistId = params.playlistId as string;
+
+  const [loading, setLoading] = useState(true);
+  const [playlistName, setPlaylistName] = useState("");
   const [editingName, setEditingName] = useState(false);
   const [allMedia, setAllMedia] = useState<MediaFile[]>([]);
   const [items, setItems] = useState<PlaylistItem[]>([]);
@@ -620,15 +625,51 @@ export default function NewPlaylistPage() {
   const [showModal, setShowModal] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<{ text: string; ok: boolean } | null>(null);
+
+  // Publish Modal State
+  const [publishModalOpen, setPublishModalOpen] = useState(false);
+  const [playlists, setPlaylists] = useState<{ id: string; name: string }[]>([]);
+
   const dragFrom = useRef<number | null>(null);
   const dragOver = useRef<number | null>(null);
 
-  /* load media */
+  /* Load playlist + media files */
   useEffect(() => {
-    fetchJson<{ media?: MediaFile[] }>("/api/content/media", { cache: "no-store" })
-      .then(p => setAllMedia(p.media ?? []))
-      .catch(() => { });
-  }, []);
+    async function loadData() {
+      try {
+        const [mediaPayload, playlistPayload, playlistsPayload] = await Promise.all([
+          fetchJson<{ media?: MediaFile[] }>("/api/content/media", { cache: "no-store" }),
+          fetchJson<{ playlist?: { name: string; items: any[] } }>(`/api/content/playlists/${playlistId}`, { cache: "no-store" }),
+          fetchJson<{ playlists?: { id: string; name: string }[] }>("/api/content/playlists", { cache: "no-store" })
+        ]);
+
+        setAllMedia(mediaPayload.media ?? []);
+        setPlaylists(playlistsPayload.playlists ?? []);
+        if (playlistPayload.playlist) {
+          setPlaylistName(playlistPayload.playlist.name);
+          const mappedItems = playlistPayload.playlist.items.map((item: any) => ({
+            uid: uid(),
+            media: {
+              id: item.media_id,
+              filename: item.filename,
+              checksum_sha256: item.checksum_sha256,
+              media_url: item.media_url,
+              mime_type: item.mime_type,
+            },
+            durationMs: item.duration_ms || 10_000,
+          }));
+          setItems(mappedItems);
+        }
+      } catch (err) {
+        setSaveMsg({ text: `Yükleme hatası: ${(err as Error).message}`, ok: false });
+      } finally {
+        setLoading(false);
+      }
+    }
+    if (playlistId) {
+      loadData();
+    }
+  }, [playlistId]);
 
   const filteredMedia = allMedia.filter(f =>
     !f.filename.startsWith("Single Media:") &&
@@ -689,8 +730,8 @@ export default function NewPlaylistPage() {
     setSaving(true);
     setSaveMsg(null);
     try {
-      await fetchJson("/api/content/playlists", {
-        method: "POST",
+      await fetchJson(`/api/content/playlists/${playlistId}`, {
+        method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           name: playlistName.trim(),
@@ -701,7 +742,7 @@ export default function NewPlaylistPage() {
           })),
         }),
       });
-      setSaveMsg({ text: "Playlist kaydedildi!", ok: true });
+      setSaveMsg({ text: "Playlist güncellendi!", ok: true });
       setTimeout(() => router.push("/playlists"), 900);
     } catch (e) {
       setSaveMsg({ text: `Hata: ${(e as Error).message}`, ok: false });
@@ -709,6 +750,61 @@ export default function NewPlaylistPage() {
       setSaving(false);
     }
   };
+
+  /* publish */
+  const handlePublishConfirm = async (selectedIds: string[]) => {
+    if (selectedIds.length === 0) return;
+    setSaving(true);
+    setSaveMsg(null);
+    try {
+      // 1. Save playlist changes first
+      await fetchJson(`/api/content/playlists/${playlistId}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: playlistName.trim(),
+          items: items.map((item, idx) => ({
+            media_id: item.media.id,
+            duration_ms: item.durationMs,
+            position: idx,
+          })),
+        }),
+      });
+
+      // 2. Publish to selected screens
+      await fetchJson(`/api/content/playlists/${playlistId}/publish`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ device_ids: selectedIds }),
+      });
+
+      setSaveMsg({ text: "Playlist kaydedildi ve yayınlandı!", ok: true });
+      setPublishModalOpen(false);
+      setTimeout(() => router.push("/playlists"), 900);
+    } catch (e) {
+      setSaveMsg({ text: `Yayınlama hatası: ${(e as Error).message}`, ok: false });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100vh", background: "#f4f5f7", gap: 16 }}>
+        <div style={{
+          width: 42, height: 42,
+          border: "4px solid #e8edf3",
+          borderTop: "4px solid #10b981",
+          borderRadius: "50%",
+          animation: "spin 0.8s linear infinite",
+        }} />
+        <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: "#64748b" }}>Playlist yükleniyor…</p>
+        <style>{`
+          @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        `}</style>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -719,6 +815,16 @@ export default function NewPlaylistPage() {
         onAddMedia={addMultiple}
         onNewUpload={handleNewUpload}
         playlistName={playlistName}
+      />
+
+      <PublishModal
+        open={publishModalOpen}
+        onClose={() => setPublishModalOpen(false)}
+        playlistId={playlistId}
+        playlistName={playlistName}
+        playlists={playlists}
+        onConfirm={handlePublishConfirm}
+        isBusy={saving}
       />
 
       <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: "#f4f5f7" }}>
@@ -764,11 +870,33 @@ export default function NewPlaylistPage() {
               Add Content
             </button>
             <button onClick={handleSave} disabled={saving} style={{
-              background: saving ? "#6ee7b7" : "#10b981", border: "none", color: "#fff",
-              fontWeight: 700, fontSize: 13, padding: "0 20px", height: 36,
-              borderRadius: 8, cursor: saving ? "not-allowed" : "pointer", transition: "background 0.15s",
+              backgroundColor: "#ffffff",
+              color: "#334155",
+              border: "1px solid #cbd5e1",
+              borderRadius: "8px",
+              padding: "0 20px",
+              height: 36,
+              fontSize: "13px",
+              fontWeight: 600,
+              cursor: saving ? "not-allowed" : "pointer",
+              transition: "background-color 0.15s ease"
             }}>
-              {saving ? "Kaydediliyor…" : "Save"}
+              {saving ? "Saving..." : "Save"}
+            </button>
+            <button onClick={() => setPublishModalOpen(true)} disabled={saving || items.length === 0} style={{
+              backgroundColor: (saving || items.length === 0) ? "#e2e8f0" : "var(--primary)",
+              border: "none",
+              color: (saving || items.length === 0) ? "#94a3b8" : "#fff",
+              fontWeight: 700,
+              fontSize: 13,
+              padding: "0 20px",
+              height: 36,
+              borderRadius: 8,
+              cursor: (saving || items.length === 0) ? "not-allowed" : "pointer",
+              transition: "background 0.15s",
+              boxShadow: (saving || items.length === 0) ? "none" : "0 1px 2px rgba(0,0,0,0.05)"
+            }}>
+              Publish
             </button>
           </div>
         </div>

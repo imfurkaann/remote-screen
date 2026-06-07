@@ -576,6 +576,122 @@ export class ContentRepository {
       return [];
     }
   }
+
+  /**
+   * Soft delete playlist in shadow table with retry logic
+   * Non-blocking: failures are logged but do not throw
+   */
+  async deletePlaylist(tenantId: string, playlistExternalId: string): Promise<void> {
+    if (!isPostgresConnected()) {
+      logger.debug('PostgreSQL not connected, skipping playlist delete', {
+        operation: 'deletePlaylist',
+        tenantId,
+        playlistId: playlistExternalId
+      });
+      return;
+    }
+
+    if (!postgresCircuitBreaker.canExecute()) {
+      logger.warn('PostgreSQL circuit breaker is OPEN, skipping playlist delete', {
+        operation: 'deletePlaylist',
+        tenantId,
+        playlistId: playlistExternalId,
+        circuitBreakerState: postgresCircuitBreaker.getState()
+      });
+      return;
+    }
+
+    try {
+      await withRetry(
+        async () => {
+          const pool = getPostgresPool();
+          await pool.query(
+            `UPDATE playlists
+             SET deleted_at = CURRENT_TIMESTAMP,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE tenant_id = $1::uuid AND external_id = $2`,
+            [tenantId, playlistExternalId]
+          );
+        },
+        `playlist-delete[${playlistExternalId}]`,
+        { maxRetries: 2, initialDelayMs: 50 }
+      );
+      postgresCircuitBreaker.recordSuccess();
+      logger.debug('Playlist marked as deleted in shadow table', {
+        operation: 'deletePlaylist',
+        tenantId,
+        playlistId: playlistExternalId
+      });
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      postgresCircuitBreaker.recordFailure(err);
+
+      logger.error('Failed to delete playlist from PostgreSQL after retries', err, {
+        operation: 'deletePlaylist',
+        tenantId,
+        playlistId: playlistExternalId,
+        circuitBreakerState: postgresCircuitBreaker.getState()
+      });
+    }
+  }
+
+  /**
+   * Soft delete media in shadow table with retry logic
+   * Non-blocking: failures are logged but do not throw
+   */
+  async deleteMedia(tenantId: string, mediaExternalId: string): Promise<void> {
+    if (!isPostgresConnected()) {
+      logger.debug('PostgreSQL not connected, skipping media delete', {
+        operation: 'deleteMedia',
+        tenantId,
+        mediaId: mediaExternalId
+      });
+      return;
+    }
+
+    if (!postgresCircuitBreaker.canExecute()) {
+      logger.warn('PostgreSQL circuit breaker is OPEN, skipping media delete', {
+        operation: 'deleteMedia',
+        tenantId,
+        mediaId: mediaExternalId,
+        circuitBreakerState: postgresCircuitBreaker.getState()
+      });
+      return;
+    }
+
+    try {
+      await withRetry(
+        async () => {
+          const pool = getPostgresPool();
+          await pool.query(
+            `UPDATE media
+             SET deleted_at = CURRENT_TIMESTAMP,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE tenant_id = $1::uuid AND external_id = $2`,
+            [tenantId, mediaExternalId]
+          );
+        },
+        `media-delete[${mediaExternalId}]`,
+        { maxRetries: 2, initialDelayMs: 50 }
+      );
+      postgresCircuitBreaker.recordSuccess();
+      logger.debug('Media marked as deleted in shadow table', {
+        operation: 'deleteMedia',
+        tenantId,
+        mediaId: mediaExternalId
+      });
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      postgresCircuitBreaker.recordFailure(err);
+
+      logger.error('Failed to delete media from PostgreSQL after retries', err, {
+        operation: 'deleteMedia',
+        tenantId,
+        mediaId: mediaExternalId,
+        circuitBreakerState: postgresCircuitBreaker.getState()
+      });
+    }
+  }
 }
 
 export const contentRepository = new ContentRepository();

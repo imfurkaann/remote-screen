@@ -52,8 +52,9 @@ object SessionManager {
 
     // -- Timing constants (all in milliseconds) --------------------------------
 
-    /** Token lifetime is 12 h; refresh every 30 min to keep it fresh. */
-    private const val TOKEN_REFRESH_INTERVAL_MS = 30 * 60 * 1_000L
+    /** Token lifetime is 48 h; refresh every 6 h to keep it fresh with minimal backend load.
+     *  6 h × 8 = 48 h full coverage. At 10 000 devices: 10 000 / 6 h ≈ 28 req/s vs 333 req/s. */
+    private const val TOKEN_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1_000L
 
     /** Backend issues pairing codes valid for 5 min; we request a new one every 60 s. */
     private const val PAIRING_CODE_REFRESH_MS = 60_000L

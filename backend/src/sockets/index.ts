@@ -9,6 +9,91 @@ type SocketDeps = {
   corsOrigin: string;
 };
 
+// ---------------------------------------------------------------------------
+// HeartbeatBuffer — batches per-device telemetry and flushes to MongoDB in a
+// single updateOne per device on a configurable interval.
+//
+// Problem being solved: 10 000 connected devices × heartbeat every 30 s
+// = 333 synchronous MongoDB writes per second just for "I'm alive" pings.
+// MongoDB handles this in practice, but it wastes I/O, index scans, and
+// connection-pool slots that could be used for actual business operations.
+//
+// Solution: accumulate the latest telemetry snapshot per device in memory.
+// A setInterval flushes all dirty entries in a Promise.allSettled batch.
+// Each device contributes at most 1 write per FLUSH_INTERVAL_MS, regardless
+// of how frequently heartbeats arrive.
+//
+// Memory cost: ~500 bytes per connected device. 10 000 devices ≈ 5 MB.
+// ---------------------------------------------------------------------------
+
+type HeartbeatEntry = {
+  deviceQuery: Record<string, string>;
+  fields: Record<string, unknown>;
+  dirtyAt: number; // epoch ms of last update — used to skip stale entries
+};
+
+const HEARTBEAT_FLUSH_INTERVAL_MS = 15_000; // flush every 15 s (not every 30 s heartbeat)
+
+class HeartbeatBuffer {
+  private readonly buffer = new Map<string, HeartbeatEntry>();
+  private flushTimer: ReturnType<typeof setInterval> | null = null;
+
+  start(): void {
+    if (this.flushTimer) return;
+    this.flushTimer = setInterval(() => {
+      this.flush().catch((err) =>
+        console.error("[HeartbeatBuffer] flush error", err)
+      );
+    }, HEARTBEAT_FLUSH_INTERVAL_MS);
+    // Allow Node.js to exit even if the timer is active.
+    if (this.flushTimer.unref) this.flushTimer.unref();
+  }
+
+  stop(): void {
+    if (this.flushTimer) {
+      clearInterval(this.flushTimer);
+      this.flushTimer = null;
+    }
+  }
+
+  /** Upsert the latest telemetry snapshot for a device. O(1). */
+  upsert(deviceKey: string, query: Record<string, string>, fields: Record<string, unknown>): void {
+    this.buffer.set(deviceKey, {
+      deviceQuery: query,
+      fields,
+      dirtyAt: Date.now()
+    });
+  }
+
+  /** Remove a device from the buffer (e.g. on disconnect). */
+  evict(deviceKey: string): void {
+    this.buffer.delete(deviceKey);
+  }
+
+  /** Drain the buffer and write all pending entries to MongoDB. */
+  private async flush(): Promise<void> {
+    if (this.buffer.size === 0) return;
+
+    const entries = [...this.buffer.entries()];
+    // Clear the buffer before awaiting so new heartbeats accumulate cleanly.
+    this.buffer.clear();
+
+    const writes = entries.map(([, entry]) =>
+      DeviceModel.updateOne(entry.deviceQuery, { $set: entry.fields }).catch((err) => {
+        console.error("[HeartbeatBuffer] updateOne failed", err);
+      })
+    );
+
+    await Promise.allSettled(writes);
+    console.debug(`[HeartbeatBuffer] flushed ${writes.length} device heartbeats`);
+  }
+}
+
+const heartbeatBuffer = new HeartbeatBuffer();
+heartbeatBuffer.start();
+
+// ---------------------------------------------------------------------------
+
 export function createSocketServer(httpServer: HttpServer, deps: SocketDeps): Server {
   const io = new Server(httpServer, {
     cors: {
@@ -71,6 +156,17 @@ export function createSocketServer(httpServer: HttpServer, deps: SocketDeps): Se
           });
         }
 
+        // Push current scale mode to device on connection
+        if (device.scaleMode !== undefined && device.scaleMode !== null) {
+          socket.emit("COMMAND_DISPATCH", {
+            command_id: `init-scale-${Date.now()}`,
+            command_type: "SET_SCALE_MODE",
+            payload: { scale_mode: device.scaleMode },
+            timeout_ms: 10_000,
+            attempt: 1
+          });
+        }
+
         // Push active playlist content to device on connection (for offline synchronization)
         if (device.currentPlaylistId) {
           try {
@@ -94,12 +190,12 @@ export function createSocketServer(httpServer: HttpServer, deps: SocketDeps): Se
               const syncPayload = {
                 playlist_id: String(playlist._id),
                 playlist_version: playlist.version,
-                checksum_sha_256: playlistChecksum,
+                checksum_sha256: playlistChecksum,
                 items: playlist.items.map((item) => ({
                   media_id: item.mediaId,
                   filename: item.filename,
                   media_url: item.mediaUrl,
-                  checksum_sha_256: item.checksumSha256,
+                  checksum_sha256: item.checksumSha256,
                   mime_type: item.mimeType,
                   duration_ms: item.durationMs,
                   position: item.position
@@ -128,40 +224,48 @@ export function createSocketServer(httpServer: HttpServer, deps: SocketDeps): Se
       emitDashboardCommandAck(payload);
     });
 
-    // Heartbeat: device sends PING every ~30s; we update lastSeenAt so the
-    // Screens page always shows a fresh "Last Seen" timestamp.
-    socket.on("HEARTBEAT", async (payload?: any) => {
+    // -----------------------------------------------------------------------
+    // Heartbeat handler — uses HeartbeatBuffer to batch MongoDB writes.
+    //
+    // Before: every HEARTBEAT → 1 immediate MongoDB updateOne
+    //         10 000 devices × 1/30s = 333 writes/s
+    //
+    // After:  every HEARTBEAT → O(1) in-memory map upsert
+    //         HeartbeatBuffer flushes every 15 s → max 10 000/15 ≈ 667 writes/s
+    //         BUT only dirty entries are written, and each device produces at
+    //         most 1 write per flush cycle regardless of heartbeat frequency.
+    // -----------------------------------------------------------------------
+    socket.on("HEARTBEAT", (payload?: Record<string, unknown>) => {
+      const query = deviceId.match(/^[0-9a-fA-F]{24}$/)
+        ? { _id: deviceId }
+        : { hardwareId: deviceId };
+
+      const fields: Record<string, unknown> = {
+        lastSeenAt: new Date(),
+        status: "online"
+      };
+
+      if (payload && typeof payload === "object") {
+        if (payload.ipAddress !== undefined) fields.ipAddress = payload.ipAddress;
+        if (payload.playerVersion !== undefined) fields.playerVersion = payload.playerVersion;
+        if (payload.osVersion !== undefined) fields.osVersion = payload.osVersion;
+        if (payload.resolution !== undefined) fields.resolution = payload.resolution;
+        if (payload.memoryTotal !== undefined) fields.memoryTotal = payload.memoryTotal;
+        if (payload.memoryUsed !== undefined) fields.memoryUsed = payload.memoryUsed;
+      }
+
+      heartbeatBuffer.upsert(deviceId, query as Record<string, string>, fields);
+    });
+
+    socket.on("disconnect", async () => {
+      // Remove from heartbeat buffer immediately on disconnect.
+      heartbeatBuffer.evict(deviceId);
+
       try {
         const query = deviceId.match(/^[0-9a-fA-F]{24}$/)
           ? { _id: deviceId }
           : { hardwareId: deviceId };
 
-        const updateFields: Record<string, any> = {
-          lastSeenAt: new Date(),
-          status: "online"
-        };
-
-        if (payload && typeof payload === "object") {
-          if (payload.ipAddress !== undefined) updateFields.ipAddress = payload.ipAddress;
-          if (payload.playerVersion !== undefined) updateFields.playerVersion = payload.playerVersion;
-          if (payload.osVersion !== undefined) updateFields.osVersion = payload.osVersion;
-          if (payload.resolution !== undefined) updateFields.resolution = payload.resolution;
-          if (payload.memoryTotal !== undefined) updateFields.memoryTotal = payload.memoryTotal;
-          if (payload.memoryUsed !== undefined) updateFields.memoryUsed = payload.memoryUsed;
-        }
-
-        await DeviceModel.updateOne(query, { $set: updateFields });
-      } catch {
-        // Non-fatal: ignore heartbeat errors
-      }
-    });
-
-    socket.on("disconnect", async () => {
-      try {
-        const query = deviceId.match(/^[0-9a-fA-F]{24}$/) 
-          ? { _id: deviceId } 
-          : { hardwareId: deviceId };
-          
         const device = await DeviceModel.findOne(query);
         if (device) {
           device.status = "offline";

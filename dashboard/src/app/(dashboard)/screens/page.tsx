@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
+import PairScreenModal from "../../../components/PairScreenModal";
 
 type DeviceItem = {
   id: string;
@@ -79,11 +80,6 @@ export default function ScreensPage() {
 
   // Pairing Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [pairingCode, setPairingCode] = useState("");
-  const [deviceName, setDeviceName] = useState("");
-  const [deviceLocation, setDeviceLocation] = useState("");
-  const [modalStatus, setModalStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
-  const [modalMessage, setModalMessage] = useState<string | null>(null);
 
   // Screens Manager Modal State
   const [isManagerOpen, setIsManagerOpen] = useState(false);
@@ -204,87 +200,7 @@ export default function ScreensPage() {
     return sorted;
   }, [filteredScreens]);
 
-  // Modal Submit (Pairing + optional update)
-  const handlePairSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const code = pairingCode.trim();
-    if (!/^[0-9]{6}$/.test(code)) {
-      setModalStatus("error");
-      setModalMessage("Pairing code must be a 6-digit number.");
-      return;
-    }
-
-    setModalStatus("loading");
-    setModalMessage(null);
-
-    try {
-      // 1. Confirm Pairing
-      const confirmRes = await fetch("/api/pairing/confirm", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ pairingCode: code })
-      });
-
-      const confirmPayload = (await confirmRes.json().catch(() => ({}))) as {
-        linked?: boolean;
-        device_id?: string;
-        code?: string;
-        message?: string;
-      };
-
-      if (!confirmRes.ok) {
-        setModalStatus("error");
-        setModalMessage(confirmPayload.message ?? "Pairing failed. Please check the code.");
-        return;
-      }
-
-      const deviceId = confirmPayload.device_id;
-
-      // 2. Update Device Details (Name and Location) if provided
-      if (deviceId && (deviceName.trim() || deviceLocation.trim())) {
-        const updatePayload: Record<string, string> = {};
-        if (deviceName.trim()) updatePayload.name = deviceName.trim();
-        if (deviceLocation.trim()) updatePayload.location = deviceLocation.trim();
-
-        const updateRes = await fetch(`/api/content/devices/${deviceId}`, {
-          method: "PUT",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(updatePayload)
-        });
-
-        if (!updateRes.ok) {
-          console.warn("Screen paired, but failed to save custom name/location details.");
-        }
-      }
-
-      setModalStatus("success");
-      setModalMessage("Screen successfully paired!");
-      setPairingCode("");
-      setDeviceName("");
-      setDeviceLocation("");
-
-      // Reload Screens List
-      void loadScreens();
-
-      // Close modal after a brief delay
-      setTimeout(() => {
-        setIsModalOpen(false);
-        setModalStatus("idle");
-        setModalMessage(null);
-      }, 1500);
-
-    } catch (err) {
-      setModalStatus("error");
-      setModalMessage("An unexpected error occurred. Is the backend server running?");
-    }
-  };
-
   const openPairModal = () => {
-    setPairingCode("");
-    setDeviceName("");
-    setDeviceLocation("");
-    setModalStatus("idle");
-    setModalMessage(null);
     setIsModalOpen(true);
   };
 
@@ -607,236 +523,12 @@ export default function ScreensPage() {
         )}
       </div>
 
-      {/* Premium Pairing Modal Overlay */}
-      {isModalOpen && (
-        <div style={{
-          position: "fixed",
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: "rgba(15, 23, 42, 0.45)",
-          backdropFilter: "blur(4px)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          zIndex: 1000
-        }}>
-          {/* Modal Card */}
-          <div style={{
-            width: "480px",
-            backgroundColor: "#ffffff",
-            borderRadius: "12px",
-            boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)",
-            border: "1px solid #e2e8f0",
-            overflow: "hidden",
-            display: "flex",
-            flexDirection: "column",
-            animation: "fadeIn 0.2s ease-out"
-          }}>
-            {/* Modal Header */}
-            <div style={{
-              padding: "20px 24px",
-              borderBottom: "1px solid #e2e8f0",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between"
-            }}>
-              <h3 style={{ margin: 0, fontSize: "18px", fontWeight: 700, color: "#0f172a" }}>
-                Pair New Screen
-              </h3>
-              <button
-                onClick={() => setIsModalOpen(false)}
-                type="button"
-                style={{
-                  background: "none",
-                  border: "none",
-                  padding: "4px",
-                  cursor: "pointer",
-                  color: "#94a3b8",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  borderRadius: "50%"
-                }}
-              >
-                <svg style={{ width: 20, height: 20 }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
-            {/* Modal Form */}
-            <form onSubmit={handlePairSubmit} style={{ display: "flex", flexDirection: "column", gap: "20px", padding: "24px" }}>
-              {/* Pairing Status Banner */}
-              {modalStatus === "success" && (
-                <div style={{
-                  backgroundColor: "rgba(16, 185, 129, 0.1)",
-                  border: "1px solid rgba(16, 185, 129, 0.2)",
-                  borderRadius: "8px",
-                  padding: "12px 16px",
-                  color: "#10b981",
-                  fontSize: "14px",
-                  fontWeight: 600,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "8px"
-                }}>
-                  <svg style={{ width: 18, height: 18 }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                  </svg>
-                  <span>{modalMessage}</span>
-                </div>
-              )}
-
-              {modalStatus === "error" && (
-                <div style={{
-                  backgroundColor: "rgba(239, 68, 68, 0.1)",
-                  border: "1px solid rgba(239, 68, 68, 0.2)",
-                  borderRadius: "8px",
-                  padding: "12px 16px",
-                  color: "#ef4444",
-                  fontSize: "14px",
-                  fontWeight: 600,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "8px"
-                }}>
-                  <svg style={{ width: 18, height: 18 }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                  </svg>
-                  <span>{modalMessage}</span>
-                </div>
-              )}
-
-              {/* Pairing Code Field */}
-              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                <label style={{ fontSize: "14px", fontWeight: 600, color: "#334155" }}>
-                  Pairing Code <span style={{ color: "#ef4444" }}>*</span>
-                </label>
-                <input
-                  type="text"
-                  placeholder="123456"
-                  maxLength={6}
-                  required
-                  pattern="[0-9]{6}"
-                  inputMode="numeric"
-                  value={pairingCode}
-                  onChange={(e) => setPairingCode(e.target.value)}
-                  disabled={modalStatus === "loading" || modalStatus === "success"}
-                  style={{
-                    width: "100%",
-                    fontSize: "20px",
-                    fontWeight: 700,
-                    letterSpacing: "4px",
-                    textAlign: "center",
-                    padding: "12px",
-                    border: "1px solid #cbd5e1",
-                    borderRadius: "8px"
-                  }}
-                />
-                <span style={{ fontSize: "12px", color: "#64748b" }}>
-                  Enter the 6-digit code shown on your signage screen.
-                </span>
-              </div>
-
-              {/* Screen Name Field */}
-              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                <label style={{ fontSize: "14px", fontWeight: 600, color: "#334155" }}>
-                  Screen Name
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. Conference Room A"
-                  value={deviceName}
-                  onChange={(e) => setDeviceName(e.target.value)}
-                  disabled={modalStatus === "loading" || modalStatus === "success"}
-                  style={{
-                    width: "100%",
-                    fontSize: "14px",
-                    padding: "10px 12px",
-                    border: "1px solid #cbd5e1",
-                    borderRadius: "8px",
-                    backgroundColor: "#ffffff",
-                    color: "#0f172a"
-                  }}
-                />
-              </div>
-
-              {/* Location Field */}
-              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                <label style={{ fontSize: "14px", fontWeight: 600, color: "#334155" }}>
-                  Location
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. 2nd Floor, West Wing"
-                  value={deviceLocation}
-                  onChange={(e) => setDeviceLocation(e.target.value)}
-                  disabled={modalStatus === "loading" || modalStatus === "success"}
-                  style={{
-                    width: "100%",
-                    fontSize: "14px",
-                    padding: "10px 12px",
-                    border: "1px solid #cbd5e1",
-                    borderRadius: "8px",
-                    backgroundColor: "#ffffff",
-                    color: "#0f172a"
-                  }}
-                />
-              </div>
-
-              {/* Form Actions */}
-              <div style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "flex-end",
-                gap: "12px",
-                marginTop: "12px",
-                borderTop: "1px solid #e2e8f0",
-                paddingTop: "16px"
-              }}>
-                <button
-                  type="button"
-                  onClick={() => setIsModalOpen(false)}
-                  disabled={modalStatus === "loading" || modalStatus === "success"}
-                  style={{
-                    backgroundColor: "#ffffff",
-                    color: "#334155",
-                    border: "1px solid #cbd5e1",
-                    borderRadius: "6px",
-                    padding: "8px 16px",
-                    fontSize: "14px",
-                    fontWeight: 600,
-                    cursor: "pointer"
-                  }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={modalStatus === "loading" || modalStatus === "success"}
-                  style={{
-                    backgroundColor: "var(--primary)",
-                    color: "#ffffff",
-                    border: "none",
-                    borderRadius: "6px",
-                    padding: "8px 16px",
-                    fontSize: "14px",
-                    fontWeight: 700,
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "6px"
-                  }}
-                >
-                  {modalStatus === "loading" ? "Connecting..." : "Pair Screen"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* Reusable Pairing Modal */}
+      <PairScreenModal
+        open={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        onSuccess={() => void loadScreens()}
+      />
       
       {/* ── Screens Manager Modal ──────────────────────────── */}
       {isManagerOpen && (

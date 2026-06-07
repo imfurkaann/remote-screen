@@ -68,7 +68,7 @@ afterEach(async () => {
     PlaylistModel.deleteMany({})
   ]);
 
-  await rm(path.resolve(process.cwd(), "uploads", "media", "tenant-demo"), {
+  await rm(path.resolve(process.cwd(), "uploads", "media", "tenant-test"), {
     recursive: true,
     force: true
   });
@@ -94,7 +94,7 @@ function makeUserToken(role: "tenant_admin" | "tenant_owner" | "operator" = "ten
   return jwt.sign(
     {
       sub: "user-demo",
-      tenant_id: "tenant-demo",
+      tenant_id: "tenant-test",
       role
     },
     env.jwtAccessSecret,
@@ -141,7 +141,7 @@ describe("content lifecycle", () => {
     assert.equal(uploadPayload.media.filename, "poster.txt");
     assert.equal(uploadPayload.media.checksum_sha256.length, 64);
 
-    const mediaDoc = await MediaModel.findOne({ tenantId: "tenant-demo", filename: "poster.txt" }).lean();
+    const mediaDoc = await MediaModel.findOne({ tenantId: "tenant-test", filename: "poster.txt" }).lean();
     assert.ok(mediaDoc);
     assert.equal(mediaDoc?.checksumSha256, uploadPayload.media.checksum_sha256);
 
@@ -177,7 +177,7 @@ describe("content lifecycle", () => {
     assert.equal(playlistPayload.playlist.name, "Morning Loop");
     assert.equal(playlistPayload.playlist.item_count, 1);
 
-    const playlistDoc = await PlaylistModel.findOne({ tenantId: "tenant-demo", name: "Morning Loop" }).lean();
+    const playlistDoc = await PlaylistModel.findOne({ tenantId: "tenant-test", name: "Morning Loop" }).lean();
     assert.ok(playlistDoc);
     assert.equal(playlistDoc?.items.length, 1);
     assert.equal(playlistDoc?.items[0]?.checksumSha256, uploadPayload.media.checksum_sha256);
@@ -240,7 +240,7 @@ describe("content lifecycle", () => {
     const playlistPayload = (await playlistResponse.json()) as { playlist: { id: string } };
 
     const device = await DeviceModel.create({
-      tenantId: "tenant-demo",
+      tenantId: "tenant-test",
       hardwareId: "hw-sync-1",
       status: "offline",
       pairedOwnerUserId: "user-demo",
@@ -289,5 +289,100 @@ describe("content lifecycle", () => {
     const firstPayload = syncEvents[0]?.payload as { playlist_id?: string; items?: Array<{ checksum_sha256: string }> };
     assert.equal(firstPayload?.playlist_id, playlistPayload.playlist.id);
     assert.equal(firstPayload?.items?.[0]?.checksum_sha256.length, 64);
+  });
+
+  it("deletes a playlist and clears it from assigned devices", async () => {
+    const baseUrl = await startServer();
+    const token = makeUserToken("tenant_owner");
+
+    // 1. Create a playlist
+    const uploadForm = new FormData();
+    uploadForm.set(
+      "file",
+      new Blob([Buffer.from("delete payload")], { type: "text/plain" }),
+      "delete.txt"
+    );
+
+    const uploadResponse = await fetch(`${baseUrl}/api/v1/content/media/upload`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+      body: uploadForm
+    });
+    const uploadPayload = (await uploadResponse.json()) as { media: { id: string } };
+
+    const playlistResponse = await fetch(`${baseUrl}/api/v1/content/playlists`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        name: "Delete Playlist",
+        items: [
+          {
+            media_id: uploadPayload.media.id,
+            duration_ms: 5000,
+            position: 0
+          }
+        ]
+      })
+    });
+    const playlistPayload = (await playlistResponse.json()) as { playlist: { id: string } };
+
+    // 2. Create a device and assign the playlist
+    const device = await DeviceModel.create({
+      tenantId: "tenant-test",
+      hardwareId: "hw-delete-1",
+      status: "offline",
+      pairedOwnerUserId: "user-demo",
+      currentPlaylistId: playlistPayload.playlist.id,
+      lastHeartbeatAt: null,
+      lastSeenAt: null
+    });
+
+    const emitted: Array<{ namespace: string; room: string; event: string; payload: unknown }> = [];
+    setSocketServer(
+      {
+        of(namespace: string) {
+          return {
+            to(room: string) {
+              return {
+                emit(event: string, payload: unknown) {
+                  emitted.push({ namespace, room, event, payload });
+                }
+              };
+            }
+          };
+        }
+      } as never
+    );
+
+    // 3. Delete the playlist
+    const deleteResponse = await fetch(
+      `${baseUrl}/api/v1/content/playlists/${playlistPayload.playlist.id}`,
+      {
+        method: "DELETE",
+        headers: {
+          authorization: `Bearer ${token}`
+        }
+      }
+    );
+
+    assert.equal(deleteResponse.status, 204);
+
+    // Check it's deleted from Mongo
+    const dbPlaylist = await PlaylistModel.findById(playlistPayload.playlist.id);
+    assert.equal(dbPlaylist, null);
+
+    // Check device currentPlaylistId is cleared
+    const updatedDevice = await DeviceModel.findById(device._id).lean();
+    assert.equal(updatedDevice?.currentPlaylistId, null);
+
+    // Check SYNC_CONTENT was emitted with null playlist_id
+    const syncEvents = emitted.filter((entry) => entry.event === "SYNC_CONTENT");
+    assert.ok(syncEvents.length > 0);
+    const lastEvent = syncEvents[syncEvents.length - 1];
+    const payload = lastEvent?.payload as { playlist_id: string | null };
+    assert.equal(payload?.playlist_id, null);
   });
 });

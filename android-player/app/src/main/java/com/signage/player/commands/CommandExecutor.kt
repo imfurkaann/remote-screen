@@ -6,6 +6,8 @@ import com.signage.player.ui.PlayerUiStateStore
 import com.signage.player.boot.StartupCoordinator
 import java.io.File
 import java.io.FileOutputStream
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.asRequestBody
 
 class CommandExecutor(
     private val appContext: Context,
@@ -73,6 +75,12 @@ class CommandExecutor(
                     CommandAckPayload(deviceId, command.commandId, "COMPLETED")
                 }
 
+                "SET_SCALE_MODE" -> {
+                    val scaleMode = command.payload["scale_mode"] as? String ?: "fit"
+                    PlayerUiStateStore.setScaleMode(scaleMode)
+                    CommandAckPayload(deviceId, command.commandId, "COMPLETED")
+                }
+
                 "SET_OPERATING_HOURS" -> {
                     val config = command.payload["operating_hours"] as? String ?: "Always On"
                     com.signage.player.storage.OperatingHoursStore(appContext).saveOperatingHours(config)
@@ -98,7 +106,7 @@ class CommandExecutor(
                         val resolvedDeviceId = reporter?.getDeviceId() ?: deviceId
 
                         if (!token.isNullOrBlank()) {
-                            val requestFile = okhttp3.RequestBody.create(okhttp3.MediaType.parse("image/png"), fileToUpload)
+                            val requestFile = fileToUpload.asRequestBody("image/png".toMediaTypeOrNull())
                             val multipartBody = okhttp3.MultipartBody.Part.createFormData("file", fileToUpload.name, requestFile)
                             val response = api.uploadScreenshot(
                                 deviceId = resolvedDeviceId,

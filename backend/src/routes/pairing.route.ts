@@ -218,7 +218,7 @@ export function buildPairingRouter(deps: PairingRouteDeps): Router {
           },
           deps.jwtSecret,
           {
-            expiresIn: "12h",
+            expiresIn: "48h",   // 48 h: survives 2-day network outages without content loss
             issuer: deps.jwtIssuer,
             audience: deps.jwtAudience,
             notBefore: "0s"

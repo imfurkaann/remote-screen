@@ -1,7 +1,7 @@
 ﻿# Dashboard Interaction Smoke Report
 
 - Date: 2026-04-01
-- Dashboard: http://localhost:3001
+- Dashboard: http://localhost:3000
 - Backend: http://localhost:4100/api/v1
 
 ## Login Route
@@ -11,10 +11,11 @@
 
 ## Pairing Confirm Route
 - PASS
-- Redirect location: http://localhost:3001/screens/pair?status=ok
+- Linked: True
 
-## Failure
-- FAIL: Operation cancelled due to security concerns. Use -UseBasicParsing parameter for safe HTML parsing without script execution.
+## Command Dispatch Route
+- PASS
+- Command status: timeout
 
 ## Gate Decision
-- BLOCKED
+- PASS

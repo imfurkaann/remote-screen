@@ -12,19 +12,19 @@
 
 ## Backend Pairing Bootstrap
 - PASS
-- Paired device: 6a1ed8c217c9580e247a7774
-- Pairing code: 824392
+- Paired device: 6a23d8fcac88311ea074ce76
+- Pairing code: 507775
 
 ## Playlist Publish
 - PASS
-- Uploaded media id: 6a1ed8c217c9580e247a7780
-- Created playlist: 6a1ed8c217c9580e247a7783
-- Published to device: 6a1ed8c217c9580e247a7774
+- Uploaded media id: 6a23d8fcac88311ea074ce82
+- Created playlist: 6a23d8fcac88311ea074ce86
+- Published to device: 6a23d8fcac88311ea074ce76
 - Published device count: 1
 
 ## Remote Command Dispatch
 - PASS
-- Target device: 6a1ed8c217c9580e247a7774
+- Target device: 6a23d8fcac88311ea074ce76
 - Command type: SET_VOLUME
 - Command status: queued
 

@@ -1,19 +1,12 @@
 "use client";
 
 import {
-  type ChangeEvent,
-  type FormEvent,
   useEffect,
   useMemo,
   useState,
 } from "react";
 import Link from "next/link";
-
-type UploadedMedia = {
-  id: string;
-  filename: string;
-  checksum_sha256: string;
-};
+import PublishModal from "../../../components/PublishModal";
 
 type PlaylistRow = {
   id: string;
@@ -21,12 +14,6 @@ type PlaylistRow = {
   version: number;
   item_count: number;
   updated_at: string;
-};
-
-type DeviceRow = {
-  id: string;
-  hardware_id: string;
-  status: string;
 };
 
 async function fetchJson<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
@@ -42,21 +29,6 @@ async function fetchJson<T>(input: RequestInfo, init?: RequestInit): Promise<T> 
 }
 
 /* ─── Small SVG icons ─────────────────────────────────────── */
-function IconSearch() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="11" cy="11" r="8" />
-      <path d="m21 21-4.35-4.35" />
-    </svg>
-  );
-}
-function IconPlus() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 5v14M5 12h14" />
-    </svg>
-  );
-}
 function IconPlaylist() {
   return (
     <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -70,23 +42,6 @@ function IconClose() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M18 6 6 18M6 6l12 12" />
-    </svg>
-  );
-}
-function IconUpload() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-      <polyline points="17 8 12 3 7 8" />
-      <line x1="12" y1="3" x2="12" y2="15" />
-    </svg>
-  );
-}
-function IconSend() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="m22 2-7 20-4-9-9-4Z" />
-      <path d="M22 2 11 13" />
     </svg>
   );
 }
@@ -107,230 +62,111 @@ function IconClock() {
   );
 }
 
-/* ─── Modal ────────────────────────────────────────────────── */
-interface CreateModalProps {
+/* ─── Delete Confirmation Modal ──────────────────────────────── */
+interface DeleteConfirmModalProps {
   open: boolean;
   onClose: () => void;
-  media: UploadedMedia[];
-  devices: DeviceRow[];
-  isBusy: boolean;
-  onSubmit: (e: FormEvent) => Promise<void>;
   playlistName: string;
-  setPlaylistName: (v: string) => void;
-  selectedMediaIds: string[];
-  setSelectedMediaIds: (ids: string[]) => void;
-  selectedDeviceIds: string[];
-  setSelectedDeviceIds: (ids: string[]) => void;
-  onFileUpload: (e: ChangeEvent<HTMLInputElement>) => Promise<void>;
-  statusMessage: string | null;
+  onConfirm: () => Promise<void>;
+  isBusy: boolean;
 }
 
-function CreateModal({
+function DeleteConfirmModal({
   open,
   onClose,
-  media,
-  devices,
-  isBusy,
-  onSubmit,
   playlistName,
-  setPlaylistName,
-  selectedMediaIds,
-  setSelectedMediaIds,
-  selectedDeviceIds,
-  setSelectedDeviceIds,
-  onFileUpload,
-  statusMessage,
-}: CreateModalProps) {
+  onConfirm,
+  isBusy,
+}: DeleteConfirmModalProps) {
   if (!open) return null;
+
   return (
     <div style={{
-      position: "fixed", inset: 0, zIndex: 1000,
-      background: "rgba(0,0,0,0.55)",
+      position: "fixed", inset: 0, zIndex: 1050,
+      background: "rgba(15, 23, 42, 0.45)",
       display: "flex", alignItems: "center", justifyContent: "center",
       backdropFilter: "blur(4px)",
-      animation: "fadeIn 0.15s ease",
     }}>
       <div style={{
         background: "#ffffff",
-        borderRadius: 16,
+        borderRadius: 12,
         width: "100%",
-        maxWidth: 520,
-        boxShadow: "0 24px 60px rgba(0,0,0,0.18)",
+        maxWidth: 420,
+        boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)",
         overflow: "hidden",
-        animation: "slideUp 0.2s ease",
+        display: "flex",
+        flexDirection: "column",
+        border: "1px solid #e2e8f0",
+        animation: "fadeIn 0.2s ease-out"
       }}>
-        {/* Modal header */}
-        <div style={{
-          padding: "20px 24px",
-          borderBottom: "1px solid #e2e8f0",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-        }}>
-          <div>
-            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "#0f172a" }}>
-              New Playlist
-            </h2>
-            <p style={{ margin: "4px 0 0", fontSize: 13, color: "#64748b" }}>
-              Upload media and configure your playlist
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            style={{
-              background: "none",
-              border: "none",
-              padding: 6,
-              cursor: "pointer",
-              color: "#94a3b8",
-              borderRadius: 8,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <IconClose />
-          </button>
+        <div style={{ padding: "20px 24px" }}>
+          <h3 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: "#0f172a" }}>
+            Delete Playlist
+          </h3>
+          <p style={{ margin: "12px 0 0", fontSize: 14, color: "#64748b", lineHeight: "1.5" }}>
+            Are you sure you want to delete the playlist <strong>"{playlistName}"</strong>? This will permanently delete it and stop playing on any assigned screens.
+          </p>
         </div>
-
-        {/* Modal body */}
-        <div style={{ padding: "24px", display: "grid", gap: 20, maxHeight: "70vh", overflowY: "auto" }}>
-          {/* Upload */}
-          <div>
-            <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 8 }}>
-              Upload Media
-            </label>
-            <label style={{
-              display: "flex", alignItems: "center", gap: 10,
-              border: "2px dashed #e2e8f0", borderRadius: 10, padding: "14px 16px",
-              cursor: "pointer", transition: "border-color 0.15s",
-              color: "#64748b", fontSize: 14,
-            }}
-              onMouseEnter={e => (e.currentTarget.style.borderColor = "#10b981")}
-              onMouseLeave={e => (e.currentTarget.style.borderColor = "#e2e8f0")}
-            >
-              <IconUpload />
-              <span>Choose image or video file…</span>
-              <input type="file" accept="image/*,video/*" onChange={onFileUpload} disabled={isBusy} style={{ display: "none" }} />
-            </label>
-            <p style={{ margin: "6px 0 0", fontSize: 12, color: "#94a3b8" }}>
-              {media.length} media file{media.length !== 1 ? "s" : ""} available
-            </p>
-          </div>
-
-          {/* Form */}
-          <form id="create-playlist-form" onSubmit={onSubmit} style={{ display: "grid", gap: 16 }}>
-            <div>
-              <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 8 }}>
-                Playlist Name
-              </label>
-              <input
-                name="playlistName"
-                placeholder="e.g. Morning Campaign"
-                value={playlistName}
-                onChange={(e) => setPlaylistName(e.target.value)}
-                required
-                style={{ width: "100%", boxSizing: "border-box" }}
-              />
-            </div>
-
-            <div>
-              <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 8 }}>
-                Select Media Items
-                <span style={{ marginLeft: 6, fontWeight: 400, textTransform: "none", fontSize: 11 }}>(hold Ctrl / ⌘ for multiple)</span>
-              </label>
-              <select
-                multiple
-                value={selectedMediaIds}
-                onChange={(e) =>
-                  setSelectedMediaIds(
-                    Array.from(e.target.selectedOptions).map((o) => o.value)
-                  )
-                }
-                style={{ width: "100%", minHeight: 110, boxSizing: "border-box" }}
-              >
-                {media.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.filename}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 8 }}>
-                Publish Targets (Devices)
-              </label>
-              <select
-                multiple
-                value={selectedDeviceIds}
-                onChange={(e) =>
-                  setSelectedDeviceIds(
-                    Array.from(e.target.selectedOptions).map((o) => o.value)
-                  )
-                }
-                style={{ width: "100%", minHeight: 100, boxSizing: "border-box" }}
-              >
-                {devices.map((device) => (
-                  <option key={device.id} value={device.id}>
-                    {device.hardware_id} — {device.status}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {statusMessage && (
-              <div style={{
-                background: statusMessage.startsWith("Playlist created") || statusMessage.startsWith("Uploaded")
-                  ? "rgba(16,185,129,0.08)" : "rgba(239,68,68,0.08)",
-                border: `1px solid ${statusMessage.startsWith("Playlist created") || statusMessage.startsWith("Uploaded")
-                  ? "rgba(16,185,129,0.25)" : "rgba(239,68,68,0.25)"}`,
-                borderRadius: 8,
-                padding: "10px 14px",
-                fontSize: 13,
-                color: statusMessage.startsWith("Playlist created") || statusMessage.startsWith("Uploaded")
-                  ? "#059669" : "#dc2626",
-              }}>
-                {statusMessage}
-              </div>
-            )}
-          </form>
-        </div>
-
-        {/* Modal footer */}
         <div style={{
           padding: "16px 24px",
           borderTop: "1px solid #e2e8f0",
+          backgroundColor: "#f8fafc",
           display: "flex",
-          gap: 10,
+          gap: 12,
           justifyContent: "flex-end",
         }}>
-          <button type="button" className="secondary" onClick={onClose} disabled={isBusy}>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={isBusy}
+            style={{
+              backgroundColor: "#ffffff",
+              color: "#334155",
+              border: "1px solid #cbd5e1",
+              borderRadius: "6px",
+              padding: "8px 16px",
+              fontSize: "13px",
+              fontWeight: 600,
+              cursor: "pointer"
+            }}
+          >
             Cancel
           </button>
-          <button type="submit" form="create-playlist-form" disabled={isBusy} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            {isBusy ? "Saving…" : "Create Playlist"}
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={isBusy}
+            style={{
+              backgroundColor: "var(--danger)",
+              color: "#ffffff",
+              border: "none",
+              borderRadius: "6px",
+              padding: "8px 16px",
+              fontSize: "13px",
+              fontWeight: 700,
+              cursor: "pointer"
+            }}
+          >
+            {isBusy ? "Deleting..." : "Delete Playlist"}
           </button>
         </div>
       </div>
-
-      <style>{`
-        @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
-        @keyframes slideUp { from { transform: translateY(16px); opacity: 0 } to { transform: translateY(0); opacity: 1 } }
-      `}</style>
     </div>
   );
 }
 
-/* ─── Playlist Card ────────────────────────────────────────── */
-function PlaylistCard({
+/* ─── Playlist Row Component ────────────────────────────────── */
+function PlaylistRowComponent({
   playlist,
-  onPublish,
+  isLast,
+  onPublishClick,
+  onDeleteClick,
   isBusy,
 }: {
   playlist: PlaylistRow;
-  onPublish: (id: string) => void;
+  isLast: boolean;
+  onPublishClick: (id: string, name: string) => void;
+  onDeleteClick: (id: string, name: string) => void;
   isBusy: boolean;
 }) {
   const initials = playlist.name
@@ -339,110 +175,157 @@ function PlaylistCard({
     .map((w) => w[0]?.toUpperCase() ?? "")
     .join("");
 
+  const handlePublishClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    onPublishClick(playlist.id, playlist.name);
+  };
+
+  const handleDeleteClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    onDeleteClick(playlist.id, playlist.name);
+  };
+
   return (
-    <div style={{
-      background: "#ffffff",
-      border: "1px solid #e2e8f0",
-      borderRadius: 12,
-      padding: "18px 20px",
-      display: "flex",
-      alignItems: "center",
-      gap: 16,
-      transition: "box-shadow 0.2s ease, border-color 0.2s ease",
-      cursor: "default",
-    }}
-      onMouseEnter={e => {
-        (e.currentTarget as HTMLDivElement).style.boxShadow = "0 4px 16px rgba(0,0,0,0.07)";
-        (e.currentTarget as HTMLDivElement).style.borderColor = "#cbd5e1";
-      }}
-      onMouseLeave={e => {
-        (e.currentTarget as HTMLDivElement).style.boxShadow = "none";
-        (e.currentTarget as HTMLDivElement).style.borderColor = "#e2e8f0";
-      }}
-    >
-      {/* Thumbnail / initials */}
-      <div style={{
-        width: 48,
-        height: 48,
-        borderRadius: 10,
-        background: "linear-gradient(135deg, #10b981 0%, #059669 100%)",
+    <div
+      style={{
         display: "flex",
         alignItems: "center",
-        justifyContent: "center",
-        flexShrink: 0,
-        fontSize: 16,
-        fontWeight: 700,
-        color: "#ffffff",
-        letterSpacing: "-0.5px",
-      }}>
-        {initials}
-      </div>
+        padding: "20px 32px",
+        borderBottom: isLast ? "none" : "1px solid #f1f5f9",
+        transition: "background-color 0.15s ease",
+        gap: "32px",
+        textDecoration: "none",
+        color: "inherit",
+      }}
+      onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "#f8fafc"}
+      onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "transparent"}
+    >
+      {/* Icon / Initials */}
+      <Link href={`/playlists/${playlist.id}`} style={{ display: "flex", alignItems: "center", gap: "32px", flexGrow: 1, textDecoration: "none", color: "inherit" }}>
+        <div style={{
+          width: "44px", height: "32px",
+          background: "linear-gradient(135deg, #10b981 0%, #059669 100%)",
+          borderRadius: "4px",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          color: "#ffffff", flexShrink: 0,
+          fontSize: "13px",
+          fontWeight: 700,
+          letterSpacing: "-0.5px",
+        }}>
+          {initials}
+        </div>
 
-      {/* Info */}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <p style={{ margin: 0, fontWeight: 600, fontSize: 15, color: "#0f172a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-          {playlist.name}
-        </p>
-        <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 5 }}>
-          <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "#64748b" }}>
+        {/* Details */}
+        <div style={{
+          flexGrow: 1,
+          minWidth: 0,
+          display: "flex",
+          flexDirection: "column",
+          gap: "4px",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <span style={{ fontSize: "16px", fontWeight: 700, color: "#0f172a" }}>
+              {playlist.name}
+            </span>
+          </div>
+        </div>
+      </Link>
+
+      {/* Playlist Stats */}
+      <div style={{ display: "flex", flexDirection: "column", gap: "4px", minWidth: "220px" }}>
+        <span style={{ fontSize: "11px", color: "#94a3b8", fontWeight: 700, letterSpacing: "0.5px" }}>PLAYLIST INFO</span>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px", fontSize: "13px", color: "#64748b" }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
             <IconItems />
             {playlist.item_count} item{playlist.item_count !== 1 ? "s" : ""}
           </span>
-          <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "#64748b" }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
             <IconClock />
             v{playlist.version}
-          </span>
-          <span style={{ fontSize: 12, color: "#94a3b8" }}>
-            {new Date(playlist.updated_at).toLocaleDateString("tr-TR", { day: "2-digit", month: "short", year: "numeric" })}
           </span>
         </div>
       </div>
 
+      {/* Updated Date */}
+      <div style={{ minWidth: "120px", display: "flex", flexDirection: "column", gap: "4px" }}>
+        <span style={{ fontSize: "11px", color: "#94a3b8", fontWeight: 700, letterSpacing: "0.5px" }}>LAST MODIFIED</span>
+        <span style={{ fontSize: "13px", color: "#64748b", fontWeight: 500 }}>
+          {new Date(playlist.updated_at).toLocaleDateString("tr-TR", { day: "2-digit", month: "short", year: "numeric" })}
+        </span>
+      </div>
+
       {/* Actions */}
-      <button
-        type="button"
-        disabled={isBusy}
-        onClick={() => onPublish(playlist.id)}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 7,
-          padding: "8px 16px",
-          fontSize: 13,
-          fontWeight: 600,
-          borderRadius: 8,
-          flexShrink: 0,
-        }}
-      >
-        <IconSend />
-        Publish
-      </button>
+      <div style={{ flexShrink: 0, display: "flex", gap: "8px", alignItems: "center" }}>
+        <button
+          type="button"
+          disabled={isBusy}
+          onClick={handleDeleteClick}
+          style={{
+            backgroundColor: "#ffffff",
+            color: "var(--danger)",
+            fontWeight: 700,
+            fontSize: "12px",
+            padding: "6px 14px",
+            borderRadius: "6px",
+            border: "1px solid var(--danger)",
+            cursor: "pointer",
+            transition: "all 0.15s ease"
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.backgroundColor = "var(--danger)";
+            e.currentTarget.style.color = "#ffffff";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.backgroundColor = "#ffffff";
+            e.currentTarget.style.color = "var(--danger)";
+          }}
+        >
+          Delete
+        </button>
+        <button
+          type="button"
+          disabled={isBusy}
+          onClick={handlePublishClick}
+          style={{
+            backgroundColor: "var(--primary)",
+            color: "#ffffff",
+            fontWeight: 700,
+            fontSize: "12px",
+            padding: "6px 14px",
+            borderRadius: "6px",
+            border: "none",
+            cursor: "pointer",
+            transition: "background-color 0.15s ease"
+          }}
+        >
+          Publish
+        </button>
+      </div>
     </div>
   );
 }
 
 /* ─── Main Page ────────────────────────────────────────────── */
 export default function PlaylistsPage() {
-  const [media, setMedia] = useState<UploadedMedia[]>([]);
   const [playlists, setPlaylists] = useState<PlaylistRow[]>([]);
-  const [devices, setDevices] = useState<DeviceRow[]>([]);
-  const [selectedMediaIds, setSelectedMediaIds] = useState<string[]>([]);
-  const [selectedDeviceIds, setSelectedDeviceIds] = useState<string[]>([]);
-  const [playlistName, setPlaylistName] = useState("Main Campaign");
   const [isBusy, setIsBusy] = useState(false);
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [showModal, setShowModal] = useState(false);
   const [publishStatus, setPublishStatus] = useState<string | null>(null);
 
-  const sortedMedia = useMemo(
-    () => [...media].sort((a, b) => a.filename.localeCompare(b.filename)),
-    [media]
-  );
+  // Publish Modal State
+  const [publishModalOpen, setPublishModalOpen] = useState(false);
+  const [activePublishId, setActivePublishId] = useState<string | null>(null);
+  const [activePublishName, setActivePublishName] = useState("");
 
-  // "Single Media:" ile başlayanlar gerçek playlist değil — filtrele
+  // Delete Modal State
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [activeDeleteId, setActiveDeleteId] = useState<string | null>(null);
+  const [activeDeleteName, setActiveDeleteName] = useState("");
+
   const realPlaylists = useMemo(
-    () => playlists.filter((p) => !p.name.startsWith("Single Media:")),
+    () => playlists.filter((p) => !p.name.toLowerCase().startsWith("single media:")),
     [playlists]
   );
 
@@ -454,18 +337,6 @@ export default function PlaylistsPage() {
     [realPlaylists, searchQuery]
   );
 
-  const loadMedia = async () => {
-    try {
-      const payload = await fetchJson<{ media?: UploadedMedia[] }>(
-        "/api/content/media",
-        { cache: "no-store" }
-      );
-      setMedia(payload.media ?? []);
-    } catch {
-      // non-fatal
-    }
-  };
-
   const loadPlaylists = async () => {
     const payload = await fetchJson<{ playlists?: PlaylistRow[] }>(
       "/api/content/playlists",
@@ -474,95 +345,29 @@ export default function PlaylistsPage() {
     setPlaylists(payload.playlists ?? []);
   };
 
-  const loadDevices = async () => {
-    const payload = await fetchJson<{ devices?: DeviceRow[] }>(
-      "/api/content/devices",
-      { cache: "no-store" }
-    );
-    setDevices(payload.devices ?? []);
-  };
-
   useEffect(() => {
-    const run = async () => {
-      try {
-        await Promise.all([loadMedia(), loadPlaylists(), loadDevices()]);
-      } catch {
-        setPublishStatus("Failed to load data.");
-      }
-    };
-    run().catch(() => setPublishStatus("Failed to load initial data."));
+    loadPlaylists().catch(() => setPublishStatus("Failed to load playlists."));
   }, []);
 
-  const handleFileUpload = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    setIsBusy(true);
-    setStatusMessage(null);
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      const payload = await fetchJson<{ media?: UploadedMedia }>(
-        "/api/content/media/upload",
-        { method: "POST", body: form }
-      );
-      if (!payload.media) throw new Error("upload_failed");
-      setStatusMessage(`Uploaded ${payload.media.filename}`);
-      await loadMedia();
-    } catch (error) {
-      setStatusMessage(`Upload failed: ${(error as Error).message}`);
-    } finally {
-      setIsBusy(false);
-      event.target.value = "";
-    }
+  const openPublishModal = (playlistId: string, playlistName: string) => {
+    setActivePublishId(playlistId);
+    setActivePublishName(playlistName);
+    setPublishModalOpen(true);
   };
 
-  const handleCreatePlaylist = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!playlistName.trim() || selectedMediaIds.length === 0) {
-      setStatusMessage("Playlist name and at least one media item are required.");
-      return;
-    }
-    setIsBusy(true);
-    setStatusMessage(null);
-    try {
-      const items = selectedMediaIds.map((mediaId, index) => ({
-        media_id: mediaId,
-        duration_ms: 10_000,
-        position: index,
-      }));
-      await fetchJson<{ playlist?: { id: string } }>("/api/content/playlists", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: playlistName.trim(), items }),
-      });
-      await loadPlaylists();
-      setStatusMessage("Playlist created successfully.");
-      setTimeout(() => {
-        setShowModal(false);
-        setStatusMessage(null);
-      }, 1200);
-    } catch (error) {
-      setStatusMessage(`Create failed: ${(error as Error).message}`);
-    } finally {
-      setIsBusy(false);
-    }
-  };
-
-  const handlePublish = async (playlistId: string) => {
-    if (selectedDeviceIds.length === 0) {
-      setPublishStatus("Open the 'New Playlist' modal and select at least one target device before publishing.");
-      return;
-    }
+  const handlePublishConfirm = async (selectedIds: string[]) => {
+    if (!activePublishId || selectedIds.length === 0) return;
     setIsBusy(true);
     setPublishStatus(null);
     try {
-      await fetchJson(`/api/content/playlists/${playlistId}/publish`, {
+      await fetchJson(`/api/content/playlists/${activePublishId}/publish`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ device_ids: selectedDeviceIds }),
+        body: JSON.stringify({ device_ids: selectedIds }),
       });
       await loadPlaylists();
-      setPublishStatus("Playlist published — SYNC_CONTENT dispatched.");
+      setPublishStatus(`Playlist published to selected screens.`);
+      setPublishModalOpen(false);
     } catch (error) {
       setPublishStatus(`Publish failed: ${(error as Error).message}`);
     } finally {
@@ -570,188 +375,244 @@ export default function PlaylistsPage() {
     }
   };
 
+  const openDeleteModal = (playlistId: string, playlistName: string) => {
+    setActiveDeleteId(playlistId);
+    setActiveDeleteName(playlistName);
+    setDeleteConfirmOpen(true);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!activeDeleteId) return;
+    setIsBusy(true);
+    setPublishStatus(null);
+    try {
+      await fetch(`/api/content/playlists/${activeDeleteId}`, {
+        method: "DELETE",
+      });
+      await loadPlaylists();
+      setPublishStatus(`Playlist "${activeDeleteName}" was deleted.`);
+      setDeleteConfirmOpen(false);
+    } catch (error) {
+      setPublishStatus(`Delete failed: ${(error as Error).message}`);
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
   return (
     <>
-      <CreateModal
-        open={showModal}
-        onClose={() => { setShowModal(false); setStatusMessage(null); }}
-        media={sortedMedia}
-        devices={devices}
+      <PublishModal
+        open={publishModalOpen}
+        onClose={() => setPublishModalOpen(false)}
+        playlistId={activePublishId || ""}
+        playlistName={activePublishName}
+        playlists={playlists}
+        onConfirm={handlePublishConfirm}
         isBusy={isBusy}
-        onSubmit={handleCreatePlaylist}
-        playlistName={playlistName}
-        setPlaylistName={setPlaylistName}
-        selectedMediaIds={selectedMediaIds}
-        setSelectedMediaIds={setSelectedMediaIds}
-        selectedDeviceIds={selectedDeviceIds}
-        setSelectedDeviceIds={setSelectedDeviceIds}
-        onFileUpload={handleFileUpload}
-        statusMessage={statusMessage}
       />
 
-      <div style={{ padding: "32px 36px", minHeight: "100vh", background: "#f4f5f7" }}>
-        {/* ── Page Header ── */}
-        <div style={{
+      <DeleteConfirmModal
+        open={deleteConfirmOpen}
+        onClose={() => setDeleteConfirmOpen(false)}
+        playlistName={activeDeleteName}
+        onConfirm={handleDeleteConfirm}
+        isBusy={isBusy}
+      />
+
+      <div style={{ display: "flex", flexDirection: "column", minHeight: "100%", backgroundColor: "#f4f5f7" }}>
+        
+        {/* Edge-to-Edge White Header */}
+        <header style={{
+          backgroundColor: "#ffffff",
+          borderBottom: "1px solid #e2e8f0",
+          padding: "16px 32px",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          marginBottom: 28,
-          gap: 16,
-          flexWrap: "wrap",
+          gap: "24px"
         }}>
-          {/* Left: title */}
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: "#0f172a", letterSpacing: "-0.5px" }}>
-              Playlists
-            </h1>
-          </div>
+          {/* Title */}
+          <h1 style={{ margin: 0, fontSize: "24px", fontWeight: 700, color: "#0f172a" }}>
+            Playlists
+          </h1>
 
-          {/* Right: search + button */}
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <div style={{ position: "relative" }}>
-              <span style={{
-                position: "absolute", left: 11, top: "50%",
-                transform: "translateY(-50%)",
-                color: "#94a3b8", display: "flex", pointerEvents: "none",
-              }}>
-                <IconSearch />
-              </span>
-              <input
-                type="search"
-                placeholder="Search playlists…"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                style={{
-                  paddingLeft: 36,
-                  paddingRight: 14,
-                  width: 220,
-                  height: 38,
-                  border: "1px solid #dde1ea",
-                  borderRadius: 9,
-                  fontSize: 13.5,
-                  background: "#ffffff",
-                  outline: "none",
-                }}
-              />
-            </div>
-
-            <Link
-              href="/playlists/new"
+          {/* Search Input in Middle */}
+          <div style={{ position: "relative", flexGrow: 1, maxWidth: "500px" }}>
+            <svg style={{
+              position: "absolute",
+              left: "12px",
+              top: "50%",
+              transform: "translateY(-50%)",
+              width: "16px",
+              height: "16px",
+              color: "#94a3b8",
+              pointerEvents: "none"
+            }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+            <input
+              type="text"
+              placeholder="Search Playlists"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
               style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 7,
-                height: 38,
-                padding: "0 16px",
-                fontSize: 14,
-                fontWeight: 600,
-                borderRadius: 9,
-                whiteSpace: "nowrap",
-                background: "#10b981",
-                color: "#ffffff",
-                textDecoration: "none",
-                border: "none",
+                width: "100%",
+                padding: "8px 12px 8px 36px",
+                fontSize: "14px",
+                border: "1px solid #e2e8f0",
+                borderRadius: "6px",
+                backgroundColor: "#ffffff",
+                color: "#0f172a"
               }}
-            >
-              <IconPlus />
-              New Playlist
-            </Link>
+            />
           </div>
-        </div>
 
-        {/* ── Publish status banner ── */}
-        {publishStatus && (
-          <div style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            background: publishStatus.includes("failed") || publishStatus.includes("Failed")
-              ? "rgba(239,68,68,0.06)" : "rgba(16,185,129,0.06)",
-            border: `1px solid ${publishStatus.includes("failed") || publishStatus.includes("Failed")
-              ? "rgba(239,68,68,0.2)" : "rgba(16,185,129,0.2)"}`,
-            borderRadius: 10,
-            padding: "10px 16px",
-            marginBottom: 20,
-            fontSize: 13,
-            color: publishStatus.includes("failed") || publishStatus.includes("Failed")
-              ? "#dc2626" : "#059669",
-          }}>
-            <span>{publishStatus}</span>
-            <button
-              type="button"
-              onClick={() => setPublishStatus(null)}
-              style={{ background: "none", border: "none", padding: 2, cursor: "pointer", color: "inherit", display: "flex" }}
-            >
-              <IconClose />
-            </button>
-          </div>
-        )}
-
-        {/* ── Filter tabs ── */}
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 16 }}>
-          <div style={{
-            background: "#0f172a",
-            color: "#ffffff",
-            borderRadius: 999,
-            padding: "4px 14px",
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: "pointer",
-            userSelect: "none",
-          }}>
-            All {realPlaylists.length}
-          </div>
-        </div>
-
-        {/* ── Playlist list ── */}
-        {filteredPlaylists.length === 0 ? (
-          <div style={{
-            textAlign: "center",
-            padding: "64px 24px",
-            border: "2px dashed #e2e8f0",
-            borderRadius: 16,
-            background: "#fafbfc",
-          }}>
-            <div style={{
-              width: 64,
-              height: 64,
-              borderRadius: 16,
-              background: "rgba(16,185,129,0.08)",
-              display: "flex",
+          {/* New Playlist Button */}
+          <Link
+            href="/playlists/new"
+            style={{
+              backgroundColor: "var(--primary)",
+              color: "#ffffff",
+              fontWeight: 700,
+              fontSize: "14px",
+              padding: "10px 18px",
+              borderRadius: "6px",
+              border: "none",
+              cursor: "pointer",
+              textDecoration: "none",
+              display: "inline-flex",
               alignItems: "center",
               justifyContent: "center",
-              margin: "0 auto 16px",
-              color: "#10b981",
+              transition: "background-color 0.15s ease"
+            }}
+          >
+            New Playlist
+          </Link>
+        </header>
+
+        {/* Main Inner Content Body */}
+        <div style={{ padding: "24px 32px", display: "flex", flexDirection: "column", gap: "20px" }}>
+          
+          {/* Action Buttons Row */}
+          <div style={{ display: "flex", alignItems: "center", gap: "20px", fontSize: "14px", color: "#64748b", flexWrap: "wrap" }}>
+            <button
+              onClick={loadPlaylists}
+              style={{
+                background: "none",
+                border: "none",
+                padding: 0,
+                cursor: "pointer",
+                color: "#0f172a",
+                fontWeight: 600,
+                display: "flex",
+                alignItems: "center",
+                gap: "6px"
+              }}
+            >
+              <span>Refresh</span>
+            </button>
+          </div>
+
+          {/* Publish status banner */}
+          {publishStatus && (
+            <div style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              background: publishStatus.includes("failed") || publishStatus.includes("Failed")
+                ? "rgba(239,68,68,0.06)" : "rgba(16,185,129,0.06)",
+              border: `1px solid ${publishStatus.includes("failed") || publishStatus.includes("Failed")
+                ? "rgba(239,68,68,0.2)" : "rgba(16,185,129,0.2)"}`,
+              borderRadius: 10,
+              padding: "10px 16px",
+              fontSize: 13,
+              color: publishStatus.includes("failed") || publishStatus.includes("Failed")
+                ? "#dc2626" : "#059669",
             }}>
-              <IconPlaylist />
-            </div>
-            <h3 style={{ margin: "0 0 8px", fontSize: 17, fontWeight: 600, color: "#0f172a" }}>
-              {searchQuery ? "No playlists found" : "No playlists yet"}
-            </h3>
-            <p style={{ margin: "0 0 20px", fontSize: 14, color: "#64748b" }}>
-              {searchQuery
-                ? `No results for "${searchQuery}"`
-                : "Create your first playlist and push it to your screens."}
-            </p>
-            {!searchQuery && (
-              <button type="button" onClick={() => setShowModal(true)} style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                <IconPlus />
-                New Playlist
+              <span>{publishStatus}</span>
+              <button
+                type="button"
+                onClick={() => setPublishStatus(null)}
+                style={{ background: "none", border: "none", padding: 2, cursor: "pointer", color: "inherit", display: "flex" }}
+              >
+                <IconClose />
               </button>
-            )}
-          </div>
-        ) : (
-          <div style={{ display: "grid", gap: 10 }}>
-            {filteredPlaylists.map((playlist) => (
-              <PlaylistCard
-                key={playlist.id}
-                playlist={playlist}
-                onPublish={handlePublish}
-                isBusy={isBusy}
-              />
-            ))}
-          </div>
-        )}
+            </div>
+          )}
+
+          {/* Playlist list container card */}
+          {filteredPlaylists.length === 0 ? (
+            <div style={{
+              textAlign: "center",
+              padding: "64px 32px",
+              backgroundColor: "#ffffff",
+              borderRadius: "12px",
+              border: "1px solid #e2e8f0",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: "16px"
+            }}>
+              <div style={{
+                width: 64,
+                height: 64,
+                borderRadius: 16,
+                background: "rgba(16,185,129,0.08)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "#10b981",
+              }}>
+                <IconPlaylist />
+              </div>
+              <h3 style={{ margin: "0 0 8px", fontSize: 17, fontWeight: 600, color: "#0f172a" }}>
+                {searchQuery ? "No playlists found" : "No playlists yet"}
+              </h3>
+              <p style={{ margin: "0 0 20px", fontSize: 14, color: "#64748b" }}>
+                {searchQuery
+                  ? `No results for "${searchQuery}"`
+                  : "Create your first playlist and push it to your screens."}
+              </p>
+              {!searchQuery && (
+                <Link
+                  href="/playlists/new"
+                  style={{
+                    backgroundColor: "var(--primary)",
+                    color: "#ffffff",
+                    fontWeight: 700,
+                    fontSize: "14px",
+                    padding: "10px 18px",
+                    borderRadius: "6px",
+                    border: "none",
+                    cursor: "pointer",
+                    textDecoration: "none"
+                  }}
+                >
+                  New Playlist
+                </Link>
+              )}
+            </div>
+          ) : (
+            <div style={{
+              backgroundColor: "#ffffff",
+              borderRadius: "12px",
+              border: "1px solid #e2e8f0",
+              boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
+              overflow: "hidden",
+            }}>
+              {filteredPlaylists.map((playlist, idx) => (
+                <PlaylistRowComponent
+                  key={playlist.id}
+                  playlist={playlist}
+                  isLast={idx === filteredPlaylists.length - 1}
+                  onPublishClick={openPublishModal}
+                  onDeleteClick={openDeleteModal}
+                  isBusy={isBusy}
+                />
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </>
   );

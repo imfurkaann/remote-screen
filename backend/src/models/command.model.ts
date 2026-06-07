@@ -1,6 +1,6 @@
 import { Schema, model } from "mongoose";
 
-export const COMMAND_TYPES = ["REBOOT_APP", "SCREENSHOT", "SET_VOLUME", "FORCE_REFRESH", "SCREEN_ON", "SCREEN_OFF", "SET_ORIENTATION", "SET_OPERATING_HOURS"] as const;
+export const COMMAND_TYPES = ["REBOOT_APP", "SCREENSHOT", "SET_VOLUME", "FORCE_REFRESH", "SCREEN_ON", "SCREEN_OFF", "SET_ORIENTATION", "SET_OPERATING_HOURS", "SET_SCALE_MODE"] as const;
 export const COMMAND_STATUSES = [
   "queued",
   "sent",

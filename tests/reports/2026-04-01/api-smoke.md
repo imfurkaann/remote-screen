@@ -5,7 +5,7 @@
 
 ## Health
 - PASS
-- Response: {"ok":true,"service":"backend","version":"0.1.0"}
+- Response: {"ok":true,"service":"backend","version":"0.1.0","postgres":{"connected":false,"circuitBreaker":{"state":"CLOSED","healthy":true,"consecutiveFailures":0,"lastFailureTime":null}}}
 
 ## Auth Dev Token
 - PASS
@@ -13,9 +13,9 @@
 
 ## Pairing Request Code
 - PASS
-- bootstrap_key_used: test-bootstrap-key
-- device_id: 69cd63597095340d1d956e62
-- code: 843768
+- bootstrap_key_used: local-bootstrap-key
+- device_id: 6a23d6848694483ca74bb89f
+- code: 419601
 
 ## Pairing Confirm
 - PASS
@@ -32,8 +32,8 @@
 
 ## Command Dispatch and Status
 - PASS
-- dispatch_status: timeout
-- get_status: timeout
+- dispatch_status: queued
+- get_status: sent
 
 ## Gate Decision
 - PASS

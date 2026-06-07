@@ -19,7 +19,7 @@
 
 ## Pairing Bootstrap
 - PASS
-- device_id: 69cd5fcf7095340d1d956e60
+- device_id: 6a23dd829db7ffe8bd092ac6
 - hardware_id: HW-ANDROID-RUNTIME-SMOKE-001
 
 ## Runtime Launch

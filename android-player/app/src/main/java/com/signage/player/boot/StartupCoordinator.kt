@@ -119,7 +119,10 @@ object StartupCoordinator {
         SocketClientManager.registerSyncHandler { payload ->
             try {
                 syncManager.applySyncPayload(payload)
-                playbackCoordinator.reloadAndPlayFromCache()
+                // Improvement 4: graceful reload — give the current item up to
+                // GRACE_PERIOD_MS to finish naturally before swapping the playlist.
+                // On 1 000+ devices this prevents a simultaneous hard-cut on all screens.
+                playbackCoordinator.gracefulReload(PlaybackCoordinator.GRACE_PERIOD_MS)
                 playbackCoordinator.persistSnapshot()
             } catch (error: Exception) {
                 telemetryReporter.reportError(

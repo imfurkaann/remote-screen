@@ -5,12 +5,12 @@
 
 ## Setup
 - PASS
-- device_id: 69cd6c357095340d1d956e74
+- device_id: 6a23d6848694483ca74bb8bc
 - tenant: tenant-demo
 
 ## Timeout and Retry Lifecycle
 - PASS
-- initial_status: timeout
+- initial_status: queued
 - final_status: timeout
 - attempts: 2
 - max_attempts: 2
@@ -19,7 +19,7 @@
 - PASS
 - first_command_id: cmd-socket-smoke-dedupe-001
 - second_command_id: cmd-socket-smoke-dedupe-001
-- second_status: timeout
+- second_status: sent
 
 ## Online ACK Path
 - PENDING-EVIDENCE

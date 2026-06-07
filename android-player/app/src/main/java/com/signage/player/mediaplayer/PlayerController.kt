@@ -60,6 +60,9 @@ class PlayerController(context: Context) : DefaultLifecycleObserver {
         )
     }
 
+    /** Returns the current playback position in milliseconds. Thread-safe via ExoPlayer's internal handler. */
+    fun getCurrentPosition(): Long = player.currentPosition.coerceAtLeast(0L)
+
     fun asExoPlayer(): ExoPlayer {
         return player
     }

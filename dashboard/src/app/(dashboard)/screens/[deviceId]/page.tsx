@@ -15,6 +15,8 @@ type Device = {
   timezone?: string | null;
   screen_group?: string | null;
   operating_hours?: string | null;
+  scale_mode?: string | null;
+  notes?: string | null;
   last_seen_at?: string | null;
   last_heartbeat_at?: string | null;
   current_playlist_id?: string | null;
@@ -220,7 +222,9 @@ export default function ScreenDetailPage() {
   const [screenGroup, setScreenGroup] = useState("Ungrouped");
   const [customGroupInput, setCustomGroupInput] = useState("");
   const [operatingHours, setOperatingHours] = useState("Use Space's hours");
+  const [scaleMode, setScaleMode] = useState("fit");
   const [savingSettings, setSavingSettings] = useState(false);
+  const [savingNote, setSavingNote] = useState(false);
   
   // Settings Notification/Toast State
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
@@ -277,12 +281,29 @@ export default function ScreenDetailPage() {
       setDevice(foundDevice);
       setOrientation(foundDevice.orientation ?? 0);
       
-      // Seed settings inputs if they are empty
-      if (!editName && foundDevice.name) setEditName(foundDevice.name);
-      if (!editLocation && foundDevice.location) setEditLocation(foundDevice.location);
-      if (foundDevice.timezone) setTimezone(foundDevice.timezone);
-      if (foundDevice.screen_group) setScreenGroup(foundDevice.screen_group);
-      if (foundDevice.operating_hours) setOperatingHours(foundDevice.operating_hours);
+      // Seed settings inputs if initial load OR if they haven't been modified since last fetch
+      const isInitial = !device;
+      if (isInitial || editName === device?.name) {
+        setEditName(foundDevice.name || "");
+      }
+      if (isInitial || editLocation === device?.location) {
+        setEditLocation(foundDevice.location || "");
+      }
+      if (isInitial || timezone === device?.timezone) {
+        setTimezone(foundDevice.timezone || "Europe/Istanbul");
+      }
+      if (isInitial || screenGroup === device?.screen_group) {
+        setScreenGroup(foundDevice.screen_group || "Ungrouped");
+      }
+      if (isInitial || operatingHours === device?.operating_hours) {
+        setOperatingHours(foundDevice.operating_hours || "Use Space's hours");
+      }
+      if (isInitial || scaleMode === device?.scale_mode) {
+        setScaleMode(foundDevice.scale_mode || "fit");
+      }
+      if (isInitial || note === device?.notes) {
+        setNote(foundDevice.notes || "");
+      }
 
       // 2. Fetch playlists to resolve currently playing names
       const playlistRes = await fetch("/api/content/playlists", { cache: "no-store" });
@@ -321,6 +342,9 @@ export default function ScreenDetailPage() {
     }
   };
 
+  const loadDataRef = useRef<typeof loadData>(loadData);
+  loadDataRef.current = loadData;
+
   useEffect(() => {
     if (deviceId) {
       void loadData(true);
@@ -331,10 +355,10 @@ export default function ScreenDetailPage() {
   useEffect(() => {
     if (!deviceId) return;
     const interval = setInterval(() => {
-      void loadData(false);
+      void loadDataRef.current(false);
     }, 5000);
     return () => clearInterval(interval);
-  }, [deviceId, editName, editLocation]);
+  }, [deviceId]);
 
   // Derive unique group names from all devices (excluding Ungrouped)
   const existingGroups = useMemo(() => {
@@ -485,11 +509,17 @@ export default function ScreenDetailPage() {
           location: editLocation,
           timezone,
           screen_group: screenGroup === "__new__" ? (customGroupInput.trim() || "Ungrouped") : screenGroup,
-          operating_hours: operatingHours
+          operating_hours: operatingHours,
+          scale_mode: scaleMode
         })
       });
       if (response.ok) {
         showToast("Settings saved successfully.", "success");
+        if (screenGroup === "__new__") {
+          const resolvedGroup = customGroupInput.trim() || "Ungrouped";
+          setScreenGroup(resolvedGroup);
+          setCustomGroupInput("");
+        }
         void loadData(false);
       } else {
         showToast("Failed to save settings.", "error");
@@ -498,6 +528,50 @@ export default function ScreenDetailPage() {
       showToast("Network error saving settings.", "error");
     } finally {
       setSavingSettings(false);
+    }
+  };
+
+  const handleSaveNote = async () => {
+    if (note === device?.notes) return;
+    setSavingNote(true);
+    try {
+      const response = await fetch(`/api/content/devices/${deviceId}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          notes: note
+        })
+      });
+      if (response.ok) {
+        showToast("Note saved successfully.", "success");
+        void loadData(false);
+      } else {
+        showToast("Failed to save note.", "error");
+      }
+    } catch {
+      showToast("Network error saving note.", "error");
+    } finally {
+      setSavingNote(false);
+    }
+  };
+
+  const handleDeleteScreen = async () => {
+    if (!window.confirm("Are you sure you want to delete this screen completely?")) {
+      return;
+    }
+    
+    try {
+      const response = await fetch(`/api/content/devices/${deviceId}`, {
+        method: "DELETE"
+      });
+      if (response.ok) {
+        showToast("Screen deleted successfully.", "success");
+        router.push("/screens");
+      } else {
+        showToast("Failed to delete screen.", "error");
+      }
+    } catch {
+      showToast("Network error deleting screen.", "error");
     }
   };
 
@@ -562,7 +636,8 @@ export default function ScreenDetailPage() {
   // Filtered lists inside the modal
   const filteredPlaylists = useMemo(() => {
     return playlists.filter((p) =>
-      p.name.toLowerCase().includes(searchQuery.toLowerCase().trim())
+      p.name.toLowerCase().includes(searchQuery.toLowerCase().trim()) &&
+      !p.name.toLowerCase().startsWith("single media:")
     );
   }, [playlists, searchQuery]);
 
@@ -783,6 +858,7 @@ export default function ScreenDetailPage() {
     <div style={{ display: "flex", flexDirection: "column", height: "100vh", backgroundColor: "#f4f5f7", boxSizing: "border-box" }}>
       <style>{`
         @keyframes slideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
       `}</style>
       {toast && (
         <div style={{
@@ -855,6 +931,92 @@ export default function ScreenDetailPage() {
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          {/* Refresh Button */}
+          <button
+            onClick={() => handleDispatchCommand("FORCE_REFRESH")}
+            disabled={isPolling}
+            title="Refresh Screen"
+            type="button"
+            style={{
+              padding: "8px 14px",
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              backgroundColor: "#ffffff",
+              border: "1px solid #cbd5e1",
+              borderRadius: "6px",
+              fontSize: "13px",
+              fontWeight: 600,
+              color: "#334155",
+              cursor: isPolling ? "not-allowed" : "pointer",
+              transition: "all 0.15s ease",
+              boxShadow: "0 1px 2px rgba(0,0,0,0.05)"
+            }}
+            onMouseOver={(e) => {
+              if (!isPolling) {
+                e.currentTarget.style.backgroundColor = "#f8fafc";
+                e.currentTarget.style.borderColor = "#94a3b8";
+              }
+            }}
+            onMouseOut={(e) => {
+              if (!isPolling) {
+                e.currentTarget.style.backgroundColor = "#ffffff";
+                e.currentTarget.style.borderColor = "#cbd5e1";
+              }
+            }}
+          >
+            <svg
+              style={{ width: 16, height: 16, animation: isPolling ? "spin 1s linear infinite" : "none" }}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 7.89" />
+            </svg>
+            <span>Refresh</span>
+          </button>
+
+          {/* Delete Button */}
+          <button
+            onClick={handleDeleteScreen}
+            title="Delete Screen Completely"
+            type="button"
+            style={{
+              padding: "8px 14px",
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              backgroundColor: "#fef2f2",
+              border: "1px solid #fee2e2",
+              borderRadius: "6px",
+              fontSize: "13px",
+              fontWeight: 600,
+              color: "#ef4444",
+              cursor: "pointer",
+              transition: "all 0.15s ease",
+              boxShadow: "0 1px 2px rgba(0,0,0,0.05)"
+            }}
+            onMouseOver={(e) => {
+              e.currentTarget.style.backgroundColor = "#fee2e2";
+              e.currentTarget.style.borderColor = "#fca5a5";
+            }}
+            onMouseOut={(e) => {
+              e.currentTarget.style.backgroundColor = "#fef2f2";
+              e.currentTarget.style.borderColor = "#fee2e2";
+            }}
+          >
+            <svg
+              style={{ width: 16, height: 16 }}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+            <span>Delete</span>
+          </button>
         </div>
       </header>
 
@@ -1140,9 +1302,10 @@ export default function ScreenDetailPage() {
                     placeholder="Add note..."
                     value={note}
                     onChange={(e) => setNote(e.target.value)}
+                    onBlur={handleSaveNote}
                     style={{
                       width: "100%",
-                      height: "60px",
+                      height: "80px",
                       fontSize: "13px",
                       padding: "8px 12px",
                       border: "1px solid #cbd5e1",
@@ -1150,6 +1313,30 @@ export default function ScreenDetailPage() {
                       resize: "none"
                     }}
                   />
+                  {note !== (device?.notes || "") && (
+                    <button
+                      type="button"
+                      onClick={handleSaveNote}
+                      disabled={savingNote}
+                      style={{
+                        alignSelf: "flex-end",
+                        backgroundColor: "#10b981",
+                        color: "#ffffff",
+                        border: "none",
+                        borderRadius: "4px",
+                        padding: "6px 16px",
+                        fontSize: "12px",
+                        fontWeight: 600,
+                        cursor: "pointer",
+                        opacity: savingNote ? 0.7 : 1,
+                        transition: "background-color 0.15s ease"
+                      }}
+                      onMouseOver={(e) => (e.currentTarget.style.backgroundColor = "#059669")}
+                      onMouseOut={(e) => (e.currentTarget.style.backgroundColor = "#10b981")}
+                    >
+                      {savingNote ? "Saving..." : "Save Note"}
+                    </button>
+                  )}
                 </div>
 
                 {/* Status card */}
@@ -1535,50 +1722,54 @@ export default function ScreenDetailPage() {
                   {/* Operating Hours */}
                   <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "16px" }}>
                     <label style={{ fontSize: "13px", fontWeight: 600, color: "#334155" }}>Operating Hours</label>
-                    <select
-                      value={operatingHours.startsWith("{") ? "custom" : operatingHours}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        if (val === "custom") {
-                          let currentSchedule = DEFAULT_WEEKLY_SCHEDULE;
-                          if (operatingHours.startsWith("{")) {
-                            try {
-                              const parsed = JSON.parse(operatingHours);
-                              if (parsed.schedule) {
-                                currentSchedule = parsed.schedule;
+                    {(() => {
+                      const isCustomHours = typeof operatingHours === "string" && (operatingHours.trim().startsWith("{") || operatingHours.includes("schedule"));
+                      return (
+                        <>
+                          <select
+                            value={isCustomHours ? "custom" : operatingHours}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              if (val === "custom") {
+                                let currentSchedule = DEFAULT_WEEKLY_SCHEDULE;
+                                if (isCustomHours) {
+                                  try {
+                                    const parsed = JSON.parse(operatingHours);
+                                    if (parsed.schedule) {
+                                      currentSchedule = parsed.schedule;
+                                    }
+                                  } catch (err) {
+                                    console.error("Failed to parse custom operating hours", err);
+                                  }
+                                }
+                                setTempSchedule(currentSchedule);
+                                setIsHoursModalOpen(true);
+                              } else {
+                                setOperatingHours(val);
                               }
-                            } catch (err) {
-                              console.error("Failed to parse custom operating hours", err);
-                            }
-                          }
-                          setTempSchedule(currentSchedule);
-                          setIsHoursModalOpen(true);
-                        } else {
-                          setOperatingHours(val);
-                        }
-                      }}
-                      style={{ fontSize: "13px", padding: "8px 12px", border: "1px solid #cbd5e1" }}
-                    >
-                      <option value="Use Space's hours">Use Space's hours</option>
-                      <option value="Always On">Always On</option>
-                      <option value="custom">Custom Operating Hours</option>
-                    </select>
-                    {operatingHours.startsWith("{") && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          let currentSchedule = DEFAULT_WEEKLY_SCHEDULE;
-                          try {
-                            const parsed = JSON.parse(operatingHours);
-                            if (parsed.schedule) {
-                              currentSchedule = parsed.schedule;
-                            }
-                          } catch (err) {
-                            console.error("Failed to parse custom operating hours", err);
-                          }
-                          setTempSchedule(currentSchedule);
-                          setIsHoursModalOpen(true);
-                        }}
+                            }}
+                            style={{ fontSize: "13px", padding: "8px 12px", border: "1px solid #cbd5e1" }}
+                          >
+                            <option value="Use Space's hours">Use Space's hours</option>
+                            <option value="Always On">Always On</option>
+                            <option value="custom">Custom Operating Hours</option>
+                          </select>
+                          {isCustomHours && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                let currentSchedule = DEFAULT_WEEKLY_SCHEDULE;
+                                try {
+                                  const parsed = JSON.parse(operatingHours);
+                                  if (parsed.schedule) {
+                                    currentSchedule = parsed.schedule;
+                                  }
+                                } catch (err) {
+                                  console.error("Failed to parse custom operating hours", err);
+                                }
+                                setTempSchedule(currentSchedule);
+                                setIsHoursModalOpen(true);
+                              }}
                         style={{
                           alignSelf: "flex-start",
                           marginTop: "6px",
@@ -1594,7 +1785,27 @@ export default function ScreenDetailPage() {
                       >
                         Edit Schedule
                       </button>
-                    )}
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
+
+                  {/* Scale/Fit Mode */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "16px" }}>
+                    <label style={{ fontSize: "13px", fontWeight: 600, color: "#334155" }}>Scale Mode</label>
+                    <select
+                      value={scaleMode}
+                      onChange={(e) => setScaleMode(e.target.value)}
+                      style={{ fontSize: "13px", padding: "8px 12px", border: "1px solid #cbd5e1", borderRadius: "6px" }}
+                    >
+                      <option value="fit">Fit to Screen (Aspect Ratio preserved)</option>
+                      <option value="fill">Fill Screen (Cropped to fit)</option>
+                      <option value="stretch">Stretch to Fill (Distorted)</option>
+                    </select>
+                    <p style={{ margin: 0, fontSize: "11px", color: "#94a3b8" }}>
+                      Controls how images/videos scale to fit this screen. Saved when you click "Save Settings".
+                    </p>
                   </div>
                 </div>
 
@@ -1734,11 +1945,10 @@ export default function ScreenDetailPage() {
 
             {/* Modal Body: Left sidebar menu + Right selection list */}
             <div style={{ display: "flex", flexGrow: 1, minHeight: "0" }}>
-              
               {/* Left sidebar inside modal */}
               <div style={{
                 width: "200px",
-                backgroundColor: "#1e1e24",
+                backgroundColor: "#ffffff",
                 display: "flex",
                 flexDirection: "column",
                 padding: "12px 8px",
@@ -1766,7 +1976,7 @@ export default function ScreenDetailPage() {
                     fontSize: "13px",
                     fontWeight: 600,
                     backgroundColor: modalTab === "playlists" ? "#10b981" : "transparent",
-                    color: modalTab === "playlists" ? "#ffffff" : "#9ca3af"
+                    color: modalTab === "playlists" ? "#ffffff" : "#475569"
                   }}
                 >
                   <svg style={{ width: 16, height: 16 }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -1774,7 +1984,7 @@ export default function ScreenDetailPage() {
                   </svg>
                   <span>Playlists</span>
                 </button>
-
+ 
                 {/* Media Button */}
                 <button
                   type="button"
@@ -1795,7 +2005,7 @@ export default function ScreenDetailPage() {
                     fontSize: "13px",
                     fontWeight: 600,
                     backgroundColor: modalTab === "media" ? "#10b981" : "transparent",
-                    color: modalTab === "media" ? "#ffffff" : "#9ca3af"
+                    color: modalTab === "media" ? "#ffffff" : "#475569"
                   }}
                 >
                   <svg style={{ width: 16, height: 16 }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
