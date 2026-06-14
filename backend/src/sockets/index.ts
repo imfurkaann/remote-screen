@@ -1,5 +1,6 @@
 import type { Server as HttpServer } from "node:http";
 import { Server } from "socket.io";
+import jwt from "jsonwebtoken";
 import { emitDashboardCommandAck } from "./registry.js";
 import { processDeviceAck, type DeviceAckPayload } from "../services/command.service.js";
 import { DeviceModel } from "../models/device.model.js";
@@ -7,6 +8,9 @@ import { deviceRepository } from "../repositories/device.repository.js";
 
 type SocketDeps = {
   corsOrigin: string;
+  jwtSecret: string;
+  jwtIssuer: string;
+  jwtAudience: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -94,6 +98,15 @@ heartbeatBuffer.start();
 
 // ---------------------------------------------------------------------------
 
+async function checkDeviceAccess(deviceId: string, auth: { userId: string; tenantId: string; role: string }): Promise<boolean> {
+  if (auth.role === "tenant_owner") return true;
+  const query = deviceId.match(/^[0-9a-fA-F]{24}$/)
+    ? { _id: deviceId, tenantId: auth.tenantId, pairedOwnerUserId: auth.userId }
+    : { hardwareId: deviceId, tenantId: auth.tenantId, pairedOwnerUserId: auth.userId };
+  const d = await DeviceModel.findOne(query);
+  return d !== null;
+}
+
 export function createSocketServer(httpServer: HttpServer, deps: SocketDeps): Server {
   const io = new Server(httpServer, {
     cors: {
@@ -104,6 +117,49 @@ export function createSocketServer(httpServer: HttpServer, deps: SocketDeps): Se
 
   const deviceNs = io.of("/device");
   const dashboardNs = io.of("/dashboard");
+
+  // JWT Authentication middleware for dashboard namespace
+  dashboardNs.use(async (socket, next) => {
+    try {
+      const token = socket.handshake.auth?.token ?? socket.handshake.query?.token;
+      if (!token || typeof token !== "string") {
+        return next(new Error("Authentication error: Token is required"));
+      }
+
+      const decoded = jwt.verify(token, deps.jwtSecret, {
+        issuer: deps.jwtIssuer,
+        audience: deps.jwtAudience
+      }) as { sub: string; tenant_id: string; role: string };
+
+      if (!decoded.sub || !decoded.tenant_id || !decoded.role) {
+        return next(new Error("Authentication error: Invalid claims"));
+      }
+
+      // Check if user is active (instant deactivation check)
+      const { Types } = await import("mongoose");
+      const { UserModel } = await import("../models/user.model.js");
+
+      if (Types.ObjectId.isValid(decoded.sub)) {
+        const user = await UserModel.findById(decoded.sub).lean();
+        if (!user || !user.isActive) {
+          return next(new Error("Authentication error: Account deactivated or not found"));
+        }
+      }
+
+      // Attach auth payload to socket and socket.data for deactivation registry lookup
+      const authData = {
+        userId: decoded.sub,
+        tenantId: decoded.tenant_id,
+        role: decoded.role
+      };
+      (socket as any).auth = authData;
+      socket.data = authData;
+
+      next();
+    } catch {
+      next(new Error("Authentication error: Invalid token"));
+    }
+  });
 
   deviceNs.on("connection", async (socket) => {
     const deviceId = String(
@@ -221,7 +277,7 @@ export function createSocketServer(httpServer: HttpServer, deps: SocketDeps): Se
         // Ignore errors to avoid dropping active socket session.
       }
 
-      emitDashboardCommandAck(payload);
+      await emitDashboardCommandAck(payload);
     });
 
     // -----------------------------------------------------------------------
@@ -284,12 +340,40 @@ export function createSocketServer(httpServer: HttpServer, deps: SocketDeps): Se
   });
 
   dashboardNs.on("connection", (socket) => {
-    socket.on("dispatch:sync", ({ device_id, payload }) => {
-      deviceNs.to(`device:${device_id}`).emit("SYNC_CONTENT", payload);
+    const auth = (socket as any).auth as { userId: string; tenantId: string; role: string };
+
+    // Join operator's own private user room to receive isolated command ACKs
+    socket.join(`dashboard:user:${auth.userId}`);
+
+    // If role is tenant_owner, join tenant owner room to receive broadcast signals
+    if (auth.role === "tenant_owner") {
+      socket.join(`dashboard:tenant:${auth.tenantId}:owner`);
+    }
+
+    socket.on("dispatch:sync", async ({ device_id, payload }) => {
+      try {
+        const hasAccess = await checkDeviceAccess(device_id, auth);
+        if (!hasAccess) {
+          socket.emit("error", { code: "FORBIDDEN", message: "Insufficient permissions for this device" });
+          return;
+        }
+        deviceNs.to(`device:${device_id}`).emit("SYNC_CONTENT", payload);
+      } catch (err) {
+        console.error("[sockets] dispatch:sync error", err);
+      }
     });
 
-    socket.on("dispatch:command", ({ device_id, payload }) => {
-      deviceNs.to(`device:${device_id}`).emit("COMMAND_DISPATCH", payload);
+    socket.on("dispatch:command", async ({ device_id, payload }) => {
+      try {
+        const hasAccess = await checkDeviceAccess(device_id, auth);
+        if (!hasAccess) {
+          socket.emit("error", { code: "FORBIDDEN", message: "Insufficient permissions for this device" });
+          return;
+        }
+        deviceNs.to(`device:${device_id}`).emit("COMMAND_DISPATCH", payload);
+      } catch (err) {
+        console.error("[sockets] dispatch:command error", err);
+      }
     });
   });
 

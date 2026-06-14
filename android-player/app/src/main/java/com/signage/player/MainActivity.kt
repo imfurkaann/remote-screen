@@ -17,6 +17,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.border
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -49,6 +55,9 @@ import android.view.Window
 import java.io.FileOutputStream
 import kotlin.coroutines.resume
 import kotlinx.coroutines.suspendCancellableCoroutine
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -76,15 +85,27 @@ class MainActivity : ComponentActivity() {
         }
 
         enableEdgeToEdge()
+        hideSystemUI()
         setContent {
             SignageplayerTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    PairingScreen(
-                        modifier = Modifier.padding(innerPadding)
-                    )
-                }
+                PairingScreen(
+                    modifier = Modifier.fillMaxSize()
+                )
             }
         }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            hideSystemUI()
+        }
+    }
+
+    private fun hideSystemUI() {
+        val windowInsetsController = WindowCompat.getInsetsController(window, window.decorView)
+        windowInsetsController.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        windowInsetsController.hide(WindowInsetsCompat.Type.systemBars())
     }
 
     override fun onDestroy() {
@@ -139,8 +160,8 @@ fun PairingScreen(modifier: Modifier = Modifier) {
     val playerController = remember { StartupCoordinator.getPlayerController() }
     val pairingState by SessionManager.state.collectAsState()
 
-    // Screen-off takes priority over everything else.
-    if (uiState.isScreenOff) {
+    // Screen-off takes priority over everything else (except when unpaired, so the pairing screen is always accessible).
+    if (uiState.isScreenOff && pairingState !is DevicePairingState.Unpaired) {
         Box(
             modifier = modifier
                 .fillMaxSize()
@@ -155,28 +176,88 @@ fun PairingScreen(modifier: Modifier = Modifier) {
     // keeps playing while the session is being verified in the background.
     if (pairingState is DevicePairingState.Unpaired) {
         val code = (pairingState as DevicePairingState.Unpaired).pairingCode
+        val isLoading = code == "------"
+        
+        val backgroundGradient = Brush.verticalGradient(
+            colors = listOf(
+                Color(0xFF0F0C1B),
+                Color(0xFF05030A)
+            )
+        )
+
         Column(
             modifier = modifier
                 .fillMaxSize()
-                .padding(24.dp),
+                .background(backgroundGradient)
+                .padding(32.dp),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                text = code,
-                fontSize = 64.sp,
-                fontWeight = FontWeight.Bold,
+                text = "Ekranı Eşleştirin",
+                color = Color.White,
+                fontSize = 32.sp,
+                fontWeight = FontWeight.ExtraBold,
                 textAlign = TextAlign.Center,
-                lineHeight = 68.sp
+                modifier = Modifier.padding(bottom = 8.dp)
             )
+
+            Text(
+                text = if (isLoading) "Eşleştirme kodu oluşturuluyor..." else "Lütfen bu kodu kontrol panelindeki ekran ekleme alanına girin.",
+                color = Color(0xFF9E95B8),
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Medium,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(bottom = 48.dp)
+            )
+
+            Box(
+                modifier = Modifier
+                    .border(
+                        width = 1.5.dp,
+                        brush = Brush.radialGradient(
+                            colors = listOf(Color.White.copy(alpha = 0.25f), Color.White.copy(alpha = 0.05f))
+                        ),
+                        shape = RoundedCornerShape(24.dp)
+                    )
+                    .background(
+                        color = Color.White.copy(alpha = 0.03f),
+                        shape = RoundedCornerShape(24.dp)
+                    )
+                    .padding(horizontal = 32.dp, vertical = 16.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = code,
+                    color = if (isLoading) Color(0xFF5A526E) else Color(0xFF10B981),
+                    fontSize = 54.sp,
+                    fontWeight = FontWeight.Black,
+                    letterSpacing = 4.sp,
+                    textAlign = TextAlign.Center,
+                    lineHeight = 58.sp,
+                    maxLines = 1
+                )
+            }
+
+            Spacer(modifier = Modifier.height(48.dp))
 
             if (uiState.showConnectionInfo) {
                 Column(
-                    modifier = Modifier.padding(top = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text(text = StartupCoordinator.getBackendBaseUrl(), textAlign = TextAlign.Center)
+                    Text(
+                        text = "Sunucu Adresi:",
+                        color = Color(0xFF5A526E),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = StartupCoordinator.getBackendBaseUrl(),
+                        color = Color(0xFF9E95B8),
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center
+                    )
                 }
             }
         }
@@ -197,7 +278,9 @@ fun PairingScreen(modifier: Modifier = Modifier) {
     )
 
     BoxWithConstraints(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier
+            .fillMaxSize()
+            .background(Color.Black),
         contentAlignment = Alignment.Center
     ) {
         val isLandscape = uiState.orientation == 90 || uiState.orientation == 270
@@ -218,7 +301,31 @@ fun PairingScreen(modifier: Modifier = Modifier) {
                     .fillMaxSize()
                     .alpha(animatedAlpha)
             ) {
-                if (!mediaPath.isNullOrBlank() && uiState.currentMediaIsImage) {
+                if (!mediaPath.isNullOrBlank() && (mediaPath.startsWith("http://") || mediaPath.startsWith("https://"))) {
+                    AndroidView(
+                        modifier = Modifier.fillMaxSize(),
+                        factory = { androidContext ->
+                            android.webkit.WebView(androidContext).apply {
+                                layoutParams = android.view.ViewGroup.LayoutParams(
+                                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                                    android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                                )
+                                settings.javaScriptEnabled = true
+                                settings.domStorageEnabled = true
+                                settings.useWideViewPort = true
+                                settings.loadWithOverviewMode = false
+                                settings.mediaPlaybackRequiresUserGesture = false
+                                setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                                webViewClient = android.webkit.WebViewClient()
+                            }
+                        },
+                        update = { webView ->
+                            if (webView.url != mediaPath) {
+                                webView.loadUrl(mediaPath)
+                            }
+                        }
+                    )
+                } else if (!mediaPath.isNullOrBlank() && uiState.currentMediaIsImage) {
                     AndroidView(
                         modifier = Modifier.fillMaxSize(),
                         factory = { androidContext ->
@@ -233,9 +340,9 @@ fun PairingScreen(modifier: Modifier = Modifier) {
                         },
                         update = { imageView ->
                             imageView.scaleType = when (uiState.scaleMode) {
-                                "fill" -> ImageView.ScaleType.CENTER_CROP
-                                "stretch" -> ImageView.ScaleType.FIT_XY
-                                else -> ImageView.ScaleType.FIT_CENTER
+                                    "fill" -> ImageView.ScaleType.CENTER_CROP
+                                    "stretch" -> ImageView.ScaleType.FIT_XY
+                                    else -> ImageView.ScaleType.FIT_CENTER
                             }
                             imageView.setImageURI(Uri.fromFile(File(mediaPath)))
                         }
@@ -264,17 +371,32 @@ fun PairingScreen(modifier: Modifier = Modifier) {
                         }
                     )
                 } else {
+                    val backgroundGradient = Brush.verticalGradient(
+                        colors = listOf(
+                            Color(0xFF0F0C1B),
+                            Color(0xFF05030A)
+                        )
+                    )
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(24.dp),
+                            .background(backgroundGradient)
+                            .padding(32.dp),
                         verticalArrangement = Arrangement.Center,
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
-                            text = "Medya bekleniyor",
+                            text = "Medya Bekleniyor",
+                            color = Color.White,
                             style = MaterialTheme.typography.headlineMedium,
                             fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                        Text(
+                            text = "Bu ekran başarıyla eşleştirildi. Oynatılacak içerik bekleniyor...",
+                            color = Color(0xFF9E95B8),
+                            fontSize = 16.sp,
                             textAlign = TextAlign.Center
                         )
                     }
@@ -290,7 +412,11 @@ fun PairingScreen(modifier: Modifier = Modifier) {
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text(text = StartupCoordinator.getBackendBaseUrl(), textAlign = TextAlign.Center)
+                    Text(
+                        text = StartupCoordinator.getBackendBaseUrl(),
+                        color = Color.White,
+                        textAlign = TextAlign.Center
+                    )
                 }
             }
         }

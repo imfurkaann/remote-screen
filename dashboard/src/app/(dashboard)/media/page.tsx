@@ -12,6 +12,7 @@ type MediaItem = {
   checksum_sha256: string;
   media_url: string;
   created_at?: string;
+  folder?: string | null;
 };
 
 interface PlaylistRow {
@@ -564,19 +565,21 @@ export default function MediaPage() {
   const [renameFolderNewName, setRenameFolderNewName] = useState("");
   const [renameModalOpen, setRenameModalOpen] = useState(false);
 
+  const loadFolders = async () => {
+    try {
+      const payload = await fetchJson<{ folders?: string[] }>("/api/content/folders");
+      setFolders(payload.folders ?? []);
+    } catch (err) {
+      console.error("Failed to load folders", err);
+    }
+  };
+
   useEffect(() => {
     const savedMode = localStorage.getItem("media_view_mode");
     if (savedMode === "list" || savedMode === "grid") {
       setViewMode(savedMode);
     }
-    const savedFolders = localStorage.getItem("media_folders");
-    if (savedFolders) {
-      setFolders(JSON.parse(savedFolders));
-    }
-    const savedMap = localStorage.getItem("media_folder_map");
-    if (savedMap) {
-      setMediaFolderMap(JSON.parse(savedMap));
-    }
+    void loadFolders();
   }, []);
 
   const triggerToast = (message: string, type: "success" | "error") => {
@@ -584,45 +587,58 @@ export default function MediaPage() {
     setTimeout(() => setNotification(null), 4000);
   };
 
-  const handleCreateFolder = () => {
+  const handleCreateFolder = async () => {
     const name = newFolderName.trim();
     if (!name) return;
     if (folders.includes(name)) {
       triggerToast("Folder already exists", "error");
       return;
     }
-    const updated = [...folders, name];
-    setFolders(updated);
-    localStorage.setItem("media_folders", JSON.stringify(updated));
-    setNewFolderName("");
-    setNewFolderModalOpen(false);
-    triggerToast(`Folder "${name}" created`, "success");
+    try {
+      await fetchJson("/api/content/folders", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name })
+      });
+      setFolders((prev) => [...prev, name]);
+      setNewFolderName("");
+      setNewFolderModalOpen(false);
+      triggerToast(`Folder "${name}" created`, "success");
+    } catch (err) {
+      triggerToast(`Failed to create folder: ${(err as Error).message}`, "error");
+    }
   };
 
-  const handleDeleteFolder = (folderName: string) => {
+  const handleDeleteFolder = async (folderName: string) => {
     if (!window.confirm(`Are you sure you want to delete folder "${folderName}"? Content inside will be moved to root.`)) {
       return;
     }
-    const updatedFolders = folders.filter((f) => f !== folderName);
-    setFolders(updatedFolders);
-    localStorage.setItem("media_folders", JSON.stringify(updatedFolders));
+    try {
+      await fetchJson(`/api/content/folders/${encodeURIComponent(folderName)}`, {
+        method: "DELETE"
+      });
+      
+      setFolders((prev) => prev.filter((f) => f !== folderName));
+      setMediaFolderMap((prev) => {
+        const updated = { ...prev };
+        Object.keys(updated).forEach((key) => {
+          if (updated[key] === folderName) {
+            delete updated[key];
+          }
+        });
+        return updated;
+      });
 
-    const updatedMap = { ...mediaFolderMap };
-    Object.keys(updatedMap).forEach((key) => {
-      if (updatedMap[key] === folderName) {
-        delete updatedMap[key];
+      if (currentFolder === folderName) {
+        setCurrentFolder(null);
       }
-    });
-    setMediaFolderMap(updatedMap);
-    localStorage.setItem("media_folder_map", JSON.stringify(updatedMap));
-
-    if (currentFolder === folderName) {
-      setCurrentFolder(null);
+      triggerToast(`Folder "${folderName}" deleted`, "success");
+    } catch (err) {
+      triggerToast(`Failed to delete folder: ${(err as Error).message}`, "error");
     }
-    triggerToast(`Folder "${folderName}" deleted`, "success");
   };
 
-  const handleRenameFolder = () => {
+  const handleRenameFolder = async () => {
     const oldName = renameFolderTarget;
     const newName = renameFolderNewName.trim();
     if (!oldName || !newName) return;
@@ -635,41 +651,60 @@ export default function MediaPage() {
       return;
     }
 
-    const updatedFolders = folders.map((f) => (f === oldName ? newName : f));
-    setFolders(updatedFolders);
-    localStorage.setItem("media_folders", JSON.stringify(updatedFolders));
+    try {
+      await fetchJson(`/api/content/folders/${encodeURIComponent(oldName)}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: newName })
+      });
 
-    const updatedMap = { ...mediaFolderMap };
-    Object.keys(updatedMap).forEach((key) => {
-      if (updatedMap[key] === oldName) {
-        updatedMap[key] = newName;
+      setFolders((prev) => prev.map((f) => (f === oldName ? newName : f)));
+      setMediaFolderMap((prev) => {
+        const updated = { ...prev };
+        Object.keys(updated).forEach((key) => {
+          if (updated[key] === oldName) {
+            updated[key] = newName;
+          }
+        });
+        return updated;
+      });
+
+      if (currentFolder === oldName) {
+        setCurrentFolder(newName);
       }
-    });
-    setMediaFolderMap(updatedMap);
-    localStorage.setItem("media_folder_map", JSON.stringify(updatedMap));
-
-    if (currentFolder === oldName) {
-      setCurrentFolder(newName);
+      setRenameModalOpen(false);
+      setRenameFolderTarget(null);
+      setRenameFolderNewName("");
+      triggerToast("Folder renamed successfully", "success");
+    } catch (err) {
+      triggerToast(`Failed to rename folder: ${(err as Error).message}`, "error");
     }
-    setRenameModalOpen(false);
-    setRenameFolderTarget(null);
-    setRenameFolderNewName("");
-    triggerToast("Folder renamed successfully", "success");
   };
 
-  const handleMoveMedia = (folderName: string | null) => {
+  const handleMoveMedia = async (folderName: string | null) => {
     if (!moveMediaItem) return;
-    const updatedMap = { ...mediaFolderMap };
-    if (folderName) {
-      updatedMap[moveMediaItem.id] = folderName;
-    } else {
-      delete updatedMap[moveMediaItem.id];
+    try {
+      await fetchJson(`/api/content/media/${moveMediaItem.id}/folder`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ folder: folderName })
+      });
+
+      setMediaFolderMap((prev) => {
+        const updated = { ...prev };
+        if (folderName) {
+          updated[moveMediaItem.id] = folderName;
+        } else {
+          delete updated[moveMediaItem.id];
+        }
+        return updated;
+      });
+      setMoveModalOpen(false);
+      setMoveMediaItem(null);
+      triggerToast(`Moved to ${folderName || "Library root"}`, "success");
+    } catch (err) {
+      triggerToast(`Failed to move media: ${(err as Error).message}`, "error");
     }
-    setMediaFolderMap(updatedMap);
-    localStorage.setItem("media_folder_map", JSON.stringify(updatedMap));
-    setMoveModalOpen(false);
-    setMoveMediaItem(null);
-    triggerToast(`Moved to ${folderName || "Library root"}`, "success");
   };
 
   const loadMedia = async () => {
@@ -677,7 +712,16 @@ export default function MediaPage() {
     setErrorMsg(null);
     try {
       const payload = await fetchJson<{ media?: MediaItem[] }>("/api/content/media", { cache: "no-store" });
-      setMediaList(payload.media ?? []);
+      const list = payload.media ?? [];
+      setMediaList(list);
+      
+      const map: Record<string, string> = {};
+      list.forEach((item) => {
+        if (item.folder) {
+          map[item.id] = item.folder;
+        }
+      });
+      setMediaFolderMap(map);
     } catch (err) {
       setErrorMsg(`Failed to load media files: ${(err as Error).message}`);
     } finally {
@@ -724,9 +768,16 @@ export default function MediaPage() {
         
         // Auto-assign to current folder if one is active
         if (currentFolder) {
-          const updatedMap = { ...mediaFolderMap, [payload.media.id]: currentFolder };
-          setMediaFolderMap(updatedMap);
-          localStorage.setItem("media_folder_map", JSON.stringify(updatedMap));
+          try {
+            await fetchJson(`/api/content/media/${payload.media.id}/folder`, {
+              method: "PUT",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ folder: currentFolder })
+            });
+            setMediaFolderMap((prev) => ({ ...prev, [payload.media!.id]: currentFolder }));
+          } catch (err) {
+            console.error("Failed to auto-assign media to current folder on backend", err);
+          }
         }
 
         triggerToast(`Uploaded "${payload.media.filename}" successfully`, "success");

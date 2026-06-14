@@ -45,7 +45,7 @@ const DeviceSchema = new Schema<DeviceDoc>(
     },
     timezone: { type: String, default: "Europe/Istanbul" },
     screenGroup: { type: String, default: "Ungrouped" },
-    operatingHours: { type: String, default: "Use Space's hours" },
+    operatingHours: { type: String, default: "Always On" },
     scaleMode: { type: String, enum: ["fit", "fill", "stretch"], default: "fit" },
     notes: { type: String, default: "" },
     pairedOwnerUserId: { type: String, default: null },
@@ -61,6 +61,8 @@ const DeviceSchema = new Schema<DeviceDoc>(
   },
   { timestamps: true }
 );
+
+DeviceSchema.index({ tenantId: 1, pairedOwnerUserId: 1 });
 
 export const DeviceModel = model<DeviceDoc>("Device", DeviceSchema);
 

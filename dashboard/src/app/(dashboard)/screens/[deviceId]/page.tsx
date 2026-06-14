@@ -268,6 +268,11 @@ export default function ScreenDetailPage() {
     try {
       // 1. Fetch devices to find this specific device
       const deviceRes = await fetch("/api/content/devices", { cache: "no-store" });
+      if (deviceRes.status === 401 || deviceRes.status === 403) {
+        await fetch("/api/auth/logout", { method: "POST" });
+        window.location.href = `/login?redirect=/screens/${deviceId}`;
+        return;
+      }
       if (!deviceRes.ok) throw new Error("Failed to load device list");
       const deviceData = (await deviceRes.json()) as { devices?: Device[] };
       setAllDevices(deviceData.devices ?? []);

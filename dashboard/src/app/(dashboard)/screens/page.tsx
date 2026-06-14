@@ -145,6 +145,11 @@ export default function ScreensPage() {
         fetch("/api/content/devices", { cache: "no-store" }),
         fetch("/api/content/playlists", { cache: "no-store" })
       ]);
+      if (devicesRes.status === 401 || devicesRes.status === 403 || playlistsRes.status === 401 || playlistsRes.status === 403) {
+        await fetch("/api/auth/logout", { method: "POST" });
+        window.location.href = "/login?redirect=/screens";
+        return;
+      }
       if (!devicesRes.ok) throw new Error("Failed to load screens list.");
       const devPayload = (await devicesRes.json()) as { devices?: DeviceItem[] };
       setScreens(devPayload.devices ?? []);

@@ -30,13 +30,13 @@ describe("auth middleware claim checks", () => {
   const jwtSecret = "test-secret";
   const options = { issuer: "remote-screen", audience: "remote-screen-clients" };
 
-  it("rejects missing bearer token", () => {
+  it("rejects missing bearer token", async () => {
     const middleware = requireUserAuth(jwtSecret, options);
     const req = { headers: {} } as any;
     const res = createRes();
 
     let nextCalled = false;
-    middleware(req, res as any, () => {
+    await middleware(req, res as any, () => {
       nextCalled = true;
     });
 
@@ -44,7 +44,7 @@ describe("auth middleware claim checks", () => {
     assert.equal(res.statusCode, 401);
   });
 
-  it("accepts token with valid claims", () => {
+  it("accepts token with valid claims", async () => {
     const token = jwt.sign(
       {
         sub: "user-a",
@@ -65,7 +65,7 @@ describe("auth middleware claim checks", () => {
     const res = createRes();
 
     let nextCalled = false;
-    middleware(req, res as any, () => {
+    await middleware(req, res as any, () => {
       nextCalled = true;
     });
 
@@ -74,7 +74,7 @@ describe("auth middleware claim checks", () => {
     assert.equal(req.auth.tenantId, "tenant-a");
   });
 
-  it("rejects token with wrong audience", () => {
+  it("rejects token with wrong audience", async () => {
     const token = jwt.sign(
       {
         sub: "user-a",
@@ -95,7 +95,7 @@ describe("auth middleware claim checks", () => {
     const res = createRes();
 
     let nextCalled = false;
-    middleware(req, res as any, () => {
+    await middleware(req, res as any, () => {
       nextCalled = true;
     });
 

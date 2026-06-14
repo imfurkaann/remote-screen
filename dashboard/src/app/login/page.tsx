@@ -3,41 +3,6 @@
 import { useSearchParams } from "next/navigation";
 import { useState, useTransition, Suspense } from "react";
 
-const DEMO_USERS = [
-  {
-    role: "tenant_owner",
-    label: "Owner (Mülk Sahibi)",
-    desc: "Tüm sistem yetkileri",
-    email: "owner@remotescreen.dev",
-    password: "owner123",
-    color: "#f59e0b"
-  },
-  {
-    role: "tenant_admin",
-    label: "Admin (Yönetici)",
-    desc: "Operasyonel & Playlist yönetimi",
-    email: "admin@remotescreen.dev",
-    password: "admin123",
-    color: "#0ea5e9"
-  },
-  {
-    role: "operator",
-    label: "Operator (Operatör)",
-    desc: "Cihaz ve içerik yönetimi",
-    email: "operator@remotescreen.dev",
-    password: "operator123",
-    color: "#10b981"
-  },
-  {
-    role: "viewer",
-    label: "Viewer (İzleyici)",
-    desc: "Sadece ekranları izleme",
-    email: "viewer@remotescreen.dev",
-    password: "viewer123",
-    color: "#94a3b8"
-  }
-];
-
 function LoginForm() {
   const searchParams = useSearchParams();
   const redirectTo = searchParams.get("redirect") || "/screens";
@@ -52,15 +17,7 @@ function LoginForm() {
         : decodeURIComponent(urlError)
       : ""
   );
-  const [activeRole, setActiveRole] = useState("");
   const [isPending, startTransition] = useTransition();
-
-  const handleRoleSelect = (user: typeof DEMO_USERS[0]) => {
-    setEmail(user.email);
-    setPassword(user.password);
-    setActiveRole(user.role);
-    setError("");
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -122,7 +79,6 @@ function LoginForm() {
               value={email}
               onChange={(e) => {
                 setEmail(e.target.value);
-                setActiveRole("");
               }}
               required
               placeholder="ornek@remotescreen.dev"
@@ -139,7 +95,6 @@ function LoginForm() {
               value={password}
               onChange={(e) => {
                 setPassword(e.target.value);
-                setActiveRole("");
               }}
               required
               placeholder="••••••••"
@@ -163,24 +118,7 @@ function LoginForm() {
           </button>
         </form>
 
-        <div className="role-section-title">Hızlı Demo Girişleri</div>
 
-        <div className="role-badges">
-          {DEMO_USERS.map((user) => (
-            <div
-              key={user.role}
-              className={`role-badge ${activeRole === user.role ? "active" : ""}`}
-              onClick={() => handleRoleSelect(user)}
-              style={{
-                borderColor: activeRole === user.role ? user.color : undefined,
-                color: activeRole === user.role ? user.color : undefined
-              }}
-            >
-              <div style={{ fontWeight: 700, fontSize: "12px" }}>{user.label}</div>
-              <div style={{ fontSize: "10px", opacity: 0.8, marginTop: 2 }}>{user.desc}</div>
-            </div>
-          ))}
-        </div>
       </div>
     </div>
   );

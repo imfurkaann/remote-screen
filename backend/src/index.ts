@@ -37,6 +37,34 @@ async function bootstrap(): Promise<void> {
     console.log("[backend] PostgreSQL connection established");
   }
 
+  // Seed default user accounts in MongoDB if they do not exist
+  try {
+    const { UserModel } = await import("./models/user.model.js");
+    const { hashPassword } = await import("./lib/bcrypt.js");
+    const ownerExists = await UserModel.findOne({ email: "owner@remotescreen.dev" });
+    if (!ownerExists) {
+      const VALID_USERS = [
+        { email: "owner@remotescreen.dev", password: "owner123", role: "tenant_owner", displayName: "Tenant Owner" },
+        { email: "admin@remotescreen.dev", password: "admin123", role: "tenant_admin", displayName: "Tenant Admin" },
+        { email: "operator@remotescreen.dev", password: "operator123", role: "operator", displayName: "Operator" },
+        { email: "viewer@remotescreen.dev", password: "viewer123", role: "viewer", displayName: "Viewer" }
+      ];
+      for (const u of VALID_USERS) {
+        await UserModel.create({
+          tenantId: "tenant-demo",
+          email: u.email,
+          passwordHash: await hashPassword(u.password),
+          role: u.role as any,
+          displayName: u.displayName,
+          isActive: true
+        });
+      }
+      console.log("[backend] Seeded default user accounts successfully");
+    }
+  } catch (err) {
+    console.error("[backend] Failed to seed default user accounts", err);
+  }
+
   // Reset all devices status to offline in MongoDB and PostgreSQL on server boot
   try {
     const { DeviceModel } = await import("./models/device.model.js");
@@ -54,7 +82,12 @@ async function bootstrap(): Promise<void> {
 
   const app = buildApp(env);
   const server = createServer(app);
-  const io = createSocketServer(server, { corsOrigin: env.corsOrigin });
+  const io = createSocketServer(server, {
+    corsOrigin: env.corsOrigin,
+    jwtSecret: env.jwtAccessSecret,
+    jwtIssuer: env.jwtIssuer,
+    jwtAudience: env.jwtAudience
+  });
   setSocketServer(io);
 
   server.listen(env.port, () => {

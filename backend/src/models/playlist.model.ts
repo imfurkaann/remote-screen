@@ -16,6 +16,7 @@ export type PlaylistDoc = {
   version: number;
   items: PlaylistItemDoc[];
   publishedAt: Date | null;
+  ownerUserId: string | null;
 };
 
 const PlaylistItemSchema = new Schema<PlaylistItemDoc>(
@@ -37,11 +38,13 @@ const PlaylistSchema = new Schema<PlaylistDoc>(
     name: { type: String, required: true },
     version: { type: Number, required: true, default: 1 },
     items: { type: [PlaylistItemSchema], required: true, default: [] },
-    publishedAt: { type: Date, default: null }
+    publishedAt: { type: Date, default: null },
+    ownerUserId: { type: String, default: null, index: true }
   },
   { timestamps: true }
 );
 
 PlaylistSchema.index({ tenantId: 1, name: 1 });
+PlaylistSchema.index({ tenantId: 1, ownerUserId: 1 });
 
 export const PlaylistModel = model<PlaylistDoc>("Playlist", PlaylistSchema);

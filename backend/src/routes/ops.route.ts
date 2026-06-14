@@ -59,7 +59,7 @@ export function buildOpsRouter(deps: OpsRouteDeps): Router {
   const router = Router();
 
   router.use(requireUserAuth(deps.jwtSecret, { issuer: deps.jwtIssuer, audience: deps.jwtAudience }));
-  router.use(requireRoles(["tenant_owner", "tenant_admin", "operator"]));
+  router.use(requireRoles(["tenant_owner"]));
 
   router.get("/metrics", async (req, res) => {
     try {

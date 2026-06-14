@@ -18,6 +18,7 @@ import { buildHealthRouter } from "./routes/health.route.js";
 import { buildOpsRouter } from "./routes/ops.route.js";
 import { buildPairingRouter } from "./routes/pairing.route.js";
 import { buildTelemetryRouter } from "./routes/telemetry.route.js";
+import { buildAppsRouter } from "./routes/apps.route.js";
 
 export function buildApp(env: Env) {
   const app = express();
@@ -85,6 +86,14 @@ export function buildApp(env: Env) {
       jwtIssuer: env.jwtIssuer,
       jwtAudience: env.jwtAudience,
       bootstrapKey: env.deviceBootstrapKey
+    })
+  );
+  app.use(
+    "/api/v1/apps",
+    buildAppsRouter({
+      jwtSecret: env.jwtAccessSecret,
+      jwtIssuer: env.jwtIssuer,
+      jwtAudience: env.jwtAudience
     })
   );
 

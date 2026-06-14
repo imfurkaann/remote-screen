@@ -36,7 +36,7 @@ const tenantId = "tenant-test";
 const deviceOnlineId = new mongoose.Types.ObjectId().toHexString();
 const deviceOfflineId = new mongoose.Types.ObjectId().toHexString();
 
-function createAuthToken(tenantId: string, role: string = "tenant_admin"): string {
+function createAuthToken(tenantId: string, role: string = "tenant_owner"): string {
   return jwt.sign(
     {
       sub: "test-user",
@@ -818,7 +818,7 @@ describe("ops route: authorization", () => {
     assert.equal(response.status, 403);
   });
 
-  it("accepts requests with operator role", async () => {
+  it("rejects requests with operator role", async () => {
     const baseUrl = await startServer();
     const token = createAuthToken(tenantId, "operator");
 
@@ -826,6 +826,6 @@ describe("ops route: authorization", () => {
       headers: { authorization: `Bearer ${token}` }
     });
 
-    assert.equal(response.status, 200);
+    assert.equal(response.status, 403);
   });
 });

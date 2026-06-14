@@ -14,9 +14,10 @@ const NAV_LINKS: Array<{ href: string; label: string; isPlaceholder?: boolean }>
   { href: "/links", label: "Links", isPlaceholder: true },
   { href: "/dashboards", label: "Dashboards", isPlaceholder: true },
   { href: "/canvas", label: "Templates", isPlaceholder: true },
-  { href: "/apps", label: "Apps", isPlaceholder: true },
+  { href: "/apps", label: "Apps" },
   { href: "/quick-post", label: "Quick Post", isPlaceholder: true },
-  { href: "/operations", label: "Operations" }
+  { href: "/operations", label: "Operations" },
+  { href: "/settings/users", label: "Users" }
 ];
 
 function decodeJwt(token: string) {
@@ -96,6 +97,12 @@ export default async function DashboardLayout({ children }: DashboardLayoutProps
   const filteredLinks = NAV_LINKS.filter((link) => {
     if (role === "viewer") {
       return link.href === "/screens";
+    }
+    if (link.href === "/settings/users") {
+      return role === "tenant_owner" || role === "tenant_admin";
+    }
+    if (link.href === "/operations") {
+      return role === "tenant_owner";
     }
     return true;
   });

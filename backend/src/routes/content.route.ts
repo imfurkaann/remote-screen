@@ -13,6 +13,7 @@ import { requireRoles, requireUserAuth } from "../middlewares/auth.js";
 import { DeviceModel } from "../models/device.model.js";
 import { MediaModel } from "../models/media.model.js";
 import { PlaylistModel } from "../models/playlist.model.js";
+import { MediaFolderModel } from "../models/media-folder.model.js";
 import { contentRepository } from "../repositories/content.repository.js";
 import { emitSyncContent, type SyncContentPayload } from "../sockets/registry.js";
 import { queueCommand } from "../services/command.service.js";
@@ -86,13 +87,36 @@ function normalizePlaylistItems(input: unknown): PlaylistInputItem[] {
     .filter((item) => item.media_id && Number.isFinite(item.duration_ms) && Number.isFinite(item.position));
 }
 
-async function mapPlaylistItems(tenantId: string, items: PlaylistInputItem[]) {
+type AuthCtx = { userId: string; tenantId: string; role: string };
+
+function buildMediaFilter(auth: AuthCtx, extra: Record<string, any> = {}) {
+  const base = auth.role === "tenant_owner"
+    ? { tenantId: auth.tenantId }
+    : { tenantId: auth.tenantId, ownerUserId: auth.userId };
+  return { ...base, ...extra };
+}
+
+function buildDeviceFilter(auth: AuthCtx, extra: Record<string, any> = {}) {
+  const base = auth.role === "tenant_owner"
+    ? { tenantId: auth.tenantId }
+    : { tenantId: auth.tenantId, pairedOwnerUserId: auth.userId };
+  return { ...base, ...extra };
+}
+
+async function assertDeviceOwnership(deviceId: string, auth: AuthCtx): Promise<boolean> {
+  if (auth.role === "tenant_owner") return true;
+  const d = await DeviceModel.findOne({ _id: deviceId, tenantId: auth.tenantId, pairedOwnerUserId: auth.userId });
+  return d !== null;
+}
+
+async function mapPlaylistItems(auth: AuthCtx, items: PlaylistInputItem[]) {
   if (items.length === 0) {
     return [];
   }
 
   const mediaIds = Array.from(new Set(items.map((item) => item.media_id)));
-  const mediaDocs = await MediaModel.find({ _id: { $in: mediaIds }, tenantId, status: "ready" });
+  const query = buildMediaFilter(auth, { _id: { $in: mediaIds }, status: "ready" });
+  const mediaDocs = await MediaModel.find(query);
   const byId = new Map(mediaDocs.map((doc) => [String(doc._id), doc]));
 
   return items
@@ -130,7 +154,7 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
       const search = req.query.search ? String(req.query.search).trim() : undefined;
       const status = req.query.status ? String(req.query.status).trim() : undefined;
 
-      const query: Record<string, any> = { tenantId };
+      const query: Record<string, any> = buildDeviceFilter(req.auth!);
 
       if (status) {
         query.status = status;
@@ -216,7 +240,7 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
         return;
       }
 
-      const oldDevice = await DeviceModel.findOne({ _id: deviceId, tenantId });
+      const oldDevice = await DeviceModel.findOne(buildDeviceFilter(req.auth!, { _id: deviceId }));
       if (!oldDevice) {
         res.status(404).json({ code: "DEVICE_NOT_FOUND", message: "Device not found" });
         return;
@@ -237,7 +261,7 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
       if (notes !== undefined) updateFields.notes = notes;
 
       const updatedDevice = await DeviceModel.findOneAndUpdate(
-        { _id: deviceId, tenantId },
+        buildDeviceFilter(req.auth!, { _id: deviceId }),
         { $set: updateFields },
         { new: true }
       );
@@ -330,7 +354,7 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
         res.status(400).json({ code: "VALIDATION_ERROR", message: "deviceId is required" });
         return;
       }
-      const deleted = await DeviceModel.findOneAndDelete({ _id: deviceId, tenantId });
+      const deleted = await DeviceModel.findOneAndDelete(buildDeviceFilter(req.auth!, { _id: deviceId }));
       if (!deleted) {
         res.status(404).json({ code: "DEVICE_NOT_FOUND", message: "Device not found" });
         return;
@@ -350,7 +374,33 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
         return;
       }
 
-      const mediaList = await MediaModel.find({ tenantId, status: "ready" })
+      const ownerUserIdFilter = req.auth?.role === "tenant_owner" ? null : req.auth?.userId;
+      if (shouldReadFromPostgres(deps.readFromPostgresPercentage)) {
+        const shadowRows = await contentRepository.listMedia(tenantId, 100, ownerUserIdFilter);
+        if (shadowRows.length > 0) {
+          logger.debug('Served media list from PostgreSQL', {
+            operation: 'listMedia',
+            tenantId,
+            count: shadowRows.length
+          });
+
+          res.json({
+            media: shadowRows.map((m) => ({
+              id: m.external_id,
+              filename: m.filename,
+              mime_type: m.mime_type,
+              size_bytes: m.size_bytes,
+              checksum_sha256: m.checksum_sha256,
+              media_url: m.public_url,
+              created_at: m.created_at
+            }))
+          });
+          return;
+        }
+      }
+
+      const query = buildMediaFilter(req.auth!, { status: "ready" });
+      const mediaList = await MediaModel.find(query)
         .sort({ createdAt: -1 })
         .lean();
 
@@ -408,6 +458,7 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
 
       const media = await MediaModel.create({
         tenantId,
+        ownerUserId: req.auth!.userId,
         filename: req.file.originalname,
         mimeType: req.file.mimetype || "application/octet-stream",
         sizeBytes: req.file.size,
@@ -427,7 +478,8 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
           checksumSha256: media.checksumSha256,
           storagePath: media.storagePath,
           publicUrl: media.publicUrl,
-          status: media.status
+          status: media.status,
+          ownerUserId: req.auth!.userId
         });
       } catch (error) {
         logger.error('Failed to upsert media to PostgreSQL', error instanceof Error ? error : new Error(String(error)), {
@@ -471,17 +523,16 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
         return;
       }
 
-      const media = await MediaModel.findOne({ _id: mediaId, tenantId });
+      const media = await MediaModel.findOne(buildMediaFilter(req.auth!, { _id: mediaId }));
       if (!media) {
         res.status(404).json({ code: "MEDIA_NOT_FOUND", message: "Media not found" });
         return;
       }
 
       // 1. Find all playlists using this media item
-      const playlistsUsing = await PlaylistModel.find({
-        tenantId,
+      const playlistsUsing = await PlaylistModel.find(buildMediaFilter(req.auth!, {
         "items.mediaId": mediaId
-      });
+      }));
 
       // Check if the media is used by any regular/custom playlist (not starting with "Single Media:")
       const regularPlaylist = playlistsUsing.find((p) => !p.name.startsWith("Single Media:"));
@@ -501,10 +552,11 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
           await PlaylistModel.deleteOne({ _id: playlist._id });
           
           // Clear device currentPlaylistId and notify screens playing it
-          const devices = await DeviceModel.find({ tenantId, currentPlaylistId: String(playlist._id) });
+          const deviceQuery = buildDeviceFilter(req.auth!, { currentPlaylistId: String(playlist._id) });
+          const devices = await DeviceModel.find(deviceQuery);
           if (devices.length > 0) {
             await DeviceModel.updateMany(
-              { tenantId, currentPlaylistId: String(playlist._id) },
+              deviceQuery,
               { $set: { currentPlaylistId: null } }
             );
 
@@ -568,8 +620,9 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
         return;
       }
 
+      const ownerUserIdFilter = req.auth?.role === "tenant_owner" ? null : req.auth?.userId;
       if (shouldReadFromPostgres(deps.readFromPostgresPercentage)) {
-        const shadowRows = await contentRepository.listPlaylists(tenantId, 100);
+        const shadowRows = await contentRepository.listPlaylists(tenantId, 100, ownerUserIdFilter);
         if (shadowRows.length > 0) {
           logger.debug('Served playlist list from PostgreSQL', {
             operation: 'listPlaylists',
@@ -590,7 +643,8 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
         }
       }
 
-      const playlists = await PlaylistModel.find({ tenantId }).sort({ updatedAt: -1 }).lean();
+      const query = buildMediaFilter(req.auth!);
+      const playlists = await PlaylistModel.find(query).sort({ updatedAt: -1 }).lean();
       metrics.recordShadowRead('mongo', 0);
 
       res.json({
@@ -617,6 +671,7 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
         operation: 'listPlaylists',
         tenantId: req.auth?.tenantId
       });
+      res.status(500).json({ code: "PLAYLIST_LIST_FAILED", message: "Failed to list playlists" });
     }
   });
 
@@ -632,6 +687,11 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
       if (shouldReadFromPostgres(deps.readFromPostgresPercentage)) {
         const row = await contentRepository.getPlaylist(tenantId, playlistId);
         if (row) {
+          if (req.auth?.role !== "tenant_owner" && row.owner_user_id !== req.auth?.userId) {
+            res.status(404).json({ code: "PLAYLIST_NOT_FOUND", message: "Playlist not found" });
+            return;
+          }
+
           logger.debug('Served single playlist from PostgreSQL', {
             operation: 'getPlaylist',
             tenantId,
@@ -659,7 +719,8 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
         }
       }
 
-      const playlist = await PlaylistModel.findOne({ _id: playlistId, tenantId }).lean();
+      const query = buildMediaFilter(req.auth!, { _id: playlistId });
+      const playlist = await PlaylistModel.findOne(query).lean();
       if (!playlist) {
         res.status(404).json({ code: "PLAYLIST_NOT_FOUND", message: "Playlist not found" });
         return;
@@ -713,7 +774,7 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
         return;
       }
 
-      const items = await mapPlaylistItems(tenantId, itemsInput);
+      const items = await mapPlaylistItems(req.auth!, itemsInput);
       if (items.length !== itemsInput.length) {
         res.status(400).json({ code: "MEDIA_NOT_FOUND", message: "One or more media ids are invalid" });
         return;
@@ -721,6 +782,7 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
 
       const playlist = await PlaylistModel.create({
         tenantId,
+        ownerUserId: req.auth!.userId,
         name,
         version: 1,
         items,
@@ -734,7 +796,8 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
           name: playlist.name,
           version: playlist.version,
           itemsJson: playlist.items,
-          publishedAt: playlist.publishedAt
+          publishedAt: playlist.publishedAt,
+          ownerUserId: req.auth!.userId
         });
       } catch (error) {
         logger.error('Failed to upsert playlist to PostgreSQL', error instanceof Error ? error : new Error(String(error)), {
@@ -777,14 +840,14 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
         return;
       }
 
-      const items = await mapPlaylistItems(tenantId, itemsInput);
+      const items = await mapPlaylistItems(req.auth!, itemsInput);
       if (items.length !== itemsInput.length) {
         res.status(400).json({ code: "MEDIA_NOT_FOUND", message: "One or more media ids are invalid" });
         return;
       }
 
       const updated = await PlaylistModel.findOneAndUpdate(
-        { _id: playlistId, tenantId },
+        buildMediaFilter(req.auth!, { _id: playlistId }),
         { $set: { name, items }, $inc: { version: 1 } },
         { new: true }
       );
@@ -801,7 +864,8 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
           name: updated.name,
           version: updated.version,
           itemsJson: updated.items,
-          publishedAt: updated.publishedAt
+          publishedAt: updated.publishedAt,
+          ownerUserId: updated.ownerUserId
         });
       } catch (error) {
         logger.error('Failed to upsert playlist to PostgreSQL', error instanceof Error ? error : new Error(String(error)), {
@@ -837,7 +901,7 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
       }
 
       const playlist = await PlaylistModel.findOneAndUpdate(
-        { _id: playlistId, tenantId },
+        buildMediaFilter(req.auth!, { _id: playlistId }),
         { $set: { publishedAt: new Date() } },
         { new: true }
       );
@@ -847,13 +911,12 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
         return;
       }
 
-      const devices = await DeviceModel.find({
-        tenantId,
+      const devices = await DeviceModel.find(buildDeviceFilter(req.auth!, {
         $or: [{ _id: { $in: deviceIds } }, { hardwareId: { $in: deviceIds } }]
-      });
+      }));
 
       await DeviceModel.updateMany(
-        { _id: { $in: devices.map((device) => device._id) }, tenantId },
+        buildDeviceFilter(req.auth!, { _id: { $in: devices.map((device) => device._id) } }),
         { $set: { currentPlaylistId: String(playlist._id) } }
       );
 
@@ -864,7 +927,8 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
           name: playlist.name,
           version: playlist.version,
           itemsJson: playlist.items,
-          publishedAt: playlist.publishedAt
+          publishedAt: playlist.publishedAt,
+          ownerUserId: playlist.ownerUserId
         });
 
         await contentRepository.setDevicesCurrentPlaylist(
@@ -926,17 +990,18 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
       }
 
       // 1. Delete playlist from MongoDB
-      const deletedPlaylist = await PlaylistModel.findOneAndDelete({ _id: playlistId, tenantId });
+      const deletedPlaylist = await PlaylistModel.findOneAndDelete(buildMediaFilter(req.auth!, { _id: playlistId }));
       if (!deletedPlaylist) {
         res.status(404).json({ code: "PLAYLIST_NOT_FOUND", message: "Playlist not found" });
         return;
       }
 
       // 2. Find and update devices that have this playlist assigned
-      const devices = await DeviceModel.find({ tenantId, currentPlaylistId: playlistId });
+      const deviceQuery = buildDeviceFilter(req.auth!, { currentPlaylistId: playlistId });
+      const devices = await DeviceModel.find(deviceQuery);
       if (devices.length > 0) {
         await DeviceModel.updateMany(
-          { tenantId, currentPlaylistId: playlistId },
+          deviceQuery,
           { $set: { currentPlaylistId: null } }
         );
 
@@ -976,6 +1041,246 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
       res.status(204).send();
     } catch {
       res.status(500).json({ code: "PLAYLIST_DELETE_FAILED", message: "Failed to delete playlist" });
+    }
+  });
+
+  router.get("/folders", async (req, res) => {
+    try {
+      const tenantId = req.auth?.tenantId;
+      const ownerUserId = req.auth?.userId;
+      if (!req.auth || !tenantId || !ownerUserId) {
+        res.status(401).json({ code: "UNAUTHORIZED", message: "Missing auth context" });
+        return;
+      }
+      
+      const filter = req.auth.role === "tenant_owner"
+        ? { tenantId }
+        : { tenantId, ownerUserId };
+        
+      const folderDocs = await MediaFolderModel.find(filter).sort({ name: 1 }).lean();
+      res.json({
+        folders: folderDocs.map((f) => f.name)
+      });
+    } catch {
+      res.status(500).json({ code: "FOLDER_LIST_FAILED", message: "Failed to list folders" });
+    }
+  });
+
+  router.post("/folders", async (req, res) => {
+    try {
+      const tenantId = req.auth?.tenantId;
+      const ownerUserId = req.auth?.userId;
+      const name = String(req.body?.name ?? "").trim();
+      
+      if (!req.auth || !tenantId || !ownerUserId || !name) {
+        res.status(400).json({ code: "VALIDATION_ERROR", message: "name is required" });
+        return;
+      }
+      
+      const filter = req.auth.role === "tenant_owner"
+        ? { tenantId, name }
+        : { tenantId, ownerUserId, name };
+        
+      const existing = await MediaFolderModel.findOne(filter);
+      if (existing) {
+        res.status(400).json({ code: "FOLDER_EXISTS", message: "Folder already exists" });
+        return;
+      }
+      
+      const folder = await MediaFolderModel.create({
+        tenantId,
+        ownerUserId,
+        name
+      });
+      
+      res.status(201).json({ success: true, folder: folder.name });
+    } catch {
+      res.status(500).json({ code: "FOLDER_CREATE_FAILED", message: "Failed to create folder" });
+    }
+  });
+
+  router.put("/folders/:folderName", async (req, res) => {
+    try {
+      const tenantId = req.auth?.tenantId;
+      const ownerUserId = req.auth?.userId;
+      const oldName = req.params.folderName;
+      const newName = String(req.body?.name ?? "").trim();
+      
+      if (!req.auth || !tenantId || !ownerUserId || !oldName || !newName) {
+        res.status(400).json({ code: "VALIDATION_ERROR", message: "new folder name is required" });
+        return;
+      }
+      
+      const filter = req.auth.role === "tenant_owner"
+        ? { tenantId, name: oldName }
+        : { tenantId, ownerUserId, name: oldName };
+        
+      const folder = await MediaFolderModel.findOne(filter);
+      if (!folder) {
+        res.status(404).json({ code: "FOLDER_NOT_FOUND", message: "Folder not found" });
+        return;
+      }
+      
+      // Check if new name exists
+      const targetFilter = req.auth.role === "tenant_owner"
+        ? { tenantId, name: newName }
+        : { tenantId, ownerUserId, name: newName };
+      const exists = await MediaFolderModel.findOne(targetFilter);
+      if (exists) {
+        res.status(400).json({ code: "FOLDER_EXISTS", message: "A folder with the new name already exists" });
+        return;
+      }
+      
+      folder.name = newName;
+      await folder.save();
+      
+      // Update all media in this folder
+      const mediaFilter = req.auth.role === "tenant_owner"
+        ? { tenantId, folder: oldName }
+        : { tenantId, ownerUserId, folder: oldName };
+        
+      const mediaList = await MediaModel.find(mediaFilter);
+      for (const m of mediaList) {
+        m.folder = newName;
+        await m.save();
+        
+        // Shadow write to PG
+        try {
+          await contentRepository.upsertMedia({
+            tenantId: m.tenantId,
+            externalId: String(m._id),
+            filename: m.filename,
+            mimeType: m.mimeType,
+            sizeBytes: m.sizeBytes,
+            checksumSha256: m.checksumSha256,
+            storagePath: m.storagePath,
+            publicUrl: m.publicUrl,
+            status: m.status,
+            ownerUserId: m.ownerUserId,
+            folder: newName
+          });
+        } catch (err) {
+          logger.error("Failed to sync media folder update to postgres", err instanceof Error ? err : new Error(String(err)));
+        }
+      }
+      
+      res.json({ success: true, folder: newName });
+    } catch {
+      res.status(500).json({ code: "FOLDER_RENAME_FAILED", message: "Failed to rename folder" });
+    }
+  });
+
+  router.delete("/folders/:folderName", async (req, res) => {
+    try {
+      const tenantId = req.auth?.tenantId;
+      const ownerUserId = req.auth?.userId;
+      const name = req.params.folderName;
+      
+      if (!req.auth || !tenantId || !ownerUserId || !name) {
+        res.status(400).json({ code: "VALIDATION_ERROR", message: "folder name is required" });
+        return;
+      }
+      
+      const filter = req.auth.role === "tenant_owner"
+        ? { tenantId, name }
+        : { tenantId, ownerUserId, name };
+        
+      const deleted = await MediaFolderModel.findOneAndDelete(filter);
+      if (!deleted) {
+        res.status(404).json({ code: "FOLDER_NOT_FOUND", message: "Folder not found" });
+        return;
+      }
+      
+      // Update all media inside to null
+      const mediaFilter = req.auth.role === "tenant_owner"
+        ? { tenantId, folder: name }
+        : { tenantId, ownerUserId, folder: name };
+        
+      const mediaList = await MediaModel.find(mediaFilter);
+      for (const m of mediaList) {
+        m.folder = null;
+        await m.save();
+        
+        // Shadow write to PG
+        try {
+          await contentRepository.upsertMedia({
+            tenantId: m.tenantId,
+            externalId: String(m._id),
+            filename: m.filename,
+            mimeType: m.mimeType,
+            sizeBytes: m.sizeBytes,
+            checksumSha256: m.checksumSha256,
+            storagePath: m.storagePath,
+            publicUrl: m.publicUrl,
+            status: m.status,
+            ownerUserId: m.ownerUserId,
+            folder: null
+          });
+        } catch (err) {
+          logger.error("Failed to sync media folder clear to postgres", err instanceof Error ? err : new Error(String(err)));
+        }
+      }
+      
+      res.status(204).send();
+    } catch {
+      res.status(500).json({ code: "FOLDER_DELETE_FAILED", message: "Failed to delete folder" });
+    }
+  });
+
+  router.put("/media/:mediaId/folder", async (req, res) => {
+    try {
+      const tenantId = req.auth?.tenantId;
+      const mediaId = req.params.mediaId;
+      const folderName = req.body?.folder === undefined ? undefined : (req.body.folder === null ? null : String(req.body.folder).trim());
+      
+      if (!tenantId || !mediaId || folderName === undefined) {
+        res.status(400).json({ code: "VALIDATION_ERROR", message: "mediaId and folder are required" });
+        return;
+      }
+      
+      const media = await MediaModel.findOne(buildMediaFilter(req.auth!, { _id: mediaId }));
+      if (!media) {
+        res.status(404).json({ code: "MEDIA_NOT_FOUND", message: "Media not found" });
+        return;
+      }
+      
+      if (folderName !== null) {
+        // Verify folder exists
+        const folderFilter = req.auth!.role === "tenant_owner"
+          ? { tenantId, name: folderName }
+          : { tenantId, ownerUserId: req.auth!.userId, name: folderName };
+        const folderExists = await MediaFolderModel.findOne(folderFilter);
+        if (!folderExists) {
+          res.status(404).json({ code: "FOLDER_NOT_FOUND", message: "Target folder not found" });
+          return;
+        }
+      }
+      
+      media.folder = folderName;
+      await media.save();
+      
+      // Shadow write to PG
+      try {
+        await contentRepository.upsertMedia({
+          tenantId: media.tenantId,
+          externalId: String(media._id),
+          filename: media.filename,
+          mimeType: media.mimeType,
+          sizeBytes: media.sizeBytes,
+          checksumSha256: media.checksumSha256,
+          storagePath: media.storagePath,
+          publicUrl: media.publicUrl,
+          status: media.status,
+          ownerUserId: media.ownerUserId,
+          folder: folderName
+        });
+      } catch (err) {
+        logger.error("Failed to sync media folder move to postgres", err instanceof Error ? err : new Error(String(err)));
+      }
+      
+      res.json({ success: true, media_id: String(media._id), folder: folderName });
+    } catch {
+      res.status(500).json({ code: "MEDIA_MOVE_FAILED", message: "Failed to move media to folder" });
     }
   });
 

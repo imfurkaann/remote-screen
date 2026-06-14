@@ -194,9 +194,10 @@ class PlaybackCoordinator(
 
             while (coroutineContext.isActive) {
                 val item = playlist[currentIndex]
+                val isWeb = item.filePath.startsWith("http://") || item.filePath.startsWith("https://")
                 val file = File(item.filePath)
 
-                if (!file.exists() || !file.isFile) {
+                if (!isWeb && (!file.exists() || !file.isFile)) {
                     consecutiveMissCount++
                     Log.w(tag, "Media file missing: ${item.filePath} (miss=$consecutiveMissCount/${playlist.size})")
 
@@ -236,20 +237,20 @@ class PlaybackCoordinator(
                 // here; for videos we overwrite it with real position below).
                 playbackStateStore.save(currentIndex, 0L)
 
-                val isImg = isImagePath(item.filePath)
+                val isImg = !isWeb && isImagePath(item.filePath)
 
                 // --- Improvement 1: crossfade transition ---
                 withCrossfade {
                     withContext(Dispatchers.Main) {
                         PlayerUiStateStore.setCurrentMedia(item.filePath, isImg)
                     }
-                    if (isImg) {
+                    if (isImg || isWeb) {
                         playerController.pause()
                     }
                 }
 
-                if (isImg) {
-                    // Image: display for the configured duration (min 1 s).
+                if (isImg || isWeb) {
+                    // Image or Web App: display for the configured duration (min 1 s).
                     val displayMs = item.durationMs.coerceAtLeast(1_000L)
 
                     // Restore mid-image position if returning to this item after a restart.

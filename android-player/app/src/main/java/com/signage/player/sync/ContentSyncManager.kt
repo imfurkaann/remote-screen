@@ -146,50 +146,60 @@ class ContentSyncManager(
         quarantineDir.mkdirs()
 
         val rows = payload.items.map { item ->
-            val targetFile = File(stagingDir, "${item.position}-${item.filename}")
-            var downloaded = false
+            if (item.mimeType == "text/html") {
+                PlaylistEntity(
+                    mediaId = item.mediaId,
+                    filePath = resolveMediaUrl(item.mediaUrl),
+                    position = item.position,
+                    checksumSha256 = item.checksumSha256,
+                    durationMs = item.durationMs
+                )
+            } else {
+                val targetFile = File(stagingDir, "${item.position}-${item.filename}")
+                var downloaded = false
 
-            try {
-                downloadWithRetry(resolveMediaUrl(item.mediaUrl), targetFile)
-                downloaded = true
-            } catch (error: Exception) {
-                Log.e(tag, "Download failed after $MAX_DOWNLOAD_ATTEMPTS attempts for ${item.filename}: ${error.message}")
-                onError(
-                    "sync_download",
-                    error.message ?: "Download failed",
-                    mapOf("filename" to item.filename, "media_url" to item.mediaUrl)
+                try {
+                    downloadWithRetry(resolveMediaUrl(item.mediaUrl), targetFile)
+                    downloaded = true
+                } catch (error: Exception) {
+                    Log.e(tag, "Download failed after $MAX_DOWNLOAD_ATTEMPTS attempts for ${item.filename}: ${error.message}")
+                    onError(
+                        "sync_download",
+                        error.message ?: "Download failed",
+                        mapOf("filename" to item.filename, "media_url" to item.mediaUrl)
+                    )
+                }
+
+                if (!targetFile.exists() || !verifyChecksum(targetFile, item.checksumSha256)) {
+                    if (targetFile.exists()) {
+                        quarantineCorruptFile(targetFile, quarantineDir)
+                    }
+
+                    val repaired = tryRepairFromActive(activeDir, item, targetFile)
+                    if (!repaired) {
+                        val reason = if (downloaded) "Checksum mismatch" else "Download failed"
+                        Log.e(tag, "$reason for ${item.filename}")
+                        onError(
+                            "sync_integrity",
+                            reason,
+                            mapOf(
+                                "filename" to item.filename,
+                                "media_id" to item.mediaId,
+                                "playlist_version" to payload.playlistVersion
+                            )
+                        )
+                        throw IllegalStateException("$reason for ${item.filename} — repair unavailable")
+                    }
+                }
+
+                PlaylistEntity(
+                    mediaId = item.mediaId,
+                    filePath = File(activeDir, targetFile.name).absolutePath,
+                    position = item.position,
+                    checksumSha256 = item.checksumSha256,
+                    durationMs = item.durationMs
                 )
             }
-
-            if (!targetFile.exists() || !verifyChecksum(targetFile, item.checksumSha256)) {
-                if (targetFile.exists()) {
-                    quarantineCorruptFile(targetFile, quarantineDir)
-                }
-
-                val repaired = tryRepairFromActive(activeDir, item, targetFile)
-                if (!repaired) {
-                    val reason = if (downloaded) "Checksum mismatch" else "Download failed"
-                    Log.e(tag, "$reason for ${item.filename}")
-                    onError(
-                        "sync_integrity",
-                        reason,
-                        mapOf(
-                            "filename" to item.filename,
-                            "media_id" to item.mediaId,
-                            "playlist_version" to payload.playlistVersion
-                        )
-                    )
-                    throw IllegalStateException("$reason for ${item.filename} — repair unavailable")
-                }
-            }
-
-            PlaylistEntity(
-                mediaId = item.mediaId,
-                filePath = File(activeDir, targetFile.name).absolutePath,
-                position = item.position,
-                checksumSha256 = item.checksumSha256,
-                durationMs = item.durationMs
-            )
         }
 
         // Atomic activation: active → backup, staging → active.

@@ -24,7 +24,7 @@ function parseBearerToken(authorization?: string): string | null {
 }
 
 export function requireUserAuth(jwtSecret: string, options: JwtValidationOptions) {
-  return (req: Request, res: Response, next: NextFunction): void => {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const token = parseBearerToken(req.headers.authorization);
       if (!token) {
@@ -40,6 +40,27 @@ export function requireUserAuth(jwtSecret: string, options: JwtValidationOptions
       if (!decoded.sub || !decoded.tenant_id || !decoded.role) {
         res.status(401).json({ code: "UNAUTHORIZED", message: "Invalid token claims" });
         return;
+      }
+
+      const { Types } = await import("mongoose");
+      const { UserModel } = await import("../models/user.model.js");
+
+      if (Types.ObjectId.isValid(decoded.sub)) {
+        const user = await UserModel.findById(decoded.sub).lean();
+        if (!user) {
+          res.status(401).json({ code: "UNAUTHORIZED", message: "User account not found" });
+          return;
+        }
+        if (!user.isActive) {
+          res.status(401).json({ code: "DEACTIVATED", message: "User account has been deactivated" });
+          return;
+        }
+      } else {
+        // Enforce database user lookup in production env. In dev/test, allow legacy/mock string IDs.
+        if (process.env.NODE_ENV === "production") {
+          res.status(401).json({ code: "UNAUTHORIZED", message: "Invalid user identifier format" });
+          return;
+        }
       }
 
       req.auth = {

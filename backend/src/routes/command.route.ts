@@ -6,6 +6,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 
 import { requireRoles, requireUserAuth } from "../middlewares/auth.js";
 import { COMMAND_TYPES, CommandModel, type CommandType } from "../models/command.model.js";
+import { DeviceModel } from "../models/device.model.js";
 import { Logger } from "../lib/logger.js";
 import { isPostgresConnected } from "../lib/postgres.js";
 import { postgresCircuitBreaker } from "../lib/circuit-breaker.js";
@@ -119,9 +120,15 @@ export function buildCommandRouter(deps: CommandRouteDeps): Router {
         return;
       }
 
-      const isAllowed = auth.role === "device"
-        ? auth.userId === deviceId
-        : ["tenant_owner", "tenant_admin", "operator"].includes(auth.role);
+      let isAllowed = false;
+      if (auth.role === "device") {
+        isAllowed = auth.userId === deviceId;
+      } else if (auth.role === "tenant_owner") {
+        isAllowed = true;
+      } else if (["tenant_admin", "operator"].includes(auth.role)) {
+        const d = await DeviceModel.findOne({ _id: deviceId, tenantId, pairedOwnerUserId: auth.userId });
+        isAllowed = d !== null;
+      }
 
       if (!isAllowed) {
         res.status(403).json({ code: "FORBIDDEN", message: "Insufficient permissions to upload device screenshot" });
@@ -164,6 +171,14 @@ export function buildCommandRouter(deps: CommandRouteDeps): Router {
           message: "deviceId, command_type and command_id are required"
         });
         return;
+      }
+
+      if (req.auth?.role !== "tenant_owner") {
+        const d = await DeviceModel.findOne({ _id: deviceId, tenantId, pairedOwnerUserId: req.auth?.userId });
+        if (!d) {
+          res.status(403).json({ code: "FORBIDDEN", message: "Insufficient permissions for this device" });
+          return;
+        }
       }
 
       const maxAttempts = Number(req.body?.max_attempts ?? 2);
@@ -245,6 +260,14 @@ export function buildCommandRouter(deps: CommandRouteDeps): Router {
         return;
       }
 
+      if (req.auth?.role !== "tenant_owner") {
+        const d = await DeviceModel.findOne({ _id: deviceId, tenantId, pairedOwnerUserId: req.auth?.userId });
+        if (!d) {
+          res.status(403).json({ code: "FORBIDDEN", message: "Insufficient permissions for this device" });
+          return;
+        }
+      }
+
       // Attempt PostgreSQL read based on percentage
       if (shouldReadFromPostgres(deps.readFromPostgresPercentage)) {
         const shadowRows = await commandRepository.listShadowCommands(tenantId, deviceId, limit);
@@ -293,6 +316,14 @@ export function buildCommandRouter(deps: CommandRouteDeps): Router {
           message: "deviceId and commandId are required"
         });
         return;
+      }
+
+      if (req.auth?.role !== "tenant_owner") {
+        const d = await DeviceModel.findOne({ _id: deviceId, tenantId, pairedOwnerUserId: req.auth?.userId });
+        if (!d) {
+          res.status(403).json({ code: "FORBIDDEN", message: "Insufficient permissions for this device" });
+          return;
+        }
       }
 
       // Attempt PostgreSQL read based on percentage

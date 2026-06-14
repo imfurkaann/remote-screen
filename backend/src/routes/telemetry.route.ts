@@ -81,6 +81,14 @@ export function buildTelemetryRouter(deps: TelemetryRouteDeps): Router {
         return;
       }
 
+      if (auth?.role !== "device" && auth?.role !== "tenant_owner") {
+        const d = await DeviceModel.findOne({ _id: deviceId, tenantId, pairedOwnerUserId: auth?.userId });
+        if (!d) {
+          res.status(403).json({ code: "FORBIDDEN", message: "Insufficient permissions for this device" });
+          return;
+        }
+      }
+
       const device = await DeviceModel.findOne({ _id: deviceId, tenantId });
       if (!device) {
         res.status(404).json({ code: "DEVICE_NOT_FOUND", message: "Device not found" });
@@ -129,6 +137,14 @@ export function buildTelemetryRouter(deps: TelemetryRouteDeps): Router {
         if (!tenantId || !deviceId) {
           res.status(400).json({ code: "VALIDATION_ERROR", message: "deviceId is required" });
           return;
+        }
+
+        if (req.auth?.role !== "tenant_owner") {
+          const d = await DeviceModel.findOne({ _id: deviceId, tenantId, pairedOwnerUserId: req.auth?.userId });
+          if (!d) {
+            res.status(403).json({ code: "FORBIDDEN", message: "Insufficient permissions for this device" });
+            return;
+          }
         }
 
         const query: {

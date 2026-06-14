@@ -16,6 +16,8 @@ type ShadowMediaInput = {
   storagePath: string;
   publicUrl: string;
   status: string;
+  ownerUserId?: string | null;
+  folder?: string | null;
 };
 
 export type ShadowMediaRow = {
@@ -28,6 +30,8 @@ export type ShadowMediaRow = {
   storage_path: string;
   public_url: string;
   status: string;
+  owner_user_id: string | null;
+  folder: string | null;
   created_at: Date;
   updated_at: Date;
 };
@@ -39,6 +43,7 @@ type ShadowPlaylistInput = {
   version: number;
   itemsJson: unknown;
   publishedAt: Date | null;
+  ownerUserId?: string | null;
 };
 
 export type ShadowPlaylistRow = {
@@ -48,6 +53,7 @@ export type ShadowPlaylistRow = {
   version: number;
   items_json: unknown;
   published_at: Date | null;
+  owner_user_id: string | null;
   created_at: Date;
   updated_at: Date;
 };
@@ -106,9 +112,9 @@ export class ContentRepository {
     await pool.query(
       `INSERT INTO media (
         tenant_id, external_id, filename, mime_type, size_bytes,
-        checksum_sha256, storage_path, public_url, status
+        checksum_sha256, storage_path, public_url, status, owner_user_id, folder
       )
-      VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9)
+      VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       ON CONFLICT (tenant_id, external_id)
       DO UPDATE SET
         filename = EXCLUDED.filename,
@@ -118,6 +124,8 @@ export class ContentRepository {
         storage_path = EXCLUDED.storage_path,
         public_url = EXCLUDED.public_url,
         status = EXCLUDED.status,
+        owner_user_id = EXCLUDED.owner_user_id,
+        folder = EXCLUDED.folder,
         updated_at = CURRENT_TIMESTAMP`,
       [
         input.tenantId,
@@ -128,7 +136,9 @@ export class ContentRepository {
         input.checksumSha256,
         input.storagePath,
         input.publicUrl,
-        input.status
+        input.status,
+        input.ownerUserId ?? null,
+        input.folder ?? null
       ]
     );
 
@@ -189,15 +199,16 @@ export class ContentRepository {
     const pool = getPostgresPool();
     await pool.query(
       `INSERT INTO playlists (
-        tenant_id, external_id, name, version, items_json, published_at
+        tenant_id, external_id, name, version, items_json, published_at, owner_user_id
       )
-      VALUES ($1::uuid, $2, $3, $4, $5::jsonb, $6)
+      VALUES ($1::uuid, $2, $3, $4, $5::jsonb, $6, $7)
       ON CONFLICT (tenant_id, external_id)
       DO UPDATE SET
         name = EXCLUDED.name,
         version = EXCLUDED.version,
         items_json = EXCLUDED.items_json,
         published_at = EXCLUDED.published_at,
+        owner_user_id = EXCLUDED.owner_user_id,
         updated_at = CURRENT_TIMESTAMP`,
       [
         input.tenantId,
@@ -205,7 +216,8 @@ export class ContentRepository {
         input.name,
         input.version,
         JSON.stringify(input.itemsJson),
-        input.publishedAt
+        input.publishedAt,
+        input.ownerUserId ?? null
       ]
     );
 
@@ -325,7 +337,7 @@ export class ContentRepository {
       const result = await pool.query<ShadowMediaRow>(
         `SELECT id, external_id, filename, mime_type, size_bytes,
                 checksum_sha256, storage_path, public_url, status,
-                created_at, updated_at
+                owner_user_id, folder, created_at, updated_at
          FROM media
          WHERE tenant_id = $1::uuid
            AND external_id = $2
@@ -371,7 +383,7 @@ export class ContentRepository {
    * List media from shadow table.
    * Returns empty list on fallback path.
    */
-  async listMedia(tenantId: string, limit: number): Promise<ShadowMediaRow[]> {
+  async listMedia(tenantId: string, limit: number, ownerUserId?: string | null): Promise<ShadowMediaRow[]> {
     if (!isPostgresConnected()) {
       logger.debug('PostgreSQL not connected, returning empty list', {
         operation: 'listMedia',
@@ -394,17 +406,23 @@ export class ContentRepository {
     const startTime = Date.now();
     try {
       const pool = getPostgresPool();
-      const result = await pool.query<ShadowMediaRow>(
-        `SELECT id, external_id, filename, mime_type, size_bytes,
+      let queryStr = `SELECT id, external_id, filename, mime_type, size_bytes,
                 checksum_sha256, storage_path, public_url, status,
-                created_at, updated_at
+                owner_user_id, folder, created_at, updated_at
          FROM media
          WHERE tenant_id = $1::uuid
-           AND deleted_at IS NULL
-         ORDER BY updated_at DESC
-         LIMIT $2`,
-        [tenantId, limit]
-      );
+           AND deleted_at IS NULL`;
+      const params: any[] = [tenantId];
+      
+      if (ownerUserId) {
+        params.push(ownerUserId);
+        queryStr += ` AND owner_user_id = $${params.length}`;
+      }
+      
+      params.push(limit);
+      queryStr += ` ORDER BY updated_at DESC LIMIT $${params.length}`;
+
+      const result = await pool.query<ShadowMediaRow>(queryStr, params);
 
       const latencyMs = Date.now() - startTime;
       postgresCircuitBreaker.recordSuccess();
@@ -466,7 +484,7 @@ export class ContentRepository {
       const pool = getPostgresPool();
       const result = await pool.query<ShadowPlaylistRow>(
         `SELECT id, external_id, name, version, items_json,
-                published_at, created_at, updated_at
+                published_at, owner_user_id, created_at, updated_at
          FROM playlists
          WHERE tenant_id = $1::uuid
            AND external_id = $2
@@ -512,7 +530,7 @@ export class ContentRepository {
    * List playlists from shadow table.
    * Returns empty list on fallback path.
    */
-  async listPlaylists(tenantId: string, limit: number): Promise<ShadowPlaylistRow[]> {
+  async listPlaylists(tenantId: string, limit: number, ownerUserId?: string | null): Promise<ShadowPlaylistRow[]> {
     if (!isPostgresConnected()) {
       logger.debug('PostgreSQL not connected, returning empty list', {
         operation: 'listPlaylists',
@@ -535,16 +553,22 @@ export class ContentRepository {
     const startTime = Date.now();
     try {
       const pool = getPostgresPool();
-      const result = await pool.query<ShadowPlaylistRow>(
-        `SELECT id, external_id, name, version, items_json,
-                published_at, created_at, updated_at
+      let queryStr = `SELECT id, external_id, name, version, items_json,
+                published_at, owner_user_id, created_at, updated_at
          FROM playlists
          WHERE tenant_id = $1::uuid
-           AND deleted_at IS NULL
-         ORDER BY updated_at DESC
-         LIMIT $2`,
-        [tenantId, limit]
-      );
+           AND deleted_at IS NULL`;
+      const params: any[] = [tenantId];
+      
+      if (ownerUserId) {
+        params.push(ownerUserId);
+        queryStr += ` AND owner_user_id = $${params.length}`;
+      }
+      
+      params.push(limit);
+      queryStr += ` ORDER BY updated_at DESC LIMIT $${params.length}`;
+
+      const result = await pool.query<ShadowPlaylistRow>(queryStr, params);
 
       const latencyMs = Date.now() - startTime;
       postgresCircuitBreaker.recordSuccess();
