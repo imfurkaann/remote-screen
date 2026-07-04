@@ -16,5 +16,4 @@ import com.signage.player.BuildConfig
 object AppDefaults {
     val BACKEND_BASE_URL: String = BuildConfig.BACKEND_BASE_URL
     val BOOTSTRAP_KEY: String = BuildConfig.BOOTSTRAP_KEY
-    val TENANT_ID: String = BuildConfig.TENANT_ID
 }

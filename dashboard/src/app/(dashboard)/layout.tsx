@@ -17,7 +17,8 @@ const NAV_LINKS: Array<{ href: string; label: string; isPlaceholder?: boolean }>
   { href: "/apps", label: "Apps" },
   { href: "/quick-post", label: "Quick Post", isPlaceholder: true },
   { href: "/operations", label: "Operations" },
-  { href: "/settings/users", label: "Users" }
+  { href: "/settings/users", label: "Users" },
+  { href: "/super-admin", label: "System Control" }
 ];
 
 function decodeJwt(token: string) {
@@ -85,16 +86,24 @@ export default async function DashboardLayout({ children }: DashboardLayoutProps
 
   let email = "operator@remotescreen.dev";
   let role = "operator";
+  let tenantName = "Default";
 
   if (token) {
     const decoded = decodeJwt(token);
     if (decoded) {
       email = decoded.email || email;
       role = decoded.role || role;
+      tenantName = decoded.tenant_name || "Default";
     }
   }
 
   const filteredLinks = NAV_LINKS.filter((link) => {
+    if (link.href === "/super-admin") {
+      return role === "super_admin";
+    }
+    if (role === "super_admin") {
+      return link.href !== "/settings/users";
+    }
     if (role === "viewer") {
       return link.href === "/screens";
     }
@@ -147,7 +156,7 @@ export default async function DashboardLayout({ children }: DashboardLayoutProps
           gap: "2px"
         }}>
           <span style={{ fontSize: "10px", color: "#6b7280", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px" }}>Space</span>
-          <span style={{ fontSize: "14px", color: "#ffffff", fontWeight: 700 }}>Default</span>
+          <span style={{ fontSize: "14px", color: "#ffffff", fontWeight: 700 }}>{tenantName}</span>
         </div>
 
         {/* Nav Items */}

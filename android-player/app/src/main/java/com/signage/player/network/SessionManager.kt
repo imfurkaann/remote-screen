@@ -35,6 +35,13 @@ import kotlin.random.Random
  *  3. Transitions to [DevicePairingState.Unpaired] **only** on explicit HTTP
  *     404 / 409 responses — never on network timeouts or other transient
  *     failures. Content keeps playing through connectivity blips.
+ *  4. **Offline grace period:** if the backend returns 404/409 but the last
+ *     successful verification was within [OFFLINE_GRACE_PERIOD_MS] (7 days),
+ *     the device assumes the backend is temporarily inconsistent (e.g. a
+ *     deployment glitch) and retries [GRACE_RETRY_ATTEMPTS] more times before
+ *     actually transitioning to Unpaired. This prevents a signage screen from
+ *     showing a pairing code just because the backend had a momentary hiccup
+ *     after a long internet outage.
  *
  * ## Thread safety
  * [state] is a [StateFlow] backed by [MutableStateFlow], which is thread-safe.
@@ -68,6 +75,29 @@ object SessionManager {
     /** Maximum delay cap for exponential back-off (5 minutes). */
     private const val BACKOFF_MAX_MS = 300_000L
 
+    /**
+     * Offline grace period: if the last successful backend verification was
+     * within 7 days, a 404/409 response is treated as a potential backend
+     * inconsistency rather than a permanent unpair signal.
+     *
+     * Rationale: after a long internet outage (e.g. 3 days), the device
+     * reconnects and the backend may momentarily return 404 due to a cache
+     * miss, a rolling deploy, or a temporary DB inconsistency. Without this
+     * grace period the screen would flash the pairing code in front of hotel
+     * guests / retail customers for no good reason.
+     *
+     * 7 days covers the worst-case "long weekend + travel" scenario while
+     * still eventually forcing a re-pair if the device truly was deleted.
+     */
+    private const val OFFLINE_GRACE_PERIOD_MS = 7L * 24 * 60 * 60 * 1_000L
+
+    /**
+     * Number of additional retry attempts before accepting a 404/409 as
+     * definitive when the device is within the grace period. Each retry uses
+     * standard exponential back-off so 3 retries ≈ 2 + 4 + 8 = ~14 s total.
+     */
+    private const val GRACE_RETRY_ATTEMPTS = 3
+
     // -- Public state ----------------------------------------------------------
 
     private val _state = MutableStateFlow<DevicePairingState>(
@@ -93,13 +123,11 @@ object SessionManager {
      *
      * @param context     Application context (used for [PairingStateStore]).
      * @param hardwareId  Stable device identity from [com.signage.player.storage.HardwareIdStore].
-     * @param tenantId    Tenant the device belongs to.
      * @param api         Configured [PairingApiService] instance.
      */
     fun start(
         context: Context,
         hardwareId: String,
-        tenantId: String,
         api: PairingApiService
     ) {
         val store = PairingStateStore(context)
@@ -121,7 +149,7 @@ object SessionManager {
         sessionScope?.cancel()
         sessionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         sessionScope!!.launch {
-            runSessionLoop(store, hardwareId, tenantId, api)
+            runSessionLoop(store, hardwareId, api)
         }
     }
 
@@ -137,11 +165,13 @@ object SessionManager {
     private suspend fun runSessionLoop(
         store: PairingStateStore,
         hardwareId: String,
-        tenantId: String,
         api: PairingApiService
     ) {
         var retryAttempt = 0
         var lastPairingCodeRequestAt = 0L
+        // Track how many consecutive 404/409 responses we've received while
+        // within the grace period. Reset to 0 on any successful verification.
+        var gracePeriodRetryCount = 0
 
         while (true) {
             val currentState = _state.value
@@ -154,7 +184,7 @@ object SessionManager {
                     bootstrapKey = AppDefaults.BOOTSTRAP_KEY,
                     request = DeviceSessionRequest(
                         hardware_id = hardwareId,
-                        tenant_id = tenantId
+                        tenant_id = null
                     )
                 )
             }
@@ -164,8 +194,9 @@ object SessionManager {
 
             when {
                 // ✅ Paired and verified
-                sessionResponse != null -> {
+                sessionResponse != null && sessionResponse.paired -> {
                     retryAttempt = 0
+                    gracePeriodRetryCount = 0
                     store.savePaired(sessionResponse.device_id, sessionResponse.access_token)
                     _state.value = DevicePairingState.Paired(
                         token = sessionResponse.access_token,
@@ -175,15 +206,40 @@ object SessionManager {
                     delay(TOKEN_REFRESH_INTERVAL_MS)
                 }
 
-                // ❌ Definitively not paired (backend says so explicitly)
-                sessionError is HttpException &&
-                        (sessionError.code() == 404 || sessionError.code() == 409) -> {
+                // ❌ Definitive "not paired" signal from backend (HTTP 404/409 or paired=false)
+                (sessionResponse != null && !sessionResponse.paired) ||
+                        (sessionError is HttpException && (sessionError.code() == 404 || sessionError.code() == 409)) -> {
 
+                    val httpCode = if (sessionError is HttpException) sessionError.code() else null
+                    val persisted = store.loadState()
+                    val now = System.currentTimeMillis()
+                    val withinGracePeriod = persisted.lastVerifiedAt > 0 &&
+                            (now - persisted.lastVerifiedAt) < OFFLINE_GRACE_PERIOD_MS
+
+                    if (withinGracePeriod && gracePeriodRetryCount < GRACE_RETRY_ATTEMPTS) {
+                        // Within the 7-day grace window — treat this as a transient
+                        // backend inconsistency and retry before showing pairing screen.
+                        gracePeriodRetryCount++
+                        val ageHours = (now - persisted.lastVerifiedAt) / (1000 * 60 * 60)
+                        val delayMs = nextBackoffDelay(gracePeriodRetryCount)
+                        Log.w(
+                            TAG,
+                            "Received ${httpCode ?: "unpaired"} but within grace period " +
+                                    "(last verified ${ageHours}h ago, grace retry $gracePeriodRetryCount/$GRACE_RETRY_ATTEMPTS) " +
+                                    "— retrying in ${delayMs}ms"
+                        )
+                        delay(delayMs)
+                        return@runSessionLoop
+                    }
+
+                    // Either outside grace period or exceeded grace retries — accept as definitive.
+                    gracePeriodRetryCount = 0
                     retryAttempt = 0
                     store.clearPaired()
 
+                    val isResponseUnpaired = sessionResponse != null && !sessionResponse.paired
+
                     // Determine whether we need a fresh pairing code
-                    val now = System.currentTimeMillis()
                     val existingCode = (currentState as? DevicePairingState.Unpaired)
                         ?.pairingCode
                         ?.takeIf { it != "------" }
@@ -191,11 +247,12 @@ object SessionManager {
                             now - lastPairingCodeRequestAt >= PAIRING_CODE_REFRESH_MS
 
                     val displayCode: String = if (needsNewCode) {
-                        Log.d(TAG, "Fetching new pairing code (HTTP ${sessionError.code()})")
-                        fetchPairingCode(api, hardwareId, tenantId)
+                        val reason = if (isResponseUnpaired) "paired=false" else "HTTP $httpCode"
+                        Log.d(TAG, "Fetching new pairing code ($reason)")
+                        fetchPairingCode(api, hardwareId)
                             ?.also { lastPairingCodeRequestAt = now }
-                            ?: existingCode
-                            ?: "------"
+                             ?: existingCode
+                             ?: "------"
                     } else {
                         existingCode ?: "------"
                     }
@@ -225,12 +282,11 @@ object SessionManager {
 
     private suspend fun fetchPairingCode(
         api: PairingApiService,
-        hardwareId: String,
-        tenantId: String
+        hardwareId: String
     ): String? = runCatching {
         api.requestPairingCode(
             bootstrapKey = AppDefaults.BOOTSTRAP_KEY,
-            request = PairingRequest(hardware_id = hardwareId, tenant_id = tenantId)
+            request = PairingRequest(hardware_id = hardwareId, tenant_id = null)
         )
     }.onFailure { error ->
         Log.e(TAG, "Pairing code request failed: ${error.message}")

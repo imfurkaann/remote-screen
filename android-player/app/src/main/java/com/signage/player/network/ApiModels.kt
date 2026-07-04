@@ -2,7 +2,7 @@ package com.signage.player.network
 
 data class PairingRequest(
     val hardware_id: String,
-    val tenant_id: String
+    val tenant_id: String? = null
 )
 
 data class PairingResponse(
@@ -13,12 +13,13 @@ data class PairingResponse(
 
 data class DeviceSessionRequest(
     val hardware_id: String,
-    val tenant_id: String
+    val tenant_id: String? = null
 )
 
 data class DeviceSessionResponse(
     val paired: Boolean,
     val device_id: String,
+    val tenant_id: String?,
     val access_token: String,
     val token_type: String,
     val expires_in: Int
@@ -33,4 +34,12 @@ data class TelemetryRequest(
 data class TelemetryIngestResponse(
     val accepted: Boolean,
     val correlation_id: String
+)
+
+data class UnpairRequest(
+    val hardware_id: String
+)
+
+data class UnpairResponse(
+    val unpaired: Boolean
 )

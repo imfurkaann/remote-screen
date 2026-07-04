@@ -2,6 +2,7 @@ import { Router } from "express";
 import jwt from "jsonwebtoken";
 import { UserModel } from "../models/user.model.js";
 import { DeviceModel } from "../models/device.model.js";
+import { TenantModel } from "../models/tenant.model.js";
 import { verifyPassword, hashPassword } from "../lib/bcrypt.js";
 import { requireUserAuth, requireRoles } from "../middlewares/auth.js";
 import { disconnectUserSockets } from "../sockets/registry.js";
@@ -43,12 +44,16 @@ export function buildAuthRouter(deps: AuthRouteDeps): Router {
       }
 
       const userId = user._id.toString();
+      const tenant = await TenantModel.findById(user.tenantId);
+      const tenantName = tenant ? tenant.name : "Default";
+
       const accessToken = jwt.sign(
         {
           sub: userId,
           tenant_id: user.tenantId,
           role: user.role,
-          email: user.email
+          email: user.email,
+          tenant_name: tenantName
         },
         deps.jwtSecret,
         {
@@ -252,12 +257,16 @@ export function buildAuthRouter(deps: AuthRouteDeps): Router {
         }
 
         const userId = `user-${email.replace(/[^a-z0-9]/gi, "-")}`;
+        const tenant = await TenantModel.findById(tenantId);
+        const tenantName = tenant ? tenant.name : tenantId;
+
         const accessToken = jwt.sign(
           {
             sub: userId,
             tenant_id: tenantId,
             role,
-            email
+            email,
+            tenant_name: tenantName
           },
           deps.jwtSecret,
           {

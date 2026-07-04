@@ -2,7 +2,18 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- Network access for backend communication -->
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Boot resilience: receive broadcast when device finishes booting -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Foreground service to keep player alive in background and after boot -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+
+    <!-- Required on Android 13+ to show foreground service notifications -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="true"
@@ -15,17 +26,50 @@
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.Signageplayer"
         tools:targetApi="31">
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
-            android:theme="@style/Theme.Signageplayer">
+            android:theme="@style/Theme.Signageplayer"
+            android:launchMode="singleTop"
+            android:screenOrientation="landscape">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+            BootReceiver: catches BOOT_COMPLETED (standard) and
+            QUICKBOOT_POWERON (Samsung/HTC fast-boot) to restart the player
+            after a power cycle without user interaction.
+        -->
+        <receiver
+            android:name=".boot.BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <!-- Samsung / HTC fast-boot variant -->
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <!-- Huawei fast-boot variant -->
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+            PlayerForegroundService: keeps the app process alive in the background
+            and survives RAM pressure. Declared as media_playback type so Android
+            knows this is a legitimate long-running media process.
+        -->
+        <service
+            android:name=".boot.PlayerForegroundService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback"
+            android:stopWithTask="false" />
+
     </application>
 
 </manifest>

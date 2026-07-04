@@ -16,7 +16,7 @@ import java.util.UUID
 class DeviceTelemetryReporter(
     baseUrl: String,
     private val bootstrapKey: String,
-    private val tenantId: String,
+    private var tenantId: String?,
     private val hardwareId: String,
     private var deviceIdHint: String? = null
 ) {
@@ -76,12 +76,13 @@ class DeviceTelemetryReporter(
             bootstrapKey = bootstrapKey,
             request = DeviceSessionRequest(
                 hardware_id = hardwareId,
-                tenant_id = tenantId
+                tenant_id = null
             )
         )
 
         accessToken = response.access_token
         deviceIdHint = response.device_id
+        tenantId = response.tenant_id
         return !accessToken.isNullOrBlank() && !deviceIdHint.isNullOrBlank()
     }
 
@@ -90,7 +91,7 @@ class DeviceTelemetryReporter(
             "source" to source,
             "message" to message,
             "hardware_id" to hardwareId,
-            "tenant_id" to tenantId
+            "tenant_id" to (tenantId ?: "")
         )
 
         for ((key, value) in details) {

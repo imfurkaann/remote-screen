@@ -65,7 +65,7 @@ afterEach(async () => {
 });
 
 before(async () => {
-  const localUri = "mongodb://127.0.0.1:27017/remote_screen_test";
+  const localUri = "mongodb://127.0.0.1:27017/remote_screen_test_ops";
 
   try {
     usingExternalMongo = true;

@@ -8,6 +8,7 @@ import { PairingAuditModel } from "../models/pairing-audit.model.js";
 import { PairingCodeModel } from "../models/pairing-code.model.js";
 import { deviceRepository } from "../repositories/device.repository.js";
 import jwt from "jsonwebtoken";
+import { isPostgresConnected, getPostgresPool } from "../lib/postgres.js";
 
 function generatePairingCode(): string {
   return randomInt(100000, 1000000).toString();
@@ -38,12 +39,12 @@ export function buildPairingRouter(deps: PairingRouteDeps): Router {
     async (req, res) => {
       try {
         const hardwareId = String(req.body?.hardware_id ?? "").trim();
-        const tenantId = String(req.body?.tenant_id ?? "").trim();
+        const tenantId = req.body?.tenant_id ? String(req.body.tenant_id).trim() : null;
 
-        if (!hardwareId || !tenantId) {
+        if (!hardwareId) {
           res.status(400).json({
             code: "VALIDATION_ERROR",
-            message: "hardware_id and tenant_id are required"
+            message: "hardware_id is required"
           });
           return;
         }
@@ -53,10 +54,10 @@ export function buildPairingRouter(deps: PairingRouteDeps): Router {
         if (!device) {
           device = await DeviceModel.create({
             hardwareId,
-            tenantId,
+            tenantId: tenantId || null,
             status: "offline"
           });
-        } else if (device.tenantId !== tenantId) {
+        } else if (tenantId && device.tenantId !== tenantId) {
           // In local/dev pairing workflows, move the device to the requested tenant
           // so the dashboard and emulator stay in the same tenant context.
           device.tenantId = tenantId;
@@ -67,7 +68,7 @@ export function buildPairingRouter(deps: PairingRouteDeps): Router {
         }
 
         try {
-          await deviceRepository.syncPairingRequest({ tenantId, hardwareId });
+          await deviceRepository.syncPairingRequest({ tenantId: device.tenantId || null, hardwareId });
         } catch (error) {
           console.error("[pairing] postgres shadow write failed (request-code)", error);
         }
@@ -78,13 +79,13 @@ export function buildPairingRouter(deps: PairingRouteDeps): Router {
         await PairingCodeModel.create({
           code,
           deviceId: String(device._id),
-          tenantId,
+          tenantId: tenantId || null,
           expiresAt,
           consumedAt: null
         });
 
         await PairingAuditModel.create({
-          tenantId,
+          tenantId: tenantId || "unassigned",
           deviceId: String(device._id),
           hardwareId,
           eventType: "PAIRING_CODE_REQUESTED",
@@ -121,8 +122,7 @@ export function buildPairingRouter(deps: PairingRouteDeps): Router {
         const doc = await PairingCodeModel.findOne({
           code: pairingCode,
           consumedAt: null,
-          expiresAt: { $gt: new Date() },
-          tenantId: req.auth?.tenantId
+          expiresAt: { $gt: new Date() }
         }).sort({ createdAt: -1 });
 
         if (!doc) {
@@ -142,11 +142,11 @@ export function buildPairingRouter(deps: PairingRouteDeps): Router {
         }
 
         await DeviceModel.updateOne(
-          { _id: doc.deviceId, tenantId: req.auth?.tenantId },
-          { $set: { pairedOwnerUserId: req.auth?.userId, status: "online", lastSeenAt: new Date() } }
+          { _id: doc.deviceId },
+          { $set: { tenantId: req.auth?.tenantId, pairedOwnerUserId: req.auth?.userId, status: "online", lastSeenAt: new Date() } }
         );
 
-        const mongoDevice = await DeviceModel.findOne({ _id: doc.deviceId, tenantId: req.auth?.tenantId })
+        const mongoDevice = await DeviceModel.findOne({ _id: doc.deviceId })
           .select({ hardwareId: 1 })
           .lean();
 
@@ -190,20 +190,19 @@ export function buildPairingRouter(deps: PairingRouteDeps): Router {
     async (req, res) => {
       try {
         const hardwareId = String(req.body?.hardware_id ?? "").trim();
-        const tenantId = String(req.body?.tenant_id ?? "").trim();
 
-        if (!hardwareId || !tenantId) {
-          res.status(400).json({ code: "VALIDATION_ERROR", message: "hardware_id and tenant_id are required" });
+        if (!hardwareId) {
+          res.status(400).json({ code: "VALIDATION_ERROR", message: "hardware_id is required" });
           return;
         }
 
-        const device = await DeviceModel.findOne({ hardwareId, tenantId });
+        const device = await DeviceModel.findOne({ hardwareId });
         if (!device) {
           res.status(404).json({ code: "DEVICE_NOT_FOUND", message: "Device not found" });
           return;
         }
 
-        if (!device.pairedOwnerUserId) {
+        if (!device.pairedOwnerUserId || !device.tenantId) {
           res.status(409).json({ code: "DEVICE_NOT_PAIRED", message: "Device is not paired yet" });
           return;
         }
@@ -226,7 +225,7 @@ export function buildPairingRouter(deps: PairingRouteDeps): Router {
         );
 
         await PairingAuditModel.create({
-          tenantId,
+          tenantId: device.tenantId,
           deviceId: String(device._id),
           hardwareId,
           eventType: "DEVICE_SESSION_REFRESHED",
@@ -239,12 +238,65 @@ export function buildPairingRouter(deps: PairingRouteDeps): Router {
         res.json({
           paired: true,
           device_id: String(device._id),
+          tenant_id: device.tenantId,
           access_token: deviceToken,
           token_type: "Bearer",
           expires_in: 60 * 60 * 12
         });
       } catch {
         res.status(500).json({ code: "DEVICE_SESSION_FAILED", message: "Failed to refresh device session" });
+      }
+    }
+  );
+
+  router.post(
+    "/unpair",
+    pairingLimiter,
+    requireBootstrapKey(deps.bootstrapKey),
+    async (req, res) => {
+      try {
+        const hardwareId = String(req.body?.hardware_id ?? "").trim();
+        if (!hardwareId) {
+          res.status(400).json({ code: "VALIDATION_ERROR", message: "hardware_id is required" });
+          return;
+        }
+
+        const device = await DeviceModel.findOne({ hardwareId });
+        if (!device) {
+          res.status(404).json({ code: "DEVICE_NOT_FOUND", message: "Device not found" });
+          return;
+        }
+
+        const oldTenantId = device.tenantId;
+
+        device.tenantId = null;
+        device.pairedOwnerUserId = null;
+        device.currentPlaylistId = null;
+        device.status = "offline";
+        await device.save();
+
+        if (isPostgresConnected() && oldTenantId) {
+          try {
+            const pool = getPostgresPool();
+            await pool.query(
+              `UPDATE devices
+               SET tenant_id = NULL,
+                   paired_owner_user_id = NULL,
+                   status = 'offline',
+                   current_playlist_id = NULL,
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE hardware_id = $1
+                 AND deleted_at IS NULL`,
+              [hardwareId]
+            );
+          } catch (err) {
+            console.error("[pairing] postgres shadow write failed (unpair)", err);
+          }
+        }
+
+        res.status(200).json({ unpaired: true });
+      } catch {
+        res.status(500).json({ code: "UNPAIR_FAILED", message: "Failed to unpair device" });
       }
     }
   );

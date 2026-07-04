@@ -3,7 +3,7 @@ import { Schema, model } from "mongoose";
 export type DeviceStatus = "online" | "offline" | "degraded";
 
 export type DeviceDoc = {
-  tenantId: string;
+  tenantId: string | null;
   hardwareId: string;
   name: string | null;
   location: string | null;
@@ -28,7 +28,7 @@ export type DeviceDoc = {
 
 const DeviceSchema = new Schema<DeviceDoc>(
   {
-    tenantId: { type: String, required: true, index: true },
+    tenantId: { type: String, required: false, default: null, index: true },
     hardwareId: { type: String, required: true, unique: true },
     name: { type: String, default: null },
     location: { type: String, default: null },

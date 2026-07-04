@@ -23,6 +23,9 @@ class PairingStateStore(context: Context) {
             .putString(KEY_DEVICE_ID, deviceId)
             .putString(KEY_ACCESS_TOKEN, accessToken)
             .putLong(KEY_TOKEN_OBTAINED_AT, System.currentTimeMillis())
+            // Record the wall-clock time of the last successful backend verification.
+            // Used by SessionManager's offline grace period logic.
+            .putLong(KEY_LAST_VERIFIED_AT, System.currentTimeMillis())
             .apply()
     }
 
@@ -33,6 +36,7 @@ class PairingStateStore(context: Context) {
             .remove(KEY_DEVICE_ID)
             .remove(KEY_ACCESS_TOKEN)
             .remove(KEY_TOKEN_OBTAINED_AT)
+            .remove(KEY_LAST_VERIFIED_AT)
             .apply()
     }
 
@@ -41,7 +45,8 @@ class PairingStateStore(context: Context) {
         isPaired = prefs.getBoolean(KEY_IS_PAIRED, false),
         deviceId = prefs.getString(KEY_DEVICE_ID, null),
         accessToken = prefs.getString(KEY_ACCESS_TOKEN, null),
-        tokenObtainedAt = prefs.getLong(KEY_TOKEN_OBTAINED_AT, 0L)
+        tokenObtainedAt = prefs.getLong(KEY_TOKEN_OBTAINED_AT, 0L),
+        lastVerifiedAt = prefs.getLong(KEY_LAST_VERIFIED_AT, 0L)
     )
 
     companion object {
@@ -50,6 +55,7 @@ class PairingStateStore(context: Context) {
         private const val KEY_DEVICE_ID = "device_id"
         private const val KEY_ACCESS_TOKEN = "access_token"
         private const val KEY_TOKEN_OBTAINED_AT = "token_obtained_at"
+        private const val KEY_LAST_VERIFIED_AT = "last_verified_at"
     }
 }
 
@@ -57,5 +63,7 @@ data class PersistedPairingState(
     val isPaired: Boolean,
     val deviceId: String?,
     val accessToken: String?,
-    val tokenObtainedAt: Long
+    val tokenObtainedAt: Long,
+    /** Epoch ms of the last time the backend confirmed this device is paired. */
+    val lastVerifiedAt: Long = 0L
 )

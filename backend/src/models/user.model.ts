@@ -4,7 +4,7 @@ export type UserDoc = {
   tenantId: string;
   email: string;
   passwordHash: string;
-  role: "tenant_owner" | "tenant_admin" | "operator" | "viewer";
+  role: "super_admin" | "tenant_owner" | "tenant_admin" | "operator" | "viewer";
   displayName: string;
   isActive: boolean;
 };
@@ -16,7 +16,7 @@ const UserSchema = new Schema<UserDoc>(
     passwordHash: { type: String, required: true },
     role: {
       type: String,
-      enum: ["tenant_owner", "tenant_admin", "operator", "viewer"],
+      enum: ["super_admin", "tenant_owner", "tenant_admin", "operator", "viewer"],
       required: true
     },
     displayName: { type: String, required: true },

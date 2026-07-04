@@ -238,9 +238,21 @@ class PlaybackCoordinator(
                 playbackStateStore.save(currentIndex, 0L)
 
                 val isImg = !isWeb && isImagePath(item.filePath)
+                val currentPath = PlayerUiStateStore.state.value.currentMediaFilePath
 
                 // --- Improvement 1: crossfade transition ---
-                withCrossfade {
+                // Only perform a crossfade if the media file is changing, preventing
+                // flashing/flickering when looping a single item or playing consecutive identical files.
+                if (currentPath != item.filePath) {
+                    withCrossfade {
+                        withContext(Dispatchers.Main) {
+                            PlayerUiStateStore.setCurrentMedia(item.filePath, isImg)
+                        }
+                        if (isImg || isWeb) {
+                            playerController.pause()
+                        }
+                    }
+                } else {
                     withContext(Dispatchers.Main) {
                         PlayerUiStateStore.setCurrentMedia(item.filePath, isImg)
                     }

@@ -11,8 +11,14 @@ type User = {
   createdAt: string | null;
 };
 
+type Device = {
+  id: string;
+  status: string;
+};
+
 export default function UsersPage() {
   const [users, setUsers] = useState<User[]>([]);
+  const [devices, setDevices] = useState<Device[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -32,51 +38,51 @@ export default function UsersPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [formSubmitting, setFormSubmitting] = useState(false);
 
-  // Helper to decode JWT token on client
-  function decodeToken(token: string) {
+  useEffect(() => {
+    async function fetchMe() {
+      try {
+        const res = await fetch("/api/auth/me");
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.role) {
+            setCurrentUserRole(data.role);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to fetch user role", err);
+      }
+    }
+    fetchMe();
+    loadData();
+  }, []);
+
+  async function loadData() {
+    setLoading(true);
+    setError(null);
     try {
-      const parts = token.split(".");
-      if (parts.length !== 3) return null;
-      const base64Url = parts[1];
-      if (!base64Url) return null;
-      const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
-      return JSON.parse(atob(base64));
-    } catch {
-      return null;
+      await Promise.all([fetchUsers(), fetchDevices()]);
+    } catch (err: any) {
+      setError(err.message || "Failed to load dashboard data.");
+    } finally {
+      setLoading(false);
     }
   }
 
-  useEffect(() => {
-    // Get current user role from cookie (via client side fallback or document.cookie)
-    const cookies = typeof document !== "undefined" ? document.cookie.split("; ") : [];
-    const tokenCookie = cookies.find((c) => c.startsWith("dashboard_access_token="));
-    if (tokenCookie) {
-      const token = tokenCookie.split("=")[1];
-      if (token) {
-        const decoded = decodeToken(token);
-        if (decoded && decoded.role) {
-          setCurrentUserRole(decoded.role);
-        }
-      }
-    }
-    fetchUsers();
-  }, []);
-
   async function fetchUsers() {
-    try {
-      setLoading(true);
-      setError(null);
-      const res = await fetch("/api/users");
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.message || "Kullanıcılar yüklenirken hata oluştu.");
-      }
+    const res = await fetch("/api/users");
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.message || "Failed to fetch users list.");
+    }
+    const data = await res.json();
+    setUsers(data.users || []);
+  }
+
+  async function fetchDevices() {
+    const res = await fetch("/api/content/devices");
+    if (res.ok) {
       const data = await res.json();
-      setUsers(data.users || []);
-    } catch (err: any) {
-      setError(err.message || "Beklenmeyen bir hata oluştu.");
-    } finally {
-      setLoading(false);
+      setDevices(data.devices || []);
     }
   }
 
@@ -110,13 +116,13 @@ export default function UsersPage() {
     setFormSubmitting(true);
 
     if (!displayName.trim() || !email.trim()) {
-      setFormError("İsim ve e-posta alanları zorunludur.");
+      setFormError("Name and email are required fields.");
       setFormSubmitting(false);
       return;
     }
 
     if (modalMode === "create" && !password) {
-      setFormError("Yeni kullanıcılar için şifre zorunludur.");
+      setFormError("Password is required for new accounts.");
       setFormSubmitting(false);
       return;
     }
@@ -145,13 +151,13 @@ export default function UsersPage() {
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        throw new Error(data.message || "Kullanıcı kaydedilirken hata oluştu.");
+        throw new Error(data.message || "Failed to save user details.");
       }
 
       setIsModalOpen(false);
-      fetchUsers();
+      loadData();
     } catch (err: any) {
-      setFormError(err.message || "İşlem başarısız oldu.");
+      setFormError(err.message || "An error occurred.");
     } finally {
       setFormSubmitting(false);
     }
@@ -159,7 +165,7 @@ export default function UsersPage() {
 
   const handleDeleteUser = async (userId: string) => {
     const confirmation = confirm(
-      "Bu kullanıcıyı silmek istediğinize emin misiniz?\n\nÖNEMLİ: Bu kullanıcıya zimmetlenmiş tüm ekranlar otomatik olarak sistem sahibine (Tenant Owner) devredilecektir."
+      "Are you sure you want to delete this user?\n\nAll screens assigned to this user will be returned to the Tenant Owner."
     );
     if (!confirmation) return;
 
@@ -167,26 +173,26 @@ export default function UsersPage() {
       const res = await fetch(`/api/users/${userId}`, { method: "DELETE" });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.message || "Kullanıcı silinemedi.");
+        throw new Error(data.message || "Failed to delete user.");
       }
-      fetchUsers();
+      loadData();
     } catch (err: any) {
-      alert(err.message || "Silme işlemi başarısız oldu.");
+      alert(err.message || "Deletion failed.");
     }
   };
 
-  const getRoleBadgeStyle = (role: string) => {
+  const getRoleLabel = (role: string) => {
     switch (role) {
       case "tenant_owner":
-        return { bg: "rgba(245, 158, 11, 0.1)", color: "#f59e0b", label: "Owner" };
+        return "Tenant Owner";
       case "tenant_admin":
-        return { bg: "rgba(14, 165, 233, 0.1)", color: "#0ea5e9", label: "Admin" };
+        return "Admin";
       case "operator":
-        return { bg: "rgba(16, 185, 129, 0.1)", color: "#10b981", label: "Operator" };
+        return "Operator";
       case "viewer":
-        return { bg: "rgba(148, 163, 184, 0.1)", color: "#94a3b8", label: "Viewer" };
+        return "Viewer";
       default:
-        return { bg: "rgba(148, 163, 184, 0.1)", color: "#94a3b8", label: role };
+        return role;
     }
   };
 
@@ -199,180 +205,235 @@ export default function UsersPage() {
     );
   });
 
-  const totalUsers = users.length;
-  const activeUsers = users.filter((u) => u.isActive).length;
-  const inactiveUsers = totalUsers - activeUsers;
+  // Calculate top statistics
+  const activeScreensCount = devices.filter((d) => d.status === "online").length;
+  const passiveScreensCount = devices.length - activeScreensCount;
+  const registeredUsersCount = users.length;
 
   return (
-    <div style={{ padding: "32px", maxWidth: "1200px", margin: "0 auto", width: "100%", color: "#f3f4f6" }}>
-      {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "32px" }}>
+    <div style={{ padding: "32px 40px", maxWidth: "1200px", margin: "0 auto", width: "100%", boxSizing: "border-box" }}>
+      {/* Header Section */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "24px" }}>
         <div>
-          <h1 style={{ fontSize: "28px", fontWeight: 800, margin: 0, color: "#ffffff", letterSpacing: "-0.5px" }}>
-            Kullanıcı Yönetimi
+          <h1 style={{ fontSize: "24px", fontWeight: 700, margin: 0, color: "#0f172a", letterSpacing: "-0.5px" }}>
+            Users
           </h1>
-          <p style={{ color: "#9ca3af", fontSize: "14px", marginTop: "6px", marginBottom: 0 }}>
-            Organizasyonunuzdaki ekip üyelerini, yetkilerini ve erişim izinlerini yönetin.
+          <p style={{ color: "#64748b", fontSize: "14px", marginTop: "4px", margin: 0 }}>
+            Manage your organization's team members and system permissions.
           </p>
         </div>
         {(currentUserRole === "tenant_owner" || currentUserRole === "tenant_admin") && (
           <button
             onClick={openCreateModal}
             style={{
-              background: "#10b981",
+              background: "var(--primary, #10b981)",
               color: "#ffffff",
               fontWeight: 600,
-              fontSize: "14px",
-              padding: "10px 20px",
+              fontSize: "13px",
+              padding: "8px 16px",
               borderRadius: "8px",
               border: "none",
               cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
-              boxShadow: "0 4px 12px rgba(16, 185, 129, 0.2)",
-              transition: "all 0.2s ease"
+              transition: "all 0.15s ease"
             }}
+            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "#059669"}
+            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "var(--primary, #10b981)"}
           >
-            <svg style={{ width: 18, height: 18 }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-            </svg>
-            Yeni Kullanıcı
+            Add User
           </button>
         )}
       </div>
 
-      {/* Stats Cards */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "20px", marginBottom: "32px" }}>
-        <div style={{ background: "#111827", border: "1px solid #1f2937", borderRadius: "12px", padding: "20px 24px" }}>
-          <div style={{ fontSize: "12px", color: "#9ca3af", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px" }}>Toplam Kullanıcı</div>
-          <div style={{ fontSize: "28px", fontWeight: 800, color: "#ffffff", marginTop: "4px" }}>{totalUsers}</div>
+      {/* Counters / Stats Section */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "20px", marginBottom: "24px" }}>
+        <div style={{
+          backgroundColor: "#ffffff",
+          border: "1px solid #e2e8f0",
+          borderRadius: "12px",
+          padding: "16px 20px",
+          boxShadow: "0 1px 3px rgba(0,0,0,0.02)",
+          display: "flex",
+          flexDirection: "column",
+          gap: "4px",
+          transition: "transform 0.15s ease"
+        }} className="stat-card">
+          <span style={{ fontSize: "11px", color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px" }}>Active Screens</span>
+          <span style={{ fontSize: "24px", fontWeight: 800, color: "#10b981" }}>{activeScreensCount}</span>
         </div>
-        <div style={{ background: "#111827", border: "1px solid #1f2937", borderRadius: "12px", padding: "20px 24px" }}>
-          <div style={{ fontSize: "12px", color: "#10b981", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px" }}>Aktif Kullanıcı</div>
-          <div style={{ fontSize: "28px", fontWeight: 800, color: "#10b981", marginTop: "4px" }}>{activeUsers}</div>
+        <div style={{
+          backgroundColor: "#ffffff",
+          border: "1px solid #e2e8f0",
+          borderRadius: "12px",
+          padding: "16px 20px",
+          boxShadow: "0 1px 3px rgba(0,0,0,0.02)",
+          display: "flex",
+          flexDirection: "column",
+          gap: "4px",
+          transition: "transform 0.15s ease"
+        }} className="stat-card">
+          <span style={{ fontSize: "11px", color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px" }}>Inactive Screens</span>
+          <span style={{ fontSize: "24px", fontWeight: 800, color: "#64748b" }}>{passiveScreensCount}</span>
         </div>
-        <div style={{ background: "#111827", border: "1px solid #1f2937", borderRadius: "12px", padding: "20px 24px" }}>
-          <div style={{ fontSize: "12px", color: "#ef4444", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px" }}>Pasif Kullanıcı</div>
-          <div style={{ fontSize: "28px", fontWeight: 800, color: "#ef4444", marginTop: "4px" }}>{inactiveUsers}</div>
+        <div style={{
+          backgroundColor: "#ffffff",
+          border: "1px solid #e2e8f0",
+          borderRadius: "12px",
+          padding: "16px 20px",
+          boxShadow: "0 1px 3px rgba(0,0,0,0.02)",
+          display: "flex",
+          flexDirection: "column",
+          gap: "4px",
+          transition: "transform 0.15s ease"
+        }} className="stat-card">
+          <span style={{ fontSize: "11px", color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px" }}>Registered Users</span>
+          <span style={{ fontSize: "24px", fontWeight: 800, color: "#0f172a" }}>{registeredUsersCount}</span>
         </div>
       </div>
 
-      {/* Search & Table Wrapper */}
-      <div style={{ background: "#111827", border: "1px solid #1f2937", borderRadius: "16px", padding: "24px", boxShadow: "0 10px 25px -5px rgba(0,0,0,0.3)" }}>
-        {/* Search Input */}
-        <div style={{ position: "relative", marginBottom: "20px" }}>
-          <svg style={{ position: "absolute", left: "14px", top: "50%", transform: "translateY(-50%)", color: "#9ca3af", width: "18px", height: "18px" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      {/* Main Container */}
+      <div style={{
+        backgroundColor: "#ffffff",
+        border: "1px solid #e2e8f0",
+        borderRadius: "12px",
+        padding: "20px",
+        boxShadow: "0 1px 3px rgba(0,0,0,0.05)"
+      }}>
+        {/* Search */}
+        <div style={{ position: "relative", marginBottom: "16px" }}>
+          <svg style={{ position: "absolute", left: "12px", top: "50%", transform: "translateY(-50%)", color: "#94a3b8", width: "16px", height: "16px", pointerEvents: "none" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
           </svg>
           <input
             type="text"
-            placeholder="İsim, e-posta veya role göre ara..."
+            placeholder="Search users..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             style={{
               width: "100%",
-              padding: "12px 16px 12px 44px",
-              background: "#1f2937",
-              border: "1px solid #374151",
-              color: "#ffffff",
-              borderRadius: "10px",
-              fontSize: "14px"
+              padding: "8px 12px 8px 36px",
+              background: "#f8fafc",
+              border: "1px solid #cbd5e1",
+              color: "#0f172a",
+              borderRadius: "8px",
+              fontSize: "13px",
+              boxSizing: "border-box",
+              outline: "none"
             }}
+            className="search-input"
           />
         </div>
 
-        {/* Content Section */}
-        {loading ? (
-          <div style={{ display: "flex", justifyContent: "center", padding: "48px 0", color: "#9ca3af" }}>
-            Yükleniyor...
-          </div>
-        ) : error ? (
-          <div style={{ padding: "20px", background: "rgba(239, 68, 68, 0.1)", border: "1px solid rgba(239, 68, 68, 0.2)", borderRadius: "8px", color: "#fca5a5" }}>
+        {error && (
+          <div style={{ padding: "12px", background: "rgba(239, 68, 68, 0.05)", border: "1px solid rgba(239, 68, 68, 0.15)", borderRadius: "8px", color: "#dc2626", fontSize: "13px", marginBottom: "16px" }}>
             {error}
           </div>
+        )}
+
+        {/* Users Table */}
+        {loading ? (
+          <div style={{ display: "flex", justifyContent: "center", alignItems: "center", padding: "40px 0", gap: "8px", color: "#64748b", fontSize: "13px" }}>
+            <div className="spinner" style={{
+              width: "18px",
+              height: "18px",
+              border: "2px solid rgba(16, 185, 129, 0.1)",
+              borderTopColor: "var(--primary, #10b981)",
+              borderRadius: "50%",
+              animation: "spin 0.8s linear infinite"
+            }} />
+            Loading...
+          </div>
         ) : filteredUsers.length === 0 ? (
-          <div style={{ textAlign: "center", padding: "48px 24px", color: "#9ca3af" }}>
-            Kullanıcı bulunamadı.
+          <div style={{ textAlign: "center", padding: "40px 0", color: "#64748b", fontSize: "13px" }}>
+            No users found.
           </div>
         ) : (
           <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
               <thead>
-                <tr style={{ borderBottom: "1px solid #1f2937" }}>
-                  <th style={{ padding: "14px 12px", textAlign: "left", fontSize: "11px", fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.5px" }}>Kullanıcı</th>
-                  <th style={{ padding: "14px 12px", textAlign: "left", fontSize: "11px", fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.5px" }}>Rol</th>
-                  <th style={{ padding: "14px 12px", textAlign: "left", fontSize: "11px", fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.5px" }}>Durum</th>
-                  <th style={{ padding: "14px 12px", textAlign: "left", fontSize: "11px", fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.5px" }}>Kayıt Tarihi</th>
-                  <th style={{ padding: "14px 12px", textAlign: "right", fontSize: "11px", fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.5px" }}>Eylemler</th>
+                <tr style={{ borderBottom: "1px solid #f1f5f9" }}>
+                  <th style={{ padding: "12px 8px", color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", fontSize: "11px", letterSpacing: "0.5px", width: "40%" }}>USER</th>
+                  <th style={{ padding: "12px 8px", color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", fontSize: "11px", letterSpacing: "0.5px", width: "30%" }}>EMAIL</th>
+                  <th style={{ padding: "12px 8px", color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", fontSize: "11px", letterSpacing: "0.5px", width: "15%" }}>ROLE</th>
+                  <th style={{ padding: "12px 8px", color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", fontSize: "11px", letterSpacing: "0.5px", textAlign: "right", width: "15%" }}>ACTIONS</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredUsers.map((user) => {
-                  const roleBadge = getRoleBadgeStyle(user.role);
-                  return (
-                    <tr key={user.id} style={{ borderBottom: "1px solid #1f2937" }}>
-                      <td style={{ padding: "16px 12px" }}>
-                        <div style={{ fontWeight: 700, color: "#ffffff" }}>{user.displayName}</div>
-                        <div style={{ fontSize: "12px", color: "#9ca3af", marginTop: "2px" }}>{user.email}</div>
-                      </td>
-                      <td style={{ padding: "16px 12px" }}>
+                {filteredUsers.map((user) => (
+                  <tr key={user.id} className="table-row" style={{ borderBottom: "1px solid #f1f5f9", transition: "all 0.15s" }}>
+                    {/* User display name and active dot */}
+                    <td style={{ padding: "14px 8px", fontWeight: 600, color: "#0f172a" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                         <span
                           style={{
-                            display: "inline-block",
-                            background: roleBadge.bg,
-                            color: roleBadge.color,
-                            fontSize: "11px",
-                            fontWeight: 700,
-                            padding: "4px 10px",
-                            borderRadius: "999px",
-                            textTransform: "uppercase"
+                            width: "6px",
+                            height: "6px",
+                            borderRadius: "50%",
+                            backgroundColor: user.isActive ? "var(--primary, #10b981)" : "#cbd5e1",
+                            display: "inline-block"
                           }}
-                        >
-                          {roleBadge.label}
-                        </span>
-                      </td>
-                      <td style={{ padding: "16px 12px" }}>
-                        <span
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: "6px",
-                            fontSize: "13px",
-                            color: user.isActive ? "#10b981" : "#ef4444"
-                          }}
-                        >
-                          <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: user.isActive ? "#10b981" : "#ef4444" }} />
-                          {user.isActive ? "Aktif" : "Pasif"}
-                        </span>
-                      </td>
-                      <td style={{ padding: "16px 12px", color: "#9ca3af", fontSize: "13px" }}>
-                        {user.createdAt ? new Date(user.createdAt).toLocaleDateString("tr-TR") : "-"}
-                      </td>
-                      <td style={{ padding: "16px 12px", textAlign: "right" }}>
-                        {/* Only permit editing/deleting if actor has admin or owner roles, and doesn't target own owner account */}
-                        {(currentUserRole === "tenant_owner" || currentUserRole === "tenant_admin") && (
-                          <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+                          title={user.isActive ? "Active" : "Inactive"}
+                        />
+                        {user.displayName}
+                      </div>
+                    </td>
+                    
+                    {/* Email */}
+                    <td style={{ padding: "14px 8px", color: "#475569" }}>
+                      {user.email}
+                    </td>
+
+                    {/* Role */}
+                    <td style={{ padding: "14px 8px", color: "#64748b", fontWeight: 500 }}>
+                      {getRoleLabel(user.role)}
+                    </td>
+
+                    {/* Actions */}
+                    <td style={{ padding: "14px 8px", textAlign: "right" }}>
+                      {(currentUserRole === "tenant_owner" || currentUserRole === "tenant_admin") && (
+                        <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+                          <button
+                            onClick={() => openEditModal(user)}
+                            style={{
+                              backgroundColor: "#f1f5f9",
+                              color: "#475569",
+                              fontWeight: 600,
+                              fontSize: "12px",
+                              padding: "5px 12px",
+                              border: "none",
+                              borderRadius: "6px",
+                              cursor: "pointer",
+                              transition: "all 0.15s"
+                            }}
+                            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "#e2e8f0"}
+                            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "#f1f5f9"}
+                          >
+                            Edit
+                          </button>
+                          {user.role !== "tenant_owner" && (
                             <button
-                              onClick={() => openEditModal(user)}
-                              style={{ background: "#374151", color: "#ffffff", padding: "6px 12px", fontSize: "12px", borderRadius: "6px", border: "none", cursor: "pointer" }}
+                              onClick={() => handleDeleteUser(user.id)}
+                              style={{
+                                backgroundColor: "rgba(239, 68, 68, 0.08)",
+                                color: "#ef4444",
+                                fontWeight: 600,
+                                fontSize: "12px",
+                                padding: "5px 12px",
+                                border: "none",
+                                borderRadius: "6px",
+                                cursor: "pointer",
+                                transition: "all 0.15s"
+                              }}
+                              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "rgba(239, 68, 68, 0.15)"}
+                              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "rgba(239, 68, 68, 0.08)"}
                             >
-                              Düzenle
+                              Delete
                             </button>
-                            {user.role !== "tenant_owner" && (
-                              <button
-                                onClick={() => handleDeleteUser(user.id)}
-                                style={{ background: "rgba(239, 68, 68, 0.1)", color: "#ef4444", padding: "6px 12px", fontSize: "12px", borderRadius: "6px", border: "1px solid rgba(239, 68, 68, 0.2)", cursor: "pointer" }}
-                              >
-                                Sil
-                              </button>
-                            )}
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
+                          )}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -381,65 +442,129 @@ export default function UsersPage() {
 
       {/* Modal Dialog */}
       {isModalOpen && (
-        <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.65)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: "20px" }}>
-          <div style={{ background: "#111827", border: "1px solid #1f2937", borderRadius: "16px", width: "100%", maxWidth: "480px", padding: "32px", boxShadow: "0 20px 25px -5px rgba(0,0,0,0.4)" }}>
-            <h2 style={{ fontSize: "20px", fontWeight: 800, color: "#ffffff", margin: "0 0 20px 0" }}>
-              {modalMode === "create" ? "Yeni Kullanıcı Oluştur" : "Kullanıcı Bilgilerini Düzenle"}
+        <div style={{
+          position: "fixed",
+          inset: 0,
+          background: "rgba(15, 23, 42, 0.3)",
+          backdropFilter: "blur(4px)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          zIndex: 1000,
+          padding: "20px",
+          animation: "modalFadeIn 0.15s ease-out"
+        }}>
+          <div style={{
+            background: "#ffffff",
+            border: "1px solid #e2e8f0",
+            borderRadius: "12px",
+            width: "100%",
+            maxWidth: "440px",
+            padding: "24px",
+            boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.05), 0 10px 10px -5px rgba(0, 0, 0, 0.02)"
+          }}>
+            <h2 style={{ fontSize: "17px", fontWeight: 700, color: "#0f172a", margin: "0 0 16px 0" }}>
+              {modalMode === "create" ? "Add New User" : "Edit User Details"}
             </h2>
 
             {formError && (
-              <div style={{ background: "rgba(239, 68, 68, 0.1)", border: "1px solid rgba(239, 68, 68, 0.2)", borderRadius: "8px", padding: "12px", color: "#fca5a5", fontSize: "13px", marginBottom: "20px" }}>
+              <div style={{ background: "rgba(239, 68, 68, 0.05)", border: "1px solid rgba(239, 68, 68, 0.15)", borderRadius: "6px", padding: "10px", color: "#dc2626", fontSize: "12px", marginBottom: "16px" }}>
                 {formError}
               </div>
             )}
 
-            <form onSubmit={handleFormSubmit} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+            <form onSubmit={handleFormSubmit} style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
               <div>
-                <label style={{ display: "block", fontSize: "11px", fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>İsim Soyisim</label>
+                <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "#334155", marginBottom: "6px" }}>Display Name</label>
                 <input
                   type="text"
                   required
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
-                  style={{ width: "100%", background: "#1f2937", border: "1px solid #374151", color: "#ffffff", borderRadius: "8px", padding: "10px 12px", fontSize: "14px" }}
+                  placeholder="e.g. John Doe"
+                  style={{
+                    width: "100%",
+                    background: "#ffffff",
+                    border: "1px solid #cbd5e1",
+                    color: "#0f172a",
+                    borderRadius: "6px",
+                    padding: "8px 10px",
+                    fontSize: "13px",
+                    boxSizing: "border-box",
+                    outline: "none"
+                  }}
+                  className="modal-input"
                 />
               </div>
 
               <div>
-                <label style={{ display: "block", fontSize: "11px", fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>E-posta Adresi</label>
+                <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "#334155", marginBottom: "6px" }}>Email Address</label>
                 <input
                   type="email"
                   required
                   disabled={modalMode === "edit"}
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  style={{ width: "100%", background: modalMode === "edit" ? "#111827" : "#1f2937", border: "1px solid #374151", color: modalMode === "edit" ? "#9ca3af" : "#ffffff", borderRadius: "8px", padding: "10px 12px", fontSize: "14px" }}
+                  placeholder="name@company.com"
+                  style={{
+                    width: "100%",
+                    background: modalMode === "edit" ? "#f8fafc" : "#ffffff",
+                    border: "1px solid #cbd5e1",
+                    color: modalMode === "edit" ? "#64748b" : "#0f172a",
+                    borderRadius: "6px",
+                    padding: "8px 10px",
+                    fontSize: "13px",
+                    boxSizing: "border-box",
+                    outline: "none"
+                  }}
+                  className={modalMode === "edit" ? "" : "modal-input"}
                 />
               </div>
 
               <div>
-                <label style={{ display: "block", fontSize: "11px", fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>
-                  {modalMode === "create" ? "Şifre" : "Şifreyi Değiştir (İsteğe Bağlı)"}
+                <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "#334155", marginBottom: "6px" }}>
+                  {modalMode === "create" ? "Password" : "Change Password (Optional)"}
                 </label>
                 <input
                   type="password"
                   required={modalMode === "create"}
-                  placeholder={modalMode === "edit" ? "Değiştirmek istemiyorsanız boş bırakın" : ""}
+                  placeholder={modalMode === "edit" ? "Leave blank to keep current password" : "••••••••"}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  style={{ width: "100%", background: "#1f2937", border: "1px solid #374151", color: "#ffffff", borderRadius: "8px", padding: "10px 12px", fontSize: "14px" }}
+                  style={{
+                    width: "100%",
+                    background: "#ffffff",
+                    border: "1px solid #cbd5e1",
+                    color: "#0f172a",
+                    borderRadius: "6px",
+                    padding: "8px 10px",
+                    fontSize: "13px",
+                    boxSizing: "border-box",
+                    outline: "none"
+                  }}
+                  className="modal-input"
                 />
               </div>
 
               {selectedUser?.role !== "tenant_owner" && (
                 <div>
-                  <label style={{ display: "block", fontSize: "11px", fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>Kullanıcı Rolü</label>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "#334155", marginBottom: "6px" }}>User Role</label>
                   <select
                     value={role}
                     onChange={(e) => setRole(e.target.value as User["role"])}
-                    style={{ width: "100%", background: "#1f2937", border: "1px solid #374151", color: "#ffffff", borderRadius: "8px", padding: "10px 12px", fontSize: "14px" }}
+                    style={{
+                      width: "100%",
+                      background: "#ffffff",
+                      border: "1px solid #cbd5e1",
+                      color: "#0f172a",
+                      borderRadius: "6px",
+                      padding: "8px 10px",
+                      fontSize: "13px",
+                      boxSizing: "border-box",
+                      outline: "none"
+                    }}
                   >
-                    {currentUserRole === "tenant_owner" && <option value="tenant_admin">Tenant Admin</option>}
+                    {currentUserRole === "tenant_owner" && <option value="tenant_admin">Admin</option>}
                     <option value="operator">Operator</option>
                     <option value="viewer">Viewer</option>
                   </select>
@@ -447,40 +572,85 @@ export default function UsersPage() {
               )}
 
               {selectedUser?.role !== "tenant_owner" && modalMode === "edit" && (
-                <div style={{ display: "flex", alignItems: "center", gap: "10px", marginTop: "8px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "4px" }}>
                   <input
                     type="checkbox"
                     id="isActiveCheck"
                     checked={isActive}
                     onChange={(e) => setIsActive(e.target.checked)}
-                    style={{ cursor: "pointer", width: "16px", height: "16px" }}
+                    style={{ cursor: "pointer", width: "15px", height: "15px", accentColor: "var(--primary, #10b981)" }}
                   />
-                  <label htmlFor="isActiveCheck" style={{ fontSize: "14px", color: "#ffffff", cursor: "pointer" }}>
-                    Hesap Aktif
+                  <label htmlFor="isActiveCheck" style={{ fontSize: "13px", color: "#334155", cursor: "pointer", fontWeight: 600 }}>
+                    Account Active
                   </label>
                 </div>
               )}
 
-              <div style={{ display: "flex", gap: "12px", justifyContent: "flex-end", marginTop: "12px" }}>
+              <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end", marginTop: "12px" }}>
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
-                  style={{ background: "#374151", color: "#ffffff", padding: "10px 18px", borderRadius: "8px", border: "none", cursor: "pointer", fontWeight: 600 }}
+                  style={{
+                    background: "#ffffff",
+                    border: "1px solid #cbd5e1",
+                    color: "#475569",
+                    padding: "8px 16px",
+                    borderRadius: "6px",
+                    fontWeight: 600,
+                    fontSize: "13px",
+                    cursor: "pointer"
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "#f8fafc"}
+                  onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "#ffffff"}
                 >
-                  İptal
+                  Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={formSubmitting}
-                  style={{ background: "#10b981", color: "#ffffff", padding: "10px 24px", borderRadius: "8px", border: "none", cursor: "pointer", fontWeight: 600 }}
+                  style={{
+                    background: "var(--primary, #10b981)",
+                    color: "#ffffff",
+                    padding: "8px 20px",
+                    borderRadius: "6px",
+                    border: "none",
+                    cursor: "pointer",
+                    fontWeight: 600,
+                    fontSize: "13px"
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "#059669"}
+                  onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "var(--primary, #10b981)"}
                 >
-                  {formSubmitting ? "Kaydediliyor..." : "Kaydet"}
+                  {formSubmitting ? "Saving..." : "Save"}
                 </button>
               </div>
             </form>
           </div>
         </div>
       )}
+
+      {/* Embedded Animations and CSS overrides */}
+      <style jsx global>{`
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+        @keyframes modalFadeIn {
+          from { opacity: 0; transform: scale(0.97); }
+          to { opacity: 1; transform: scale(1); }
+        }
+        .table-row:hover {
+          background-color: #f8fafc !important;
+        }
+        .stat-card:hover {
+          transform: translateY(-1px);
+          box-shadow: 0 4px 6px -1px rgba(0,0,0,0.04) !important;
+          border-color: #cbd5e1 !important;
+        }
+        .search-input:focus, .modal-input:focus {
+          border-color: var(--primary, #10b981) !important;
+          box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15) !important;
+        }
+      `}</style>
     </div>
   );
 }

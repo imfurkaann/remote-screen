@@ -11,6 +11,7 @@ import { metrics } from "../lib/metrics.js";
 import { isPostgresConnected } from "../lib/postgres.js";
 import { requireRoles, requireUserAuth } from "../middlewares/auth.js";
 import { DeviceModel } from "../models/device.model.js";
+import { UserModel } from "../models/user.model.js";
 import { MediaModel } from "../models/media.model.js";
 import { PlaylistModel } from "../models/playlist.model.js";
 import { MediaFolderModel } from "../models/media-folder.model.js";
@@ -90,6 +91,12 @@ function normalizePlaylistItems(input: unknown): PlaylistInputItem[] {
 type AuthCtx = { userId: string; tenantId: string; role: string };
 
 function buildMediaFilter(auth: AuthCtx, extra: Record<string, any> = {}) {
+  if (auth.role === "super_admin" && auth.tenantId === "system") {
+    return { ...extra };
+  }
+  if (auth.role === "super_admin") {
+    return { tenantId: auth.tenantId, ...extra };
+  }
   const base = auth.role === "tenant_owner"
     ? { tenantId: auth.tenantId }
     : { tenantId: auth.tenantId, ownerUserId: auth.userId };
@@ -97,6 +104,12 @@ function buildMediaFilter(auth: AuthCtx, extra: Record<string, any> = {}) {
 }
 
 function buildDeviceFilter(auth: AuthCtx, extra: Record<string, any> = {}) {
+  if (auth.role === "super_admin" && auth.tenantId === "system") {
+    return { ...extra };
+  }
+  if (auth.role === "super_admin") {
+    return { tenantId: auth.tenantId, ...extra };
+  }
   const base = auth.role === "tenant_owner"
     ? { tenantId: auth.tenantId }
     : { tenantId: auth.tenantId, pairedOwnerUserId: auth.userId };
@@ -104,7 +117,7 @@ function buildDeviceFilter(auth: AuthCtx, extra: Record<string, any> = {}) {
 }
 
 async function assertDeviceOwnership(deviceId: string, auth: AuthCtx): Promise<boolean> {
-  if (auth.role === "tenant_owner") return true;
+  if (auth.role === "super_admin" || auth.role === "tenant_owner") return true;
   const d = await DeviceModel.findOne({ _id: deviceId, tenantId: auth.tenantId, pairedOwnerUserId: auth.userId });
   return d !== null;
 }
@@ -445,9 +458,10 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
         stream.on("error", reject);
       });
 
-      const extension = path.extname(req.file.originalname) || ".bin";
-      const fileName = `${randomUUID()}${extension}`;
-      const relativePath = path.join("uploads", "media", tenantId, fileName);
+      const userId = req.auth!.userId;
+      const uniqueId = randomUUID();
+      const fileName = `${uniqueId}-${req.file.originalname}`;
+      const relativePath = path.join("uploads", "media", tenantId, userId, fileName);
       const absolutePath = path.resolve(process.cwd(), relativePath);
       await mkdir(path.dirname(absolutePath), { recursive: true });
 

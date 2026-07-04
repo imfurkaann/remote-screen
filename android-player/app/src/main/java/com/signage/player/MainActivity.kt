@@ -14,7 +14,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Spacer
@@ -23,13 +25,18 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.border
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -40,9 +47,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.AspectRatioFrameLayout
+import com.signage.player.boot.PlayerForegroundService
 import com.signage.player.boot.StartupCoordinator
 import com.signage.player.network.DevicePairingState
 import com.signage.player.network.SessionManager
@@ -50,6 +61,7 @@ import com.signage.player.ui.PlayerUiStateStore
 import com.signage.player.ui.theme.SignageplayerTheme
 import java.io.File
 import android.graphics.Bitmap
+import android.view.KeyEvent
 import android.view.PixelCopy
 import android.view.Window
 import java.io.FileOutputStream
@@ -60,6 +72,38 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 
 class MainActivity : ComponentActivity() {
+    private var keyPressCount = 0
+    private var lastKeyPressTime = 0L
+    private var onResetRequested: (() -> Unit)? = null
+
+    fun setOnResetRequestedListener(listener: () -> Unit) {
+        onResetRequested = listener
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_BACK || 
+            keyCode == KeyEvent.KEYCODE_MENU || 
+            keyCode == KeyEvent.KEYCODE_SETTINGS) {
+            
+            val now = System.currentTimeMillis()
+            if (now - lastKeyPressTime < 1200L) {
+                keyPressCount++
+            } else {
+                keyPressCount = 1
+            }
+            lastKeyPressTime = now
+
+            if (keyPressCount >= 3) {
+                keyPressCount = 0
+                runOnUiThread {
+                    onResetRequested?.invoke()
+                }
+            }
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val runtimeDeviceId = intent?.getStringExtra("device_id")?.trim().orEmpty().ifBlank { null }
@@ -93,6 +137,22 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Guarantee the foreground service is alive every time the Activity
+        // becomes visible — covers the case where RAM pressure killed the
+        // service while the Activity was paused (e.g. another app in focus).
+        PlayerForegroundService.start(this)
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        // singleTop: if BootReceiver or a deep-link relaunches us while we are
+        // already in the foreground, accept the new intent and bring to front
+        // without creating a duplicate Activity on the back stack.
+        setIntent(intent)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -156,9 +216,46 @@ class MainActivity : ComponentActivity() {
  */
 @Composable
 fun PairingScreen(modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val activity = context as? MainActivity
+    var showResetDialog by remember { mutableStateOf(false) }
     val uiState by PlayerUiStateStore.state.collectAsState()
     val playerController = remember { StartupCoordinator.getPlayerController() }
     val pairingState by SessionManager.state.collectAsState()
+
+    val hardwareId = remember { com.signage.player.storage.HardwareIdStore(context).getOrCreateHardwareId() }
+    val ipAddress = remember { getLocalIpAddress() }
+    val backendUrl = remember { StartupCoordinator.getBackendBaseUrl() }
+
+    remember(activity) {
+        activity?.setOnResetRequestedListener {
+            showResetDialog = true
+        }
+        Unit
+    }
+
+    if (showResetDialog) {
+        AlertDialog(
+            onDismissRequest = { showResetDialog = false },
+            title = { Text(text = "Reset Screen?") },
+            text = { Text(text = "This will unpair the screen, clear all cached content, and generate a new pairing code.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showResetDialog = false
+                        StartupCoordinator.forceReset(context)
+                    }
+                ) {
+                    Text("Reset")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showResetDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 
     // Screen-off takes priority over everything else (except when unpaired, so the pairing screen is always accessible).
     if (uiState.isScreenOff && pairingState !is DevicePairingState.Unpaired) {
@@ -166,6 +263,13 @@ fun PairingScreen(modifier: Modifier = Modifier) {
             modifier = modifier
                 .fillMaxSize()
                 .background(Color.Black)
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onDoubleTap = {
+                            showResetDialog = true
+                        }
+                    )
+                }
         )
         return
     }
@@ -189,7 +293,14 @@ fun PairingScreen(modifier: Modifier = Modifier) {
             modifier = modifier
                 .fillMaxSize()
                 .background(backgroundGradient)
-                .padding(32.dp),
+                .padding(32.dp)
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onDoubleTap = {
+                            showResetDialog = true
+                        }
+                    )
+                },
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -280,7 +391,14 @@ fun PairingScreen(modifier: Modifier = Modifier) {
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
-            .background(Color.Black),
+            .background(Color.Black)
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onDoubleTap = {
+                        showResetDialog = true
+                    }
+                )
+            },
         contentAlignment = Alignment.Center
     ) {
         val isLandscape = uiState.orientation == 90 || uiState.orientation == 270
@@ -385,20 +503,91 @@ fun PairingScreen(modifier: Modifier = Modifier) {
                         verticalArrangement = Arrangement.Center,
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
+                        // Glowing status indicator
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center,
+                            modifier = Modifier
+                                .background(Color(0xFF10B981).copy(alpha = 0.1f), shape = RoundedCornerShape(16.dp))
+                                .border(1.dp, Color(0xFF10B981).copy(alpha = 0.25f), shape = RoundedCornerShape(16.dp))
+                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .background(Color(0xFF10B981), shape = androidx.compose.foundation.shape.CircleShape)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Sistem Bağlı / Çevrimiçi",
+                                color = Color(0xFF10B981),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(24.dp))
+
                         Text(
-                            text = "Medya Bekleniyor",
+                            text = "Remote Screen",
                             color = Color.White,
                             style = MaterialTheme.typography.headlineMedium,
                             fontWeight = FontWeight.Bold,
                             textAlign = TextAlign.Center,
                             modifier = Modifier.padding(bottom = 8.dp)
                         )
+
                         Text(
-                            text = "Bu ekran başarıyla eşleştirildi. Oynatılacak içerik bekleniyor...",
+                            text = "Cihaz başarıyla eşleştirildi. Oynatma listesi atanması bekleniyor. Lütfen kontrol panelinizden içerik gönderin.",
                             color = Color(0xFF9E95B8),
-                            fontSize = 16.sp,
-                            textAlign = TextAlign.Center
+                            fontSize = 15.sp,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(horizontal = 24.dp)
                         )
+
+                        Spacer(modifier = Modifier.height(40.dp))
+
+                        // Diagnostics Card
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth(0.85f)
+                                .background(Color.White.copy(alpha = 0.02f), shape = RoundedCornerShape(16.dp))
+                                .border(1.dp, Color.White.copy(alpha = 0.05f), shape = RoundedCornerShape(16.dp))
+                                .padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                text = "Cihaz Tanı Bilgileri",
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(bottom = 4.dp)
+                            )
+                            
+                            Row(
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(text = "IP Adresi:", color = Color(0xFF5A526E), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                Text(text = ipAddress, color = Color(0xFF9E95B8), fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                            }
+                            
+                            Row(
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(text = "Cihaz Kimliği:", color = Color(0xFF5A526E), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                Text(text = hardwareId, color = Color(0xFF9E95B8), fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                            }
+                            
+                            Row(
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(text = "Sunucu:", color = Color(0xFF5A526E), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                Text(text = backendUrl, color = Color(0xFF9E95B8), fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                            }
+                        }
                     }
                 }
             }
@@ -429,4 +618,23 @@ fun GreetingPreview() {
     SignageplayerTheme {
         PairingScreen()
     }
+}
+
+fun getLocalIpAddress(): String {
+    try {
+        val interfaces = java.util.Collections.list(java.net.NetworkInterface.getNetworkInterfaces())
+        for (intf in interfaces) {
+            val addrs = java.util.Collections.list(intf.inetAddresses)
+            for (addr in addrs) {
+                if (!addr.isLoopbackAddress) {
+                    val sAddr = addr.hostAddress ?: ""
+                    val isIPv4 = sAddr.indexOf(':') < 0
+                    if (isIPv4) return sAddr
+                }
+            }
+        }
+    } catch (e: Exception) {
+        Log.e("MainActivity", "Failed to resolve local IP", e)
+    }
+    return "Bilinmiyor"
 }

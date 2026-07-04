@@ -99,7 +99,7 @@ heartbeatBuffer.start();
 // ---------------------------------------------------------------------------
 
 async function checkDeviceAccess(deviceId: string, auth: { userId: string; tenantId: string; role: string }): Promise<boolean> {
-  if (auth.role === "tenant_owner") return true;
+  if (auth.role === "super_admin" || auth.role === "tenant_owner") return true;
   const query = deviceId.match(/^[0-9a-fA-F]{24}$/)
     ? { _id: deviceId, tenantId: auth.tenantId, pairedOwnerUserId: auth.userId }
     : { hardwareId: deviceId, tenantId: auth.tenantId, pairedOwnerUserId: auth.userId };

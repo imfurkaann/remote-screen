@@ -1,6 +1,7 @@
 package com.signage.player.boot
 
 import android.content.Context
+import android.util.Log
 import com.signage.player.commands.CommandDispatchPayload
 import com.signage.player.commands.CommandExecutor
 import com.signage.player.config.AppDefaults
@@ -9,7 +10,9 @@ import com.signage.player.mediaplayer.PlayerController
 import com.signage.player.network.RetrofitFactory
 import com.signage.player.network.SessionManager
 import com.signage.player.network.SocketClientManager
+import com.signage.player.network.UnpairRequest
 import com.signage.player.storage.PlayerDatabaseProvider
+import com.signage.player.storage.PairingStateStore
 import com.signage.player.storage.HardwareIdStore
 import com.signage.player.storage.PlaylistRepository
 import com.signage.player.sync.ContentSyncManager
@@ -33,6 +36,61 @@ object StartupCoordinator {
     fun getBackendBaseUrl(): String = backendBaseUrl
     fun getTelemetryReporter(): DeviceTelemetryReporter? = telemetryReporterRef
 
+    fun forceReset(context: Context) {
+        appScope.launch {
+            try {
+                Log.d("StartupCoordinator", "Forcing device unpair and clearing all local caches...")
+                
+                // 0. Stop SessionManager first to prevent background thread race conditions
+                SessionManager.stop()
+
+                // 1. Call backend unpair API
+                val resolvedSocketBaseUrl = getBackendBaseUrl()
+                val pairingApi = RetrofitFactory.create(resolvedSocketBaseUrl)
+                val hardwareId = HardwareIdStore(context).getOrCreateHardwareId()
+                try {
+                    pairingApi.unpairDevice(
+                        bootstrapKey = AppDefaults.BOOTSTRAP_KEY,
+                        request = UnpairRequest(hardware_id = hardwareId)
+                    )
+                    Log.d("StartupCoordinator", "Backend unpair completed successfully")
+                } catch (e: Exception) {
+                    Log.e("StartupCoordinator", "Failed to call backend unpair API", e)
+                }
+
+                // 2. Clear pairing state in store
+                val store = PairingStateStore(context)
+                store.clearPaired()
+
+                // 3. Clear database playlist
+                val db = PlayerDatabaseProvider.getDatabase(context)
+                val playlistRepository = PlaylistRepository(db.playlistDao())
+                playlistRepository.replacePlaylist(emptyList())
+
+                // 4. Delete cached media files on disk
+                val contentRoot = File(context.filesDir, "content")
+                if (contentRoot.exists()) {
+                    contentRoot.deleteRecursively()
+                }
+
+                // 5. Force pause player controller reference so playback stops
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    playerControllerRef?.pause()
+                }
+
+                // 6. Restart SessionManager in unpaired state
+                val activePairingApi = RetrofitFactory.create(getBackendBaseUrl())
+                SessionManager.start(
+                    context = context,
+                    hardwareId = HardwareIdStore(context).getOrCreateHardwareId(),
+                    api = activePairingApi
+                )
+            } catch (e: Exception) {
+                Log.e("StartupCoordinator", "Failed to force reset", e)
+            }
+        }
+    }
+
     private var screenshotProvider: (suspend () -> File?)? = null
 
     fun registerScreenshotProvider(provider: suspend () -> File?) {
@@ -52,6 +110,11 @@ object StartupCoordinator {
         runtimeDeviceId: String? = null,
         socketBaseUrl: String? = null
     ) {
+        // Ensure the foreground service is running so the OS does not kill the
+        // process during startup (e.g. while SessionManager is doing its first
+        // network handshake). This is idempotent — safe to call multiple times.
+        PlayerForegroundService.start(context)
+
         val hardwareId = HardwareIdStore(context).getOrCreateHardwareId()
         val socketDeviceId = runtimeDeviceId ?: hardwareId
         val resolvedSocketBaseUrl = socketBaseUrl ?: AppDefaults.BACKEND_BASE_URL
@@ -63,13 +126,12 @@ object StartupCoordinator {
         SessionManager.start(
             context = context,
             hardwareId = hardwareId,
-            tenantId = AppDefaults.TENANT_ID,
             api = pairingApi
         )
         val telemetryReporter = DeviceTelemetryReporter(
             baseUrl = resolvedSocketBaseUrl,
             bootstrapKey = AppDefaults.BOOTSTRAP_KEY,
-            tenantId = AppDefaults.TENANT_ID,
+            tenantId = null,
             hardwareId = hardwareId,
             deviceIdHint = runtimeDeviceId
         )

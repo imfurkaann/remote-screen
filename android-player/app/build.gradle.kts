@@ -42,10 +42,6 @@ android {
             "String", "BOOTSTRAP_KEY",
             "\"${localProp("BOOTSTRAP_KEY", "local-bootstrap-key")}\""
         )
-        buildConfigField(
-            "String", "TENANT_ID",
-            "\"${localProp("TENANT_ID", "tenant-demo")}\""
-        )
     }
 
     buildTypes {

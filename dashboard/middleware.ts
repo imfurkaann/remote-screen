@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-const PROTECTED_PREFIXES = ["/screens", "/playlists", "/remote-control", "/operations", "/media", "/apps", "/settings"];
+const PROTECTED_PREFIXES = ["/screens", "/playlists", "/remote-control", "/operations", "/media", "/apps", "/settings", "/super-admin"];
 
 function decodeJwt(token: string) {
   try {
@@ -63,6 +63,10 @@ export function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL("/screens?error=unauthorized_role", request.url));
   }
 
+  if (userRole !== "super_admin" && pathname.startsWith("/super-admin")) {
+    return NextResponse.redirect(new URL("/screens?error=unauthorized_role", request.url));
+  }
+
   return NextResponse.next();
 }
 
@@ -74,7 +78,8 @@ export const config = {
     "/operations/:path*",
     "/media/:path*",
     "/apps/:path*",
-    "/settings/:path*"
+    "/settings/:path*",
+    "/super-admin/:path*"
   ]
 };
 

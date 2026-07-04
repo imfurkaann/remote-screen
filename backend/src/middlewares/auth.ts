@@ -63,9 +63,20 @@ export function requireUserAuth(jwtSecret: string, options: JwtValidationOptions
         }
       }
 
+      let tenantId = decoded.tenant_id;
+      if (decoded.role === "super_admin") {
+        const queryTenant = req.query.tenant_id;
+        const headerTenant = req.headers["x-tenant-id"];
+        if (typeof queryTenant === "string" && queryTenant.trim()) {
+          tenantId = queryTenant.trim();
+        } else if (typeof headerTenant === "string" && headerTenant.trim()) {
+          tenantId = headerTenant.trim();
+        }
+      }
+
       req.auth = {
         userId: decoded.sub,
-        tenantId: decoded.tenant_id,
+        tenantId,
         role: decoded.role
       };
 
@@ -89,7 +100,7 @@ export function requireBootstrapKey(bootstrapKey: string) {
 
 export function requireRoles(roles: string[]) {
   return (req: Request, res: Response, next: NextFunction): void => {
-    if (!req.auth || !roles.includes(req.auth.role)) {
+    if (!req.auth || (!roles.includes(req.auth.role) && req.auth.role !== "super_admin")) {
       res.status(403).json({ code: "FORBIDDEN", message: "Insufficient role" });
       return;
     }

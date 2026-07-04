@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { buildApp } from "./app.js";
 import { getEnv } from "./config/env.js";
 import { connectMongo, disconnectMongo } from "./lib/mongo.js";
-import { connectPostgres, disconnectPostgres } from "./lib/postgres.js";
+import { connectPostgres, disconnectPostgres, isPostgresConnected, getPostgresPool } from "./lib/postgres.js";
 import { createSocketServer } from "./sockets/index.js";
 import { setSocketServer } from "./sockets/registry.js";
 
@@ -37,32 +37,95 @@ async function bootstrap(): Promise<void> {
     console.log("[backend] PostgreSQL connection established");
   }
 
-  // Seed default user accounts in MongoDB if they do not exist
+  // Seed default user accounts in MongoDB
   try {
     const { UserModel } = await import("./models/user.model.js");
+    const { TenantModel } = await import("./models/tenant.model.js");
+    const { DeviceModel } = await import("./models/device.model.js");
+    const { MediaModel } = await import("./models/media.model.js");
+    const { PlaylistModel } = await import("./models/playlist.model.js");
+    const { CommandModel } = await import("./models/command.model.js");
     const { hashPassword } = await import("./lib/bcrypt.js");
-    const ownerExists = await UserModel.findOne({ email: "owner@remotescreen.dev" });
-    if (!ownerExists) {
-      const VALID_USERS = [
-        { email: "owner@remotescreen.dev", password: "owner123", role: "tenant_owner", displayName: "Tenant Owner" },
-        { email: "admin@remotescreen.dev", password: "admin123", role: "tenant_admin", displayName: "Tenant Admin" },
-        { email: "operator@remotescreen.dev", password: "operator123", role: "operator", displayName: "Operator" },
-        { email: "viewer@remotescreen.dev", password: "viewer123", role: "viewer", displayName: "Viewer" }
-      ];
-      for (const u of VALID_USERS) {
-        await UserModel.create({
-          tenantId: "tenant-demo",
-          email: u.email,
-          passwordHash: await hashPassword(u.password),
-          role: u.role as any,
-          displayName: u.displayName,
-          isActive: true
-        });
+    const { randomUUID } = await import("node:crypto");
+
+    const dosiniaTenant = await TenantModel.findOne({ name: "Dosinia Luxury Resort" });
+    if (!dosiniaTenant) {
+      console.log("[backend] Clearing old database to initialize Dosinia Luxury Resort...");
+      
+      // Wipe MongoDB collections
+      await TenantModel.deleteMany({});
+      await UserModel.deleteMany({});
+      await DeviceModel.deleteMany({});
+      await MediaModel.deleteMany({});
+      await PlaylistModel.deleteMany({});
+      await CommandModel.deleteMany({});
+
+      // Wipe Postgres if connected
+      if (isPostgresConnected()) {
+        try {
+          const pool = getPostgresPool();
+          await pool.query("DELETE FROM commands");
+          await pool.query("DELETE FROM devices");
+          await pool.query("DELETE FROM playlists");
+          await pool.query("DELETE FROM media");
+          await pool.query("DELETE FROM users");
+          await pool.query("DELETE FROM tenants");
+        } catch (err) {
+          console.error("[backend] Postgres table wipe failed", err);
+        }
       }
-      console.log("[backend] Seeded default user accounts successfully");
+
+      // Seed new Dosinia Luxury Resort tenant
+      const tenantId = randomUUID();
+      const newTenant = await TenantModel.create({
+        _id: tenantId,
+        name: "Dosinia Luxury Resort",
+        isActive: true
+      });
+
+      // Seed Dosinia Luxury Resort tenant super user
+      const newUser = await UserModel.create({
+        tenantId,
+        email: "dosinialuxuryresort@remotescreen.dev",
+        passwordHash: await hashPassword("dosinia123"),
+        role: "tenant_owner",
+        displayName: "Dosinia Super User",
+        isActive: true
+      });
+
+      // Seed Postgres if connected
+      if (isPostgresConnected()) {
+        try {
+          const pool = getPostgresPool();
+          await pool.query(
+            `INSERT INTO tenants (id, name, created_at, updated_at) VALUES ($1::uuid, $2, NOW(), NOW())`,
+            [tenantId, "Dosinia Luxury Resort"]
+          );
+
+          const hex32 = "00000000" + newUser._id.toString();
+          const userUuid = `${hex32.substring(0, 8)}-${hex32.substring(8, 12)}-${hex32.substring(12, 16)}-${hex32.substring(16, 20)}-${hex32.substring(20)}`;
+
+          await pool.query(
+            `INSERT INTO users (id, tenant_id, email, password_hash, display_name, role, created_at, updated_at)
+             VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, NOW(), NOW())`,
+            [
+              userUuid,
+              tenantId,
+              newUser.email,
+              newUser.passwordHash,
+              newUser.displayName,
+              newUser.role
+            ]
+          );
+        } catch (err) {
+          console.error("[backend] Postgres seeding failed", err);
+        }
+      }
+
+      console.log("[backend] Seeded Dosinia Luxury Resort and its super user successfully");
     }
   } catch (err) {
-    console.error("[backend] Failed to seed default user accounts", err);
+    console.error("[backend] Failed to seed default accounts", err);
   }
 
   // Reset all devices status to offline in MongoDB and PostgreSQL on server boot

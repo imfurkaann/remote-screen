@@ -54,6 +54,16 @@ class ContentSyncManager(
     @Volatile
     private var lastAppliedPlaylistId: String = ""
     private val lastAppliedVersion = AtomicInteger(-1)
+    /**
+     * SHA-256 checksum of the last successfully applied playlist.
+     * Used as the primary deduplication key on socket reconnect: when the
+     * backend pushes SYNC_CONTENT on reconnect (to recover missed updates
+     * during an offline period), we skip the sync entirely if the checksum
+     * matches what is already on disk — no redundant downloads, no playback
+     * restart, no visible glitch on screen.
+     */
+    @Volatile
+    private var lastAppliedChecksum: String = ""
 
     // -----------------------------------------------------------------------
     // Shared OkHttp client — connection pooling across all downloads in a
@@ -100,9 +110,27 @@ class ContentSyncManager(
         // The backend currently emits SYNC_CONTENT twice per device (once by
         // hardwareId, once by _id). Skip the duplicate to avoid re-downloading
         // the entire playlist and restarting playback unnecessarily.
+        //
+        // Checksum takes precedence: even if the version number advances (e.g.
+        // an admin saves the playlist without changing content), if the actual
+        // file content is identical we skip the sync. This is the critical
+        // path for socket-reconnect recovery after an internet outage — the
+        // backend pushes the current playlist state on every reconnect.
         val incomingVersion = payload.playlistVersion
+        val incomingChecksum = payload.checksumSha256.orEmpty()
+
+        if (incomingChecksum.isNotEmpty() && incomingChecksum == lastAppliedChecksum) {
+            Log.d(
+                tag,
+                "Skipping SYNC_CONTENT: checksum matches already-applied playlist " +
+                    "(checksum=${incomingChecksum.take(12)}… playlist=${payload.playlistId})"
+            )
+            return
+        }
+
         if (payload.playlistId == lastAppliedPlaylistId &&
-            incomingVersion <= lastAppliedVersion.get()
+            incomingVersion <= lastAppliedVersion.get() &&
+            incomingChecksum.isEmpty()
         ) {
             Log.d(
                 tag,
@@ -219,6 +247,9 @@ class ContentSyncManager(
             // Mark this version as applied — future duplicates will be skipped.
             lastAppliedPlaylistId = payload.playlistId
             lastAppliedVersion.set(incomingVersion)
+            // Update checksum so reconnect-triggered SYNC_CONTENT events with
+            // identical content are skipped without any disk or network access.
+            lastAppliedChecksum = incomingChecksum
 
             if (backupDir.exists()) backupDir.deleteRecursively()
             enforceCacheQuota(contentRoot)

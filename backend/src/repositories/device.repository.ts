@@ -6,7 +6,7 @@ import { withRetry } from "../lib/retry.js";
 const logger = new Logger('DeviceRepository');
 
 type SyncPairingRequestInput = {
-  tenantId: string;
+  tenantId: string | null;
   hardwareId: string;
 };
 
@@ -173,12 +173,12 @@ export class DeviceRepository {
     const pool = getPostgresPool();
     await pool.query(
       `UPDATE devices
-       SET paired_owner_user_id = $1,
+       SET tenant_id = $1,
+           paired_owner_user_id = $2,
            updated_at = CURRENT_TIMESTAMP
-       WHERE tenant_id = $2
-         AND hardware_id = $3
+       WHERE hardware_id = $3
          AND deleted_at IS NULL`,
-      [input.pairedOwnerUserId, input.tenantId, input.hardwareId]
+      [input.tenantId, input.pairedOwnerUserId, input.hardwareId]
     );
 
     logger.debug('Device marked as paired', {

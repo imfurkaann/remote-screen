@@ -21,6 +21,12 @@ interface PairingApiService {
         @Body request: DeviceSessionRequest
     ): DeviceSessionResponse
 
+    @POST("/api/v1/pairing/unpair")
+    suspend fun unpairDevice(
+        @Header("x-bootstrap-key") bootstrapKey: String,
+        @Body request: UnpairRequest
+    ): UnpairResponse
+
     @Multipart
     @POST("/api/v1/commands/devices/{deviceId}/screenshot")
     suspend fun uploadScreenshot(

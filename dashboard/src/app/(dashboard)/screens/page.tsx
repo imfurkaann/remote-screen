@@ -71,12 +71,65 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+/**
+ * Derives a live online/degraded/offline status from the device's last_seen_at
+ * timestamp, independent of the backend `status` field which only updates on
+ * socket connect/disconnect events.
+ *
+ * Thresholds:
+ *  - ONLINE:   last heartbeat < 60 s ago
+ *  - DEGRADED: last heartbeat 60 s – 5 min ago (socket may have dropped)
+ *  - OFFLINE:  last heartbeat > 5 min ago or null
+ */
+function getDeviceStatus(
+  lastSeenAt: string | null | undefined,
+  nowMs: number
+): "online" | "degraded" | "offline" {
+  if (!lastSeenAt) return "offline";
+  const ageMs = nowMs - new Date(lastSeenAt).getTime();
+  if (ageMs < 60_000) return "online";
+  if (ageMs < 5 * 60_000) return "degraded";
+  return "offline";
+}
+
+const STATUS_STYLE: Record<
+  "online" | "degraded" | "offline",
+  { bg: string; color: string; border: string; label: string; dot?: string }
+> = {
+  online: {
+    bg: "rgba(16,185,129,0.1)",
+    color: "#10b981",
+    border: "1px solid rgba(16,185,129,0.2)",
+    label: "ONLINE",
+    dot: "#10b981"
+  },
+  degraded: {
+    bg: "rgba(245,158,11,0.1)",
+    color: "#d97706",
+    border: "1px solid rgba(245,158,11,0.25)",
+    label: "DEGRADED",
+    dot: "#f59e0b"
+  },
+  offline: {
+    bg: "#e2e8f0",
+    color: "#64748b",
+    border: "1px solid #cbd5e1",
+    label: "OFFLINE"
+  }
+};
+
 export default function ScreensPage() {
   const [screens, setScreens] = useState<DeviceItem[]>([]);
   const [playlists, setPlaylists] = useState<PlaylistItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
+  // Ticks every 30 s so status badges update without a page refresh.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
 
   // Pairing Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -505,19 +558,32 @@ export default function ScreensPage() {
 
                       {/* Status badge */}
                       <div style={{ flexShrink: 0 }}>
-                        <span style={{
-                          display: "inline-flex", alignItems: "center", gap: "8px",
-                          padding: "6px 12px", borderRadius: "999px",
-                          fontSize: "12px", fontWeight: 700, textTransform: "uppercase",
-                          backgroundColor: screen.status === "online" ? "rgba(16,185,129,0.1)" : "#e2e8f0",
-                          color: screen.status === "online" ? "#10b981" : "#64748b",
-                          border: screen.status === "online" ? "1px solid rgba(16,185,129,0.2)" : "1px solid #cbd5e1"
-                        }}>
-                          {screen.status === "online" && (
-                            <span style={{ width: 8, height: 8, backgroundColor: "#10b981", borderRadius: "50%", display: "inline-block" }} />
-                          )}
-                          {screen.status === "online" ? "ONLINE" : "OFFLINE"}
-                        </span>
+                        {(() => {
+                          const status = getDeviceStatus(screen.last_seen_at, nowMs);
+                          const s = STATUS_STYLE[status];
+                          return (
+                            <span style={{
+                              display: "inline-flex", alignItems: "center", gap: "8px",
+                              padding: "6px 12px", borderRadius: "999px",
+                              fontSize: "12px", fontWeight: 700, textTransform: "uppercase",
+                              backgroundColor: s.bg,
+                              color: s.color,
+                              border: s.border
+                            }}>
+                              {s.dot && (
+                                <span style={{
+                                  width: 8, height: 8,
+                                  backgroundColor: s.dot,
+                                  borderRadius: "50%",
+                                  display: "inline-block",
+                                  // Pulse animation only for online state
+                                  animation: status === "online" ? "pulse 2s infinite" : undefined
+                                }} />
+                              )}
+                              {s.label}
+                            </span>
+                          );
+                        })()}
                       </div>
                     </Link>
                   ))}
