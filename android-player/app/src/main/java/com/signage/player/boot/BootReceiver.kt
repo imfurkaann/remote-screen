@@ -55,11 +55,17 @@ class BootReceiver : BroadcastReceiver() {
         // Step 3: Bring the player UI to the foreground.
         // FLAG_ACTIVITY_NEW_TASK is mandatory when starting an Activity from
         // a non-Activity context (BroadcastReceiver).
-        val launchIntent = Intent(context, MainActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        // Wrapped in try-catch because Android 10+ enforces background activity launch restrictions.
+        // If the OS blocks it, we catch the SecurityException silently so the background
+        // service (PlayerForegroundService) is still kept running.
+        try {
+            val launchIntent = Intent(context, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            }
+            context.startActivity(launchIntent)
+            Log.d(TAG, "Player startup sequence dispatched after boot")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to launch MainActivity from BootReceiver due to system restrictions: ${e.message}")
         }
-        context.startActivity(launchIntent)
-
-        Log.d(TAG, "Player startup sequence dispatched after boot")
     }
 }

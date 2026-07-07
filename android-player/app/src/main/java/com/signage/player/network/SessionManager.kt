@@ -229,7 +229,7 @@ object SessionManager {
                                     "— retrying in ${delayMs}ms"
                         )
                         delay(delayMs)
-                        return@runSessionLoop
+                        continue
                     }
 
                     // Either outside grace period or exceeded grace retries — accept as definitive.

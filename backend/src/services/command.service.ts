@@ -23,6 +23,7 @@ export type DeviceAckPayload = {
   status: "ACK" | "COMPLETED" | "FAILED";
   screenshot_url?: string;
   error_message?: string;
+  diagnostics?: Record<string, any>;
 };
 
 function terminalStatus(status: string): boolean {
@@ -247,6 +248,9 @@ export async function processDeviceAck(payload: DeviceAckPayload): Promise<void>
   }
 
   if (payload.status === "COMPLETED") {
+    // If the device sent diagnostics back, update the command payload and the device diagnostics record.
+    const diagnosticsData = payload.diagnostics ?? null;
+    
     await CommandModel.updateOne(
       { _id: command._id },
       {
@@ -255,10 +259,23 @@ export async function processDeviceAck(payload: DeviceAckPayload): Promise<void>
           ackAt: command.ackAt ?? new Date(),
           completedAt: new Date(),
           screenshotUrl: payload.screenshot_url ?? null,
+          payload: diagnosticsData ? { ...command.payload, diagnostics: diagnosticsData } : command.payload,
           errorMessage: null
         }
       }
     );
+
+    if (diagnosticsData) {
+      await DeviceModel.updateOne(
+        { _id: command.deviceId },
+        {
+          $set: {
+            diagnostics: diagnosticsData,
+            lastSeenAt: new Date()
+          }
+        }
+      );
+    }
 
     const completedCommand = await CommandModel.findById(command._id);
     if (completedCommand) {

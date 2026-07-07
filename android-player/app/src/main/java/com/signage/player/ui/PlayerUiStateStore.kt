@@ -12,7 +12,8 @@ data class PlayerUiState(
     val orientation: Int = 0,
     val scaleMode: String = "fit",
     /** 0f = fully transparent (mid-transition), 1f = fully visible (steady state). */
-    val transitionAlpha: Float = 1f
+    val transitionAlpha: Float = 1f,
+    val errorMessage: String? = null
 )
 
 object PlayerUiStateStore {
@@ -23,10 +24,11 @@ object PlayerUiStateStore {
         _state.value = _state.value.copy(showConnectionInfo = show)
     }
 
-    fun setCurrentMedia(filePath: String?, isImage: Boolean) {
+    fun setCurrentMedia(filePath: String?, isImage: Boolean, errorMsg: String? = null) {
         _state.value = _state.value.copy(
             currentMediaFilePath = filePath,
-            currentMediaIsImage = isImage
+            currentMediaIsImage = isImage,
+            errorMessage = errorMsg
         )
     }
 

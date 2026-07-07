@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo, ChangeEvent } from "react";
 import Link from "next/link";
 import PublishModal from "../../../components/PublishModal";
+import { useConfirm } from "@/components/ConfirmProvider";
 
 type MediaItem = {
   id: string;
@@ -222,114 +223,7 @@ function FileThumbnail({ item }: { item: MediaItem }) {
   );
 }
 
-/* ─── Delete Confirmation Modal ──────────────────────────────── */
-interface DeleteConfirmModalProps {
-  open: boolean;
-  onClose: () => void;
-  mediaName: string;
-  onConfirm: () => Promise<void>;
-  isBusy: boolean;
-  errorMessage?: string | null;
-}
 
-function DeleteConfirmModal({
-  open,
-  onClose,
-  mediaName,
-  onConfirm,
-  isBusy,
-  errorMessage,
-}: DeleteConfirmModalProps) {
-  if (!open) return null;
-
-  return (
-    <div style={{
-      position: "fixed", inset: 0, zIndex: 1050,
-      background: "rgba(15, 23, 42, 0.45)",
-      display: "flex", alignItems: "center", justifyContent: "center",
-      backdropFilter: "blur(4px)",
-    }}>
-      <div style={{
-        background: "#ffffff",
-        borderRadius: 12,
-        width: "100%",
-        maxWidth: 420,
-        boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)",
-        overflow: "hidden",
-        display: "flex",
-        flexDirection: "column",
-        border: "1px solid #e2e8f0",
-      }}>
-        <div style={{ padding: "20px 24px" }}>
-          <h3 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: "#0f172a" }}>
-            Delete Media
-          </h3>
-          <p style={{ margin: "12px 0 0", fontSize: 14, color: "#64748b", lineHeight: "1.5" }}>
-            Are you sure you want to delete <strong>"{mediaName}"</strong>? This action cannot be undone.
-          </p>
-
-          {errorMessage && (
-            <div style={{
-              marginTop: 12,
-              padding: "10px 12px",
-              backgroundColor: "#fef2f2",
-              color: "#b91c1c",
-              borderRadius: "6px",
-              fontSize: "13px",
-              fontWeight: 500,
-              border: "1px solid #fca5a5"
-            }}>
-              {errorMessage}
-            </div>
-          )}
-        </div>
-        <div style={{
-          padding: "16px 24px",
-          borderTop: "1px solid #e2e8f0",
-          backgroundColor: "#f8fafc",
-          display: "flex",
-          gap: 12,
-          justifyContent: "flex-end",
-        }}>
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isBusy}
-            style={{
-              backgroundColor: "#ffffff",
-              color: "#334155",
-              border: "1px solid #cbd5e1",
-              borderRadius: "6px",
-              padding: "8px 16px",
-              fontSize: "13px",
-              fontWeight: 600,
-              cursor: "pointer"
-            }}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={isBusy}
-            style={{
-              backgroundColor: "var(--danger)",
-              color: "#ffffff",
-              border: "none",
-              borderRadius: "6px",
-              padding: "8px 16px",
-              fontSize: "13px",
-              fontWeight: 700,
-              cursor: "pointer"
-            }}
-          >
-            {isBusy ? "Deleting..." : "Delete Media"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 /* ─── Add to Playlist Modal ─────────────────────────────────── */
 interface AddToPlaylistModalProps {
@@ -518,6 +412,7 @@ function AddToPlaylistModal({
 }
 
 export default function MediaPage() {
+  const confirm = useConfirm();
   const [mediaList, setMediaList] = useState<MediaItem[]>([]);
   const [playlists, setPlaylists] = useState<PlaylistRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -535,11 +430,7 @@ export default function MediaPage() {
   const [uploadStatus, setUploadStatus] = useState<{ text: string; ok: boolean } | null>(null);
 
   // Deletion state
-  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  const [activeDeleteId, setActiveDeleteId] = useState("");
-  const [activeDeleteName, setActiveDeleteName] = useState("");
   const [isDeleting, setIsDeleting] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Add to Playlist state
   const [addToPlaylistOpen, setAddToPlaylistOpen] = useState(false);
@@ -610,7 +501,14 @@ export default function MediaPage() {
   };
 
   const handleDeleteFolder = async (folderName: string) => {
-    if (!window.confirm(`Are you sure you want to delete folder "${folderName}"? Content inside will be moved to root.`)) {
+    const confirmed = await confirm({
+      title: "Klasörü Sil",
+      message: `"${folderName}" isimli klasörü silmek istediğinize emin misiniz? Klasörün içindeki dosyalar ana dizine (root) taşınacaktır.`,
+      confirmText: "Klasörü Sil",
+      cancelText: "Vazgeç",
+      type: "danger"
+    });
+    if (!confirmed) {
       return;
     }
     try {
@@ -796,23 +694,22 @@ export default function MediaPage() {
     }
   };
 
-  const openDeleteModal = (id: string, name: string) => {
-    setActiveDeleteId(id);
-    setActiveDeleteName(name);
-    setDeleteConfirmOpen(true);
-    setDeleteError(null);
-  };
+  const handleDeleteMedia = async (id: string, name: string) => {
+    const confirmed = await confirm({
+      title: "Medyayı Sil",
+      message: `"${name}" isimli medyayı silmek istediğinize emin misiniz? Bu işlem geri alınamaz.`,
+      confirmText: "Medyayı Sil",
+      cancelText: "Vazgeç",
+      type: "danger"
+    });
+    if (!confirmed) return;
 
-  const confirmDelete = async () => {
     setIsDeleting(true);
-    setDeleteError(null);
     try {
-      await fetchJson(`/api/content/media/${activeDeleteId}`, { method: "DELETE" });
-      setMediaList((prev) => prev.filter((item) => item.id !== activeDeleteId));
-      setDeleteConfirmOpen(false);
+      await fetchJson(`/api/content/media/${id}`, { method: "DELETE" });
+      setMediaList((prev) => prev.filter((item) => item.id !== id));
       triggerToast("Media deleted successfully", "success");
     } catch (err) {
-      setDeleteError((err as Error).message);
       triggerToast(`Delete failed: ${(err as Error).message}`, "error");
     } finally {
       setIsDeleting(false);
@@ -994,15 +891,7 @@ export default function MediaPage() {
         </div>
       )}
 
-      {/* Delete Confirmation Modal */}
-      <DeleteConfirmModal
-        open={deleteConfirmOpen}
-        onClose={() => setDeleteConfirmOpen(false)}
-        mediaName={activeDeleteName}
-        onConfirm={confirmDelete}
-        isBusy={isDeleting}
-        errorMessage={deleteError}
-      />
+
 
       {/* Add to Playlist Modal */}
       <AddToPlaylistModal
@@ -1631,7 +1520,7 @@ export default function MediaPage() {
                         </button>
 
                         <button
-                          onClick={() => openDeleteModal(media.id, media.filename)}
+                          onClick={() => handleDeleteMedia(media.id, media.filename)}
                           style={{
                             backgroundColor: "#fef2f2",
                             color: "#dc2626",
@@ -1828,7 +1717,7 @@ export default function MediaPage() {
 
                             {/* Remove button */}
                             <button
-                              onClick={() => openDeleteModal(media.id, media.filename)}
+                              onClick={() => handleDeleteMedia(media.id, media.filename)}
                               style={{
                                 backgroundColor: "#fef2f2",
                                 color: "#dc2626",

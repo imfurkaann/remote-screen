@@ -214,7 +214,8 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
         os_version: device.osVersion ?? null,
         resolution: device.resolution ?? null,
         memory_total: device.memoryTotal ?? null,
-        memory_used: device.memoryUsed ?? null
+        memory_used: device.memoryUsed ?? null,
+        diagnostics: (device as any).diagnostics ?? null
       }));
 
       if (page !== undefined && limit !== undefined && !isNaN(page) && !isNaN(limit)) {

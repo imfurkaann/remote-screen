@@ -37,95 +37,101 @@ async function bootstrap(): Promise<void> {
     console.log("[backend] PostgreSQL connection established");
   }
 
-  // Seed default user accounts in MongoDB
-  try {
-    const { UserModel } = await import("./models/user.model.js");
-    const { TenantModel } = await import("./models/tenant.model.js");
-    const { DeviceModel } = await import("./models/device.model.js");
-    const { MediaModel } = await import("./models/media.model.js");
-    const { PlaylistModel } = await import("./models/playlist.model.js");
-    const { CommandModel } = await import("./models/command.model.js");
-    const { hashPassword } = await import("./lib/bcrypt.js");
-    const { randomUUID } = await import("node:crypto");
+  // ── Development-only seed ────────────────────────────────────────────────
+  // NEVER run destructive deleteMany in production. The seed block is guarded
+  // by NODE_ENV so a missing tenant record in prod cannot wipe all data.
+  if (env.nodeEnv !== "production") {
+    try {
+      const { UserModel } = await import("./models/user.model.js");
+      const { TenantModel } = await import("./models/tenant.model.js");
+      const { DeviceModel } = await import("./models/device.model.js");
+      const { MediaModel } = await import("./models/media.model.js");
+      const { PlaylistModel } = await import("./models/playlist.model.js");
+      const { CommandModel } = await import("./models/command.model.js");
+      const { hashPassword } = await import("./lib/bcrypt.js");
+      const { randomUUID } = await import("node:crypto");
 
-    const dosiniaTenant = await TenantModel.findOne({ name: "Dosinia Luxury Resort" });
-    if (!dosiniaTenant) {
-      console.log("[backend] Clearing old database to initialize Dosinia Luxury Resort...");
-      
-      // Wipe MongoDB collections
-      await TenantModel.deleteMany({});
-      await UserModel.deleteMany({});
-      await DeviceModel.deleteMany({});
-      await MediaModel.deleteMany({});
-      await PlaylistModel.deleteMany({});
-      await CommandModel.deleteMany({});
+      const dosiniaTenant = await TenantModel.findOne({ name: "Dosinia Luxury Resort" });
+      if (!dosiniaTenant) {
+        console.log("[backend] Clearing old database to initialize Dosinia Luxury Resort...");
 
-      // Wipe Postgres if connected
-      if (isPostgresConnected()) {
-        try {
-          const pool = getPostgresPool();
-          await pool.query("DELETE FROM commands");
-          await pool.query("DELETE FROM devices");
-          await pool.query("DELETE FROM playlists");
-          await pool.query("DELETE FROM media");
-          await pool.query("DELETE FROM users");
-          await pool.query("DELETE FROM tenants");
-        } catch (err) {
-          console.error("[backend] Postgres table wipe failed", err);
+        // Wipe MongoDB collections
+        await TenantModel.deleteMany({});
+        await UserModel.deleteMany({});
+        await DeviceModel.deleteMany({});
+        await MediaModel.deleteMany({});
+        await PlaylistModel.deleteMany({});
+        await CommandModel.deleteMany({});
+
+        // Wipe Postgres if connected
+        if (isPostgresConnected()) {
+          try {
+            const pool = getPostgresPool();
+            await pool.query("DELETE FROM commands");
+            await pool.query("DELETE FROM devices");
+            await pool.query("DELETE FROM playlists");
+            await pool.query("DELETE FROM media");
+            await pool.query("DELETE FROM users");
+            await pool.query("DELETE FROM tenants");
+          } catch (err) {
+            console.error("[backend] Postgres table wipe failed", err);
+          }
         }
-      }
 
-      // Seed new Dosinia Luxury Resort tenant
-      const tenantId = randomUUID();
-      const newTenant = await TenantModel.create({
-        _id: tenantId,
-        name: "Dosinia Luxury Resort",
-        isActive: true
-      });
+        // Seed new Dosinia Luxury Resort tenant
+        const tenantId = randomUUID();
+        const newTenant = await TenantModel.create({
+          _id: tenantId,
+          name: "Dosinia Luxury Resort",
+          isActive: true
+        });
 
-      // Seed Dosinia Luxury Resort tenant super user
-      const newUser = await UserModel.create({
-        tenantId,
-        email: "dosinialuxuryresort@remotescreen.dev",
-        passwordHash: await hashPassword("dosinia123"),
-        role: "tenant_owner",
-        displayName: "Dosinia Super User",
-        isActive: true
-      });
+        // Seed Dosinia Luxury Resort tenant super user
+        const newUser = await UserModel.create({
+          tenantId,
+          email: "dosinialuxuryresort@remotescreen.dev",
+          passwordHash: await hashPassword("dosinia123"),
+          role: "tenant_owner",
+          displayName: "Dosinia Super User",
+          isActive: true
+        });
 
-      // Seed Postgres if connected
-      if (isPostgresConnected()) {
-        try {
-          const pool = getPostgresPool();
-          await pool.query(
-            `INSERT INTO tenants (id, name, created_at, updated_at) VALUES ($1::uuid, $2, NOW(), NOW())`,
-            [tenantId, "Dosinia Luxury Resort"]
-          );
+        // Seed Postgres if connected
+        if (isPostgresConnected()) {
+          try {
+            const pool = getPostgresPool();
+            await pool.query(
+              `INSERT INTO tenants (id, name, created_at, updated_at) VALUES ($1::uuid, $2, NOW(), NOW())`,
+              [tenantId, "Dosinia Luxury Resort"]
+            );
 
-          const hex32 = "00000000" + newUser._id.toString();
-          const userUuid = `${hex32.substring(0, 8)}-${hex32.substring(8, 12)}-${hex32.substring(12, 16)}-${hex32.substring(16, 20)}-${hex32.substring(20)}`;
+            const hex32 = "00000000" + newUser._id.toString();
+            const userUuid = `${hex32.substring(0, 8)}-${hex32.substring(8, 12)}-${hex32.substring(12, 16)}-${hex32.substring(16, 20)}-${hex32.substring(20)}`;
 
-          await pool.query(
-            `INSERT INTO users (id, tenant_id, email, password_hash, display_name, role, created_at, updated_at)
-             VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, NOW(), NOW())`,
-            [
-              userUuid,
-              tenantId,
-              newUser.email,
-              newUser.passwordHash,
-              newUser.displayName,
-              newUser.role
-            ]
-          );
-        } catch (err) {
-          console.error("[backend] Postgres seeding failed", err);
+            await pool.query(
+              `INSERT INTO users (id, tenant_id, email, password_hash, display_name, role, created_at, updated_at)
+               VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, NOW(), NOW())`,
+              [
+                userUuid,
+                tenantId,
+                newUser.email,
+                newUser.passwordHash,
+                newUser.displayName,
+                newUser.role
+              ]
+            );
+          } catch (err) {
+            console.error("[backend] Postgres seeding failed", err);
+          }
         }
-      }
 
-      console.log("[backend] Seeded Dosinia Luxury Resort and its super user successfully");
+        console.log("[backend] Seeded Dosinia Luxury Resort and its super user successfully");
+      }
+    } catch (err) {
+      console.error("[backend] Failed to seed default accounts", err);
     }
-  } catch (err) {
-    console.error("[backend] Failed to seed default accounts", err);
+  } else {
+    console.log("[backend] Production environment — skipping dev seed/wipe block");
   }
 
   // Reset all devices status to offline in MongoDB and PostgreSQL on server boot

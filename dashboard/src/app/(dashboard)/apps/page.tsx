@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import AppDetailsModal from "@/components/AppDetailsModal";
 import PublishModal from "@/components/PublishModal";
+import { useConfirm } from "@/components/ConfirmProvider";
 
 // Definition for available App Store apps
 type AppStoreItem = {
@@ -85,6 +86,7 @@ const APP_STORE_CATALOG: AppStoreItem[] = [
 
 export default function AppsPage() {
   const router = useRouter();
+  const confirm = useConfirm();
   const [activeTab, setActiveTab] = useState<"store" | "my-apps">("store");
   const [selectedCategory, setSelectedCategory] = useState("All Apps");
   const [searchTerm, setSearchTerm] = useState("");
@@ -244,7 +246,14 @@ export default function AppsPage() {
   const handleDeleteInstance = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
-    if (!confirm("Are you sure you want to delete this app instance?")) return;
+    const confirmed = await confirm({
+      title: "Uygulamayı Sil",
+      message: "Bu uygulama örneğini silmek istediğinize emin misiniz?",
+      confirmText: "Uygulamayı Sil",
+      cancelText: "Vazgeç",
+      type: "danger"
+    });
+    if (!confirmed) return;
     
     setDeletingId(id);
     try {

@@ -2,6 +2,7 @@ package com.signage.player.commands
 
 import android.content.Context
 import android.media.AudioManager
+import android.net.wifi.WifiManager
 import com.signage.player.ui.PlayerUiStateStore
 import com.signage.player.boot.StartupCoordinator
 import java.io.File
@@ -86,6 +87,116 @@ class CommandExecutor(
                     com.signage.player.storage.OperatingHoursStore(appContext).saveOperatingHours(config)
                     com.signage.player.config.OperatingHoursManager.checkAndApply(appContext)
                     CommandAckPayload(deviceId, command.commandId, "COMPLETED")
+                }
+
+                "CLEAR_CACHE" -> {
+                    // Delete active content, temp cache, and DB playlist, then trigger refetch.
+                    val contentRoot = File(appContext.filesDir, "content")
+                    if (contentRoot.exists()) {
+                        contentRoot.deleteRecursively()
+                    }
+                    val db = com.signage.player.storage.PlayerDatabaseProvider.getDatabase(appContext)
+                    com.signage.player.storage.PlaylistRepository(db.playlistDao()).replacePlaylist(emptyList())
+                    onForceRefresh()
+                    CommandAckPayload(deviceId, command.commandId, "COMPLETED")
+                }
+
+                "FACTORY_RESET" -> {
+                    // Trigger unpair and factory reset of application configurations
+                    StartupCoordinator.forceReset(appContext)
+                    CommandAckPayload(deviceId, command.commandId, "COMPLETED")
+                }
+
+                "GET_DIAGNOSTICS" -> {
+                    val diagnostics = mutableMapOf<String, Any?>()
+                    
+                    // 1. Storage Diagnostics
+                    try {
+                        val stat = android.os.StatFs(appContext.filesDir.path)
+                        val blockSize = stat.blockSizeLong
+                        val totalBlocks = stat.blockCountLong
+                        val availableBlocks = stat.availableBlocksLong
+                        
+                        val totalBytes = totalBlocks * blockSize
+                        val freeBytes = availableBlocks * blockSize
+                        val usedBytes = totalBytes - freeBytes
+                        val usagePercent = if (totalBytes > 0) (usedBytes * 100) / totalBytes else 0
+                        
+                        diagnostics["storage_total_mb"] = totalBytes / (1024 * 1024)
+                        diagnostics["storage_free_mb"] = freeBytes / (1024 * 1024)
+                        diagnostics["storage_usage_percent"] = usagePercent
+                    } catch (e: Exception) {
+                        diagnostics["storage_error"] = e.message
+                    }
+                    
+                    // 2. Network / Wi-Fi Diagnostics
+                    try {
+                        val connManager = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+                        val activeNetwork = connManager.activeNetwork
+                        val capabilities = connManager.getNetworkCapabilities(activeNetwork)
+                        
+                        if (capabilities != null) {
+                            val isWifi = capabilities.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)
+                            val isEthernet = capabilities.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET)
+                            val isCellular = capabilities.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR)
+                            
+                            diagnostics["network_type"] = when {
+                                isWifi -> "WIFI"
+                                isEthernet -> "ETHERNET"
+                                isCellular -> "CELLULAR"
+                                else -> "UNKNOWN"
+                            }
+                            
+                            if (isWifi) {
+                                val wifiManager = appContext.applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+                                val info = wifiManager.connectionInfo
+                                if (info != null) {
+                                    val rssi = info.rssi
+                                    val level = android.net.wifi.WifiManager.calculateSignalLevel(rssi, 100)
+                                    diagnostics["wifi_rssi"] = rssi
+                                    diagnostics["wifi_signal_level"] = level
+                                    diagnostics["wifi_ssid"] = info.ssid
+                                }
+                            }
+                        } else {
+                            diagnostics["network_type"] = "DISCONNECTED"
+                        }
+                    } catch (e: Exception) {
+                        diagnostics["network_error"] = e.message
+                    }
+
+                    // 3. Memory Diagnostics
+                    try {
+                        val actManager = appContext.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+                        val memInfo = android.app.ActivityManager.MemoryInfo()
+                        actManager.getMemoryInfo(memInfo)
+                        
+                        val totalGb = memInfo.totalMem.toDouble() / (1024 * 1024 * 1024)
+                        val availGb = memInfo.availMem.toDouble() / (1024 * 1024 * 1024)
+                        val usedGb = totalGb - availGb
+                        val usagePercent = if (memInfo.totalMem > 0) ((memInfo.totalMem - memInfo.availMem) * 100) / memInfo.totalMem else 0
+                        
+                        diagnostics["memory_total_gb"] = String.format(java.util.Locale.US, "%.2f", totalGb)
+                        diagnostics["memory_free_gb"] = String.format(java.util.Locale.US, "%.2f", availGb)
+                        diagnostics["memory_used_gb"] = String.format(java.util.Locale.US, "%.2f", usedGb)
+                        diagnostics["memory_usage_percent"] = usagePercent
+                    } catch (e: Exception) {
+                        diagnostics["memory_error"] = e.message
+                    }
+
+                    // 4. Logcat Logs (Last 60 lines)
+                    try {
+                        diagnostics["logs"] = getRecentLogcat()
+                    } catch (e: Exception) {
+                        diagnostics["logs"] = "Error reading logcat: ${e.message}"
+                    }
+
+                    CommandAckPayload(
+                        deviceId = deviceId,
+                        commandId = command.commandId,
+                        status = "COMPLETED",
+                        diagnostics = diagnostics
+                    )
                 }
 
                 "SCREENSHOT" -> {
@@ -206,5 +317,21 @@ class CommandExecutor(
             return txtFile.toURI().toString()
         }
         return screenshotFile.toURI().toString()
+    }
+    private fun getRecentLogcat(): String {
+        return try {
+            val process = Runtime.getRuntime().exec("logcat -d -t 60 *:I")
+            val reader = java.io.BufferedReader(java.io.InputStreamReader(process.inputStream))
+            val log = StringBuilder()
+            var line: String? = reader.readLine()
+            while (line != null) {
+                log.append(line).append("\n")
+                line = reader.readLine()
+            }
+            reader.close()
+            log.toString().ifBlank { "Logcat stream is empty or permission denied." }
+        } catch (e: Exception) {
+            "Failed to fetch logcat: ${e.message}"
+        }
     }
 }

@@ -25,6 +25,9 @@ object SocketClientManager {
     private const val MAX_DELAY_MS = 30_000L
     private const val HEARTBEAT_INTERVAL_MS = 30_000L
     private val socketScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    @Volatile var currentDeviceId: String = ""
+        private set
+
     private var reconnectAttempt: Int = 0
     private var syncHandler: (suspend (SyncContentPayload) -> Unit)? = null
     private var commandHandler: (suspend (CommandDispatchPayload) -> Unit)? = null
@@ -40,17 +43,30 @@ object SocketClientManager {
         commandHandler = handler
     }
 
+    /**
+     * Initialises (or reinitialises) the socket connection.
+     *
+     * Marked @Synchronized to prevent a race where two threads (e.g. a very
+     * early BootReceiver and MainActivity.onCreate on a fast device) could
+     * call this simultaneously, leading to two socket connections with the same
+     * deviceId joining the same room and receiving duplicate SYNC_CONTENT events.
+     *
+     * After K1 (StartupCoordinator idempotency guard) this path is normally
+     * called exactly once per process lifetime; the @Synchronized annotation is
+     * a belt-and-suspenders safety net.
+     */
+    @Synchronized
     fun initialize(context: android.content.Context, deviceId: String, socketBaseUrl: String = "http://10.0.2.2:4100") {
         appContext = context.applicationContext
-        reconnectAttempt = 0
         connect(deviceId, socketBaseUrl)
     }
 
     private fun connect(deviceId: String, socketBaseUrl: String) {
         if (deviceId.isBlank()) {
-            reconnectAttempt = 0
+            currentDeviceId = ""
             return
         }
+        currentDeviceId = deviceId
 
         socket?.disconnect()
         socket?.off()
@@ -122,6 +138,17 @@ object SocketClientManager {
             }
             if (!ack.errorMessage.isNullOrBlank()) {
                 put("error_message", ack.errorMessage)
+            }
+            if (ack.diagnostics != null) {
+                val diagJson = JSONObject()
+                for ((key, value) in ack.diagnostics) {
+                    if (value is Map<*, *>) {
+                        diagJson.put(key, JSONObject(value))
+                    } else {
+                        diagJson.put(key, value)
+                    }
+                }
+                put("diagnostics", diagJson)
             }
         }
 

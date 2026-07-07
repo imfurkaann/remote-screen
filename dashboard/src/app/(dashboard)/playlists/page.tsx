@@ -7,6 +7,7 @@ import {
 } from "react";
 import Link from "next/link";
 import PublishModal from "../../../components/PublishModal";
+import { useConfirm } from "@/components/ConfirmProvider";
 
 type PlaylistRow = {
   id: string;
@@ -62,98 +63,7 @@ function IconClock() {
   );
 }
 
-/* ─── Delete Confirmation Modal ──────────────────────────────── */
-interface DeleteConfirmModalProps {
-  open: boolean;
-  onClose: () => void;
-  playlistName: string;
-  onConfirm: () => Promise<void>;
-  isBusy: boolean;
-}
 
-function DeleteConfirmModal({
-  open,
-  onClose,
-  playlistName,
-  onConfirm,
-  isBusy,
-}: DeleteConfirmModalProps) {
-  if (!open) return null;
-
-  return (
-    <div style={{
-      position: "fixed", inset: 0, zIndex: 1050,
-      background: "rgba(15, 23, 42, 0.45)",
-      display: "flex", alignItems: "center", justifyContent: "center",
-      backdropFilter: "blur(4px)",
-    }}>
-      <div style={{
-        background: "#ffffff",
-        borderRadius: 12,
-        width: "100%",
-        maxWidth: 420,
-        boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)",
-        overflow: "hidden",
-        display: "flex",
-        flexDirection: "column",
-        border: "1px solid #e2e8f0",
-        animation: "fadeIn 0.2s ease-out"
-      }}>
-        <div style={{ padding: "20px 24px" }}>
-          <h3 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: "#0f172a" }}>
-            Delete Playlist
-          </h3>
-          <p style={{ margin: "12px 0 0", fontSize: 14, color: "#64748b", lineHeight: "1.5" }}>
-            Are you sure you want to delete the playlist <strong>"{playlistName}"</strong>? This will permanently delete it and stop playing on any assigned screens.
-          </p>
-        </div>
-        <div style={{
-          padding: "16px 24px",
-          borderTop: "1px solid #e2e8f0",
-          backgroundColor: "#f8fafc",
-          display: "flex",
-          gap: 12,
-          justifyContent: "flex-end",
-        }}>
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isBusy}
-            style={{
-              backgroundColor: "#ffffff",
-              color: "#334155",
-              border: "1px solid #cbd5e1",
-              borderRadius: "6px",
-              padding: "8px 16px",
-              fontSize: "13px",
-              fontWeight: 600,
-              cursor: "pointer"
-            }}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={isBusy}
-            style={{
-              backgroundColor: "var(--danger)",
-              color: "#ffffff",
-              border: "none",
-              borderRadius: "6px",
-              padding: "8px 16px",
-              fontSize: "13px",
-              fontWeight: 700,
-              cursor: "pointer"
-            }}
-          >
-            {isBusy ? "Deleting..." : "Delete Playlist"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 /* ─── Playlist Row Component ────────────────────────────────── */
 function PlaylistRowComponent({
@@ -309,6 +219,7 @@ function PlaylistRowComponent({
 
 /* ─── Main Page ────────────────────────────────────────────── */
 export default function PlaylistsPage() {
+  const confirm = useConfirm();
   const [playlists, setPlaylists] = useState<PlaylistRow[]>([]);
   const [isBusy, setIsBusy] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -318,11 +229,6 @@ export default function PlaylistsPage() {
   const [publishModalOpen, setPublishModalOpen] = useState(false);
   const [activePublishId, setActivePublishId] = useState<string | null>(null);
   const [activePublishName, setActivePublishName] = useState("");
-
-  // Delete Modal State
-  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  const [activeDeleteId, setActiveDeleteId] = useState<string | null>(null);
-  const [activeDeleteName, setActiveDeleteName] = useState("");
 
   const realPlaylists = useMemo(
     () => playlists.filter((p) => !p.name.toLowerCase().startsWith("single media:")),
@@ -375,23 +281,24 @@ export default function PlaylistsPage() {
     }
   };
 
-  const openDeleteModal = (playlistId: string, playlistName: string) => {
-    setActiveDeleteId(playlistId);
-    setActiveDeleteName(playlistName);
-    setDeleteConfirmOpen(true);
-  };
+  const openDeleteModal = async (playlistId: string, playlistName: string) => {
+    const confirmed = await confirm({
+      title: "Oynatma Listesini Sil",
+      message: `"${playlistName}" isimli oynatma listesini silmek istediğinize emin misiniz? Bu işlem geri alınamaz ve bu oynatma listesini oynatan tüm cihazlarda yayın durdurulur.`,
+      confirmText: "Sil",
+      cancelText: "Vazgeç",
+      type: "danger"
+    });
+    if (!confirmed) return;
 
-  const handleDeleteConfirm = async () => {
-    if (!activeDeleteId) return;
     setIsBusy(true);
     setPublishStatus(null);
     try {
-      await fetch(`/api/content/playlists/${activeDeleteId}`, {
+      await fetch(`/api/content/playlists/${playlistId}`, {
         method: "DELETE",
       });
       await loadPlaylists();
-      setPublishStatus(`Playlist "${activeDeleteName}" was deleted.`);
-      setDeleteConfirmOpen(false);
+      setPublishStatus(`Playlist "${playlistName}" was deleted.`);
     } catch (error) {
       setPublishStatus(`Delete failed: ${(error as Error).message}`);
     } finally {
@@ -411,13 +318,7 @@ export default function PlaylistsPage() {
         isBusy={isBusy}
       />
 
-      <DeleteConfirmModal
-        open={deleteConfirmOpen}
-        onClose={() => setDeleteConfirmOpen(false)}
-        playlistName={activeDeleteName}
-        onConfirm={handleDeleteConfirm}
-        isBusy={isBusy}
-      />
+
 
       <div style={{ display: "flex", flexDirection: "column", minHeight: "100%", backgroundColor: "#f4f5f7" }}>
         

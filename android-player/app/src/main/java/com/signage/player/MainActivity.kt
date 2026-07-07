@@ -114,6 +114,17 @@ class MainActivity : ComponentActivity() {
         // when the system recreates the Activity (e.g. config change).
         StartupCoordinator.getPlayerController()?.let { lifecycle.addObserver(it) }
 
+        // O1: Clean up stale screenshot files from previous sessions.
+        // Screenshots accumulate in cacheDir when SCREENSHOT commands are frequent.
+        // We delete files older than 1 hour on every startup to prevent storage bloat.
+        try {
+            val maxAgeMs = 60 * 60 * 1_000L // 1 hour
+            val now = System.currentTimeMillis()
+            cacheDir.listFiles { f -> f.name.startsWith("screenshot_") && f.name.endsWith(".png") }
+                ?.filter { f -> now - f.lastModified() > maxAgeMs }
+                ?.forEach { f -> f.delete() }
+        } catch (_: Exception) { /* non-critical — ignore */ }
+
         // Register screenshot provider
         StartupCoordinator.registerScreenshotProvider {
             val bitmap = captureWindow(window) ?: return@registerScreenshotProvider null
@@ -434,7 +445,33 @@ fun PairingScreen(modifier: Modifier = Modifier) {
                                 settings.loadWithOverviewMode = false
                                 settings.mediaPlaybackRequiresUserGesture = false
                                 setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                                webViewClient = android.webkit.WebViewClient()
+                                webViewClient = object : android.webkit.WebViewClient() {
+                                    // Y1: recover from WebView GPU process crash without
+                                    // killing the host application. Returning true from
+                                    // onRenderProcessGone signals we have handled the crash.
+                                    // We destroy the crashed view; Compose will recreate it
+                                    // on the next recomposition via PlayerUiStateStore reset.
+                                    @Suppress("OVERRIDE_DEPRECATION")
+                                    override fun onRenderProcessGone(
+                                        view: android.webkit.WebView,
+                                        detail: android.webkit.RenderProcessGoneDetail?
+                                    ): Boolean {
+                                        Log.e("WebViewCrash",
+                                            "Render process gone (crashed=${detail?.didCrash()}) — recovering")
+                                        try {
+                                            view.destroy()
+                                        } catch (_: Exception) {}
+                                        // Force Compose to rebuild by momentarily clearing the
+                                        // media path and then restoring it on the next frame.
+                                        val currentPath = PlayerUiStateStore.state.value.currentMediaFilePath
+                                        PlayerUiStateStore.setCurrentMedia(null, false)
+                                        android.os.Handler(android.os.Looper.getMainLooper())
+                                            .postDelayed({
+                                                PlayerUiStateStore.setCurrentMedia(currentPath, false)
+                                            }, 500L)
+                                        return true  // do NOT crash the app
+                                    }
+                                }
                             }
                         },
                         update = { webView ->
@@ -504,23 +541,26 @@ fun PairingScreen(modifier: Modifier = Modifier) {
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         // Glowing status indicator
+                        val indicatorColor = if (uiState.errorMessage != null) Color(0xFFF59E0B) else Color(0xFF10B981)
+                        val indicatorText = if (uiState.errorMessage != null) "Sistem Uyarı / Eksik İçerik" else "Sistem Bağlı / Çevrimiçi"
+                        
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.Center,
                             modifier = Modifier
-                                .background(Color(0xFF10B981).copy(alpha = 0.1f), shape = RoundedCornerShape(16.dp))
-                                .border(1.dp, Color(0xFF10B981).copy(alpha = 0.25f), shape = RoundedCornerShape(16.dp))
-                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                                .background(indicatorColor.copy(alpha = 0.1f), shape = RoundedCornerShape(16.dp))
+                                .border(1.5.dp, indicatorColor.copy(alpha = 0.3f), shape = RoundedCornerShape(16.dp))
+                                .padding(horizontal = 14.dp, vertical = 8.dp)
                         ) {
                             Box(
                                 modifier = Modifier
                                     .size(8.dp)
-                                    .background(Color(0xFF10B981), shape = androidx.compose.foundation.shape.CircleShape)
+                                    .background(indicatorColor, shape = androidx.compose.foundation.shape.CircleShape)
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Sistem Bağlı / Çevrimiçi",
-                                color = Color(0xFF10B981),
+                                text = indicatorText,
+                                color = indicatorColor,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold
                             )
@@ -538,7 +578,7 @@ fun PairingScreen(modifier: Modifier = Modifier) {
                         )
 
                         Text(
-                            text = "Cihaz başarıyla eşleştirildi. Oynatma listesi atanması bekleniyor. Lütfen kontrol panelinizden içerik gönderin.",
+                            text = uiState.errorMessage ?: "Cihaz başarıyla eşleştirildi. Oynatma listesi atanması bekleniyor. Lütfen kontrol panelinizden içerik gönderin.",
                             color = Color(0xFF9E95B8),
                             fontSize = 15.sp,
                             textAlign = TextAlign.Center,

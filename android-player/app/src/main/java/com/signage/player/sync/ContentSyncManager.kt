@@ -75,6 +75,7 @@ class ContentSyncManager(
             .readTimeout(120, TimeUnit.SECONDS)   // 120 s for large video files
             .followRedirects(true)
             .followSslRedirects(true)
+            .addInterceptor(com.signage.player.network.SafeTimeAndHttpInterceptor())
             .build()
     }
 
@@ -92,6 +93,19 @@ class ContentSyncManager(
         private const val MIN_FREE_BYTES = 200L * 1024L * 1024L
 
         private const val MAX_CACHE_BYTES = 2L * 1024L * 1024L * 1024L
+
+        /**
+         * Maximum total size (bytes) of the quarantine folder.
+         * Files are evicted oldest-first once this limit is exceeded.
+         * 100 MB is generous for a cache of corrupt download fragments.
+         */
+        private const val MAX_QUARANTINE_BYTES = 100L * 1024L * 1024L
+
+        /**
+         * Files in quarantine older than 7 days are deleted regardless of
+         * whether the folder has hit the size quota.
+         */
+        private const val QUARANTINE_MAX_AGE_MS = 7L * 24 * 60 * 60 * 1_000L
 
         val DEFAULT_MEDIA_BASE_URL: String get() = AppDefaults.BACKEND_BASE_URL
     }
@@ -253,6 +267,7 @@ class ContentSyncManager(
 
             if (backupDir.exists()) backupDir.deleteRecursively()
             enforceCacheQuota(contentRoot)
+            enforceQuarantineQuota(quarantineDir)
         } catch (error: Exception) {
             Log.e(tag, "Atomic activation failed: ${error.message}")
             onError(
@@ -400,6 +415,44 @@ class ContentSyncManager(
                 Files.deleteIfExists(candidate.toPath())
             }
             currentBytes = directorySize(contentRoot)
+        }
+    }
+
+    /**
+     * Enforces a 100 MB / 7-day TTL policy on the quarantine directory.
+     *
+     * This prevents devices on unstable networks (e.g. hotel Wi-Fi) from
+     * filling their internal storage with corrupt download fragments, which
+     * would cause Room write failures and crash the app on restart.
+     *
+     * Eviction order: oldest files first (by lastModified).
+     */
+    private fun enforceQuarantineQuota(quarantineDir: File) {
+        if (!quarantineDir.exists()) return
+        val now = System.currentTimeMillis()
+
+        // Phase 1: delete files older than QUARANTINE_MAX_AGE_MS unconditionally.
+        quarantineDir.listFiles()?.forEach { file ->
+            if (now - file.lastModified() > QUARANTINE_MAX_AGE_MS) {
+                Files.deleteIfExists(file.toPath())
+                Log.d(tag, "Quarantine TTL evict: ${file.name}")
+            }
+        }
+
+        // Phase 2: evict oldest files until folder is under MAX_QUARANTINE_BYTES.
+        var quarantineSize = directorySize(quarantineDir)
+        if (quarantineSize <= MAX_QUARANTINE_BYTES) return
+
+        val candidates = quarantineDir.listFiles()
+            ?.sortedBy { it.lastModified() }
+            ?: return
+
+        for (file in candidates) {
+            if (quarantineSize <= MAX_QUARANTINE_BYTES) break
+            val size = file.length()
+            Files.deleteIfExists(file.toPath())
+            quarantineSize -= size
+            Log.d(tag, "Quarantine quota evict: ${file.name} ($size bytes)")
         }
     }
 

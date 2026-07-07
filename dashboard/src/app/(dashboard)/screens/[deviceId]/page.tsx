@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo, useRef } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
+import { useConfirm } from "@/components/ConfirmProvider";
 
 // Define Types
 type Device = {
@@ -26,6 +27,23 @@ type Device = {
   resolution?: string | null;
   memory_total?: string | null;
   memory_used?: string | null;
+  diagnostics?: {
+    storage_total_mb?: number;
+    storage_free_mb?: number;
+    storage_usage_percent?: number;
+    network_type?: string;
+    wifi_rssi?: number;
+    wifi_signal_level?: number;
+    wifi_ssid?: string;
+    memory_total_gb?: string;
+    memory_free_gb?: string;
+    memory_used_gb?: string;
+    memory_usage_percent?: number;
+    logs?: string;
+    storage_error?: string;
+    network_error?: string;
+    memory_error?: string;
+  } | null;
 };
 
 type Playlist = {
@@ -191,6 +209,7 @@ const TimePicker = ({
 export default function ScreenDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const confirm = useConfirm();
   const deviceId = typeof params?.deviceId === "string" ? params.deviceId : "";
 
   // State Variables
@@ -561,7 +580,14 @@ export default function ScreenDetailPage() {
   };
 
   const handleDeleteScreen = async () => {
-    if (!window.confirm("Are you sure you want to delete this screen completely?")) {
+    const confirmed = await confirm({
+      title: "Ekranı Sil",
+      message: "Bu ekranı sistemden tamamen silmek istediğinize emin misiniz?",
+      confirmText: "Ekranı Sil",
+      cancelText: "Vazgeç",
+      type: "danger"
+    });
+    if (!confirmed) {
       return;
     }
     
@@ -577,6 +603,45 @@ export default function ScreenDetailPage() {
       }
     } catch {
       showToast("Network error deleting screen.", "error");
+    }
+  };
+
+  const handleConfirmForceRefresh = async () => {
+    const confirmed = await confirm({
+      title: "Ekranı Yenile",
+      message: "Bu ekranı yenilenmeye zorlamak istediğinize emin misiniz?",
+      confirmText: "Yenile",
+      cancelText: "Vazgeç",
+      type: "default"
+    });
+    if (confirmed) {
+      void handleDispatchCommand("FORCE_REFRESH");
+    }
+  };
+
+  const handleConfirmClearCache = async () => {
+    const confirmed = await confirm({
+      title: "Önbelleği Temizle",
+      message: "Bu TV'deki indirilmiş tüm video ve dosyaları silip sıfırdan indirmeye zorlamak istediğinize emin misiniz?",
+      confirmText: "Temizle",
+      cancelText: "Vazgeç",
+      type: "warning"
+    });
+    if (confirmed) {
+      void handleDispatchCommand("CLEAR_CACHE");
+    }
+  };
+
+  const handleConfirmFactoryReset = async () => {
+    const confirmed = await confirm({
+      title: "Cihazı Sıfırla",
+      message: "DİKKAT: Bu cihazın sunucu ile olan bağlantısını uzaktan koparacak ve TV ekranını ilk eşleştirme (Pairing) ekranına döndürecektir. Emin misiniz?",
+      confirmText: "Cihazı Sıfırla",
+      cancelText: "Vazgeç",
+      type: "danger"
+    });
+    if (confirmed) {
+      void handleDispatchCommand("FACTORY_RESET");
     }
   };
 
@@ -938,7 +1003,7 @@ export default function ScreenDetailPage() {
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
           {/* Refresh Button */}
           <button
-            onClick={() => handleDispatchCommand("FORCE_REFRESH")}
+            onClick={handleConfirmForceRefresh}
             disabled={isPolling}
             title="Refresh Screen"
             type="button"
@@ -1387,36 +1452,104 @@ export default function ScreenDetailPage() {
 
 
 
-                {/* Telemetry Stats Grid */}
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "12px" }}>
-                  <div style={{ border: "1px solid #e2e8f0", borderRadius: "8px", padding: "12px", backgroundColor: "#ffffff" }}>
-                    <span style={{ fontSize: "10px", fontWeight: 700, color: "#94a3b8" }}>DISCONNECTED TIME</span>
-                    <div style={{ fontSize: "14px", fontWeight: 700, color: "#334155", marginTop: "4px" }}>
-                      {simulatedDetails?.disconnectedTimeStr}
-                    </div>
+                {/* Diagnostics Section (Task 3) */}
+                <div style={{ border: "1px solid #e2e8f0", borderRadius: "8px", padding: "16px", backgroundColor: "#ffffff" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+                    <h3 style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: "#0f172a" }}>Diagnostics & Health</h3>
+                    <button
+                      onClick={() => handleDispatchCommand("GET_DIAGNOSTICS")}
+                      disabled={isPolling}
+                      type="button"
+                      style={{
+                        padding: "6px 12px",
+                        fontSize: "12px",
+                        fontWeight: 600,
+                        backgroundColor: "#10b981",
+                        color: "#ffffff",
+                        border: "none",
+                        borderRadius: "4px",
+                        cursor: "pointer",
+                        opacity: isPolling ? 0.6 : 1
+                      }}
+                    >
+                      {isPolling && activeCommand?.command_type === "GET_DIAGNOSTICS" ? "Fetching..." : "Fetch Diagnostics"}
+                    </button>
                   </div>
 
-                  <div style={{ border: "1px solid #e2e8f0", borderRadius: "8px", padding: "12px", backgroundColor: "#ffffff" }}>
-                    <span style={{ fontSize: "10px", fontWeight: 700, color: "#94a3b8" }}>MEMORY</span>
-                    <div style={{ fontSize: "14px", fontWeight: 700, color: "#334155", marginTop: "4px" }}>
-                      {simulatedDetails?.memory}
-                    </div>
-                    <span style={{ fontSize: "10px", color: "#94a3b8" }}>
-                      {simulatedDetails?.memoryUsed}
-                    </span>
-                    <div style={{ width: "100%", height: "4px", backgroundColor: "#e2e8f0", borderRadius: "2px", marginTop: "4px", overflow: "hidden" }}>
-                      <div style={{ width: `${simulatedDetails?.memoryPercent ?? 0}%`, height: "100%", backgroundColor: "#f59e0b" }} />
-                    </div>
-                  </div>
+                  {device.diagnostics ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                      {/* Storage Progress */}
+                      <div>
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", fontWeight: 700, color: "#64748b", marginBottom: "4px" }}>
+                          <span>DISK STORAGE ({device.diagnostics.storage_free_mb} MB Free)</span>
+                          <span>{device.diagnostics.storage_usage_percent}% Used</span>
+                        </div>
+                        <div style={{ width: "100%", height: "8px", backgroundColor: "#f1f5f9", borderRadius: "4px", overflow: "hidden" }}>
+                          <div style={{
+                            width: `${device.diagnostics.storage_usage_percent ?? 0}%`,
+                            height: "100%",
+                            backgroundColor: (device.diagnostics.storage_usage_percent ?? 0) > 90 ? "#ef4444" : "#10b981"
+                          }} />
+                        </div>
+                      </div>
 
+                      {/* Memory Usage */}
+                      <div>
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", fontWeight: 700, color: "#64748b", marginBottom: "4px" }}>
+                          <span>RAM MEMORY ({device.diagnostics.memory_used_gb} GB / {device.diagnostics.memory_total_gb} GB)</span>
+                          <span>{device.diagnostics.memory_usage_percent}% Used</span>
+                        </div>
+                        <div style={{ width: "100%", height: "8px", backgroundColor: "#f1f5f9", borderRadius: "4px", overflow: "hidden" }}>
+                          <div style={{
+                            width: `${device.diagnostics.memory_usage_percent ?? 0}%`,
+                            height: "100%",
+                            backgroundColor: (device.diagnostics.memory_usage_percent ?? 0) > 85 ? "#f59e0b" : "#3b82f6"
+                          }} />
+                        </div>
+                      </div>
 
+                      {/* Network & Wi-Fi Details */}
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "10px", backgroundColor: "#f8fafc", padding: "10px", borderRadius: "6px", fontSize: "12px" }}>
+                        <div>
+                          <span style={{ color: "#94a3b8", display: "block", fontSize: "10px", fontWeight: 700 }}>CONNECTION TYPE</span>
+                          <span style={{ fontWeight: 600, color: "#334155" }}>{device.diagnostics.network_type}</span>
+                        </div>
+                        {device.diagnostics.network_type === "WIFI" && (
+                          <div>
+                            <span style={{ color: "#94a3b8", display: "block", fontSize: "10px", fontWeight: 700 }}>WIFI SIGNAL</span>
+                            <span style={{ fontWeight: 600, color: (device.diagnostics.wifi_signal_level ?? 0) < 40 ? "#ef4444" : "#10b981" }}>
+                              {device.diagnostics.wifi_signal_level}% ({device.diagnostics.wifi_rssi} dBm)
+                            </span>
+                          </div>
+                        )}
+                      </div>
 
-                  <div style={{ border: "1px solid #e2e8f0", borderRadius: "8px", padding: "12px", backgroundColor: "#ffffff" }}>
-                    <span style={{ fontSize: "10px", fontWeight: 700, color: "#94a3b8" }}>TIME ZONE</span>
-                    <div style={{ fontSize: "14px", fontWeight: 700, color: "#334155", marginTop: "4px", textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap" }} title="Europe/Istanbul">
-                      Europe/Istanbul
+                      {/* Log Console View */}
+                      {device.diagnostics.logs && (
+                        <div style={{ marginTop: "12px" }}>
+                          <span style={{ display: "block", fontSize: "11px", fontWeight: 700, color: "#64748b", marginBottom: "6px" }}>RECENT SYSTEM LOGS (LOGCAT)</span>
+                          <pre style={{
+                            margin: 0,
+                            padding: "10px",
+                            backgroundColor: "#0f172a",
+                            color: "#38bdf8",
+                            fontFamily: "monospace",
+                            fontSize: "11px",
+                            borderRadius: "6px",
+                            maxHeight: "150px",
+                            overflowY: "auto",
+                            whiteSpace: "pre-wrap"
+                          }}>
+                            {device.diagnostics.logs}
+                          </pre>
+                        </div>
+                      )}
                     </div>
-                  </div>
+                  ) : (
+                    <div style={{ textAlign: "center", padding: "20px 0", color: "#94a3b8", fontSize: "13px" }}>
+                      No diagnostic data available. Click "Fetch Diagnostics" to retrieve current health stats.
+                    </div>
+                  )}
                 </div>
 
                 {/* Core properties list */}
@@ -1469,7 +1602,7 @@ export default function ScreenDetailPage() {
                   {/* Grid 1: Basic command buttons */}
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "8px" }}>
                     <button
-                      onClick={() => handleDispatchCommand("FORCE_REFRESH")}
+                      onClick={handleConfirmForceRefresh}
                       disabled={isPolling}
                       title="Force Refresh Screen"
                       type="button"
@@ -1525,6 +1658,48 @@ export default function ScreenDetailPage() {
                       <svg style={{ width: 18, height: 18 }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
                       </svg>
+                    </button>
+                  </div>
+
+                  {/* Remote Maintenance Buttons (Clear Cache & Factory Reset) */}
+                  <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
+                    <button
+                      onClick={handleConfirmClearCache}
+                      disabled={isPolling}
+                      title="Clear TV Local Media Cache"
+                      type="button"
+                      style={{
+                        flexGrow: 1,
+                        padding: "8px",
+                        fontSize: "12px",
+                        fontWeight: 600,
+                        backgroundColor: "#f59e0b",
+                        color: "#ffffff",
+                        border: "none",
+                        borderRadius: "6px",
+                        cursor: "pointer"
+                      }}
+                    >
+                      Clear Cache
+                    </button>
+                    <button
+                      onClick={handleConfirmFactoryReset}
+                      disabled={isPolling}
+                      title="Remote Factory Reset & Unpair"
+                      type="button"
+                      style={{
+                        flexGrow: 1,
+                        padding: "8px",
+                        fontSize: "12px",
+                        fontWeight: 600,
+                        backgroundColor: "#ef4444",
+                        color: "#ffffff",
+                        border: "none",
+                        borderRadius: "6px",
+                        cursor: "pointer"
+                      }}
+                    >
+                      Factory Reset
                     </button>
                   </div>
 

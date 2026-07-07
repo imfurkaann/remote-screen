@@ -13,5 +13,6 @@ data class CommandAckPayload(
     val commandId: String,
     val status: String,
     val screenshotUrl: String? = null,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val diagnostics: Map<String, Any?>? = null
 )

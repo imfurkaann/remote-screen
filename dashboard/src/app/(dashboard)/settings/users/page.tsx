@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useConfirm } from "@/components/ConfirmProvider";
 
 type User = {
   id: string;
@@ -17,6 +18,7 @@ type Device = {
 };
 
 export default function UsersPage() {
+  const confirm = useConfirm();
   const [users, setUsers] = useState<User[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
   const [loading, setLoading] = useState(true);
@@ -164,10 +166,14 @@ export default function UsersPage() {
   };
 
   const handleDeleteUser = async (userId: string) => {
-    const confirmation = confirm(
-      "Are you sure you want to delete this user?\n\nAll screens assigned to this user will be returned to the Tenant Owner."
-    );
-    if (!confirmation) return;
+    const confirmed = await confirm({
+      title: "Kullanıcıyı Sil",
+      message: "Bu kullanıcıyı silmek istediğinize emin misiniz? Bu kullanıcıya atanmış tüm ekranlar Tenant Owner'a geri dönecektir.",
+      confirmText: "Kullanıcıyı Sil",
+      cancelText: "Vazgeç",
+      type: "danger"
+    });
+    if (!confirmed) return;
 
     try {
       const res = await fetch(`/api/users/${userId}`, { method: "DELETE" });

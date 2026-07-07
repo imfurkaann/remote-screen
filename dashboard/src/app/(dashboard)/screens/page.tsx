@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import PairScreenModal from "../../../components/PairScreenModal";
+import { useConfirm } from "@/components/ConfirmProvider";
 
 type DeviceItem = {
   id: string;
@@ -119,6 +120,7 @@ const STATUS_STYLE: Record<
 };
 
 export default function ScreensPage() {
+  const confirm = useConfirm();
   const [screens, setScreens] = useState<DeviceItem[]>([]);
   const [playlists, setPlaylists] = useState<PlaylistItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -126,10 +128,6 @@ export default function ScreensPage() {
   const [searchTerm, setSearchTerm] = useState("");
   // Ticks every 30 s so status badges update without a page refresh.
   const [nowMs, setNowMs] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNowMs(Date.now()), 30_000);
-    return () => clearInterval(id);
-  }, []);
 
   // Pairing Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -138,7 +136,6 @@ export default function ScreensPage() {
   const [isManagerOpen, setIsManagerOpen] = useState(false);
   const [managerSearch, setManagerSearch] = useState("");
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   // New Group Modal State
   const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
@@ -147,13 +144,22 @@ export default function ScreensPage() {
   const [groupSaving, setGroupSaving] = useState(false);
   const [groupSearch, setGroupSearch] = useState("");
 
-  const handleDeleteScreen = async (deviceId: string) => {
+  const handleDeleteScreen = async (deviceId: string, hardwareId: string, screenName?: string | null) => {
+    const displayName = screenName || hardwareId;
+    const confirmed = await confirm({
+      title: "Ekranı Sil",
+      message: `"${displayName}" isimli ekranı sistemden tamamen silmek istediğinize emin misiniz?`,
+      confirmText: "Sil",
+      cancelText: "Vazgeç",
+      type: "danger"
+    });
+    if (!confirmed) return;
+
     setDeletingId(deviceId);
     try {
       const res = await fetch(`/api/content/devices/${deviceId}`, { method: "DELETE" });
       if (res.ok || res.status === 204) {
         setScreens((prev) => prev.filter((s) => s.id !== deviceId));
-        setDeleteConfirmId(null);
       }
     } finally {
       setDeletingId(null);
@@ -190,8 +196,8 @@ export default function ScreensPage() {
   };
 
 
-  const loadScreens = async () => {
-    setLoading(true);
+  const loadScreens = async (silent = false) => {
+    if (!silent) setLoading(true);
     setError(null);
     try {
       const [devicesRes, playlistsRes] = await Promise.all([
@@ -211,9 +217,11 @@ export default function ScreensPage() {
         setPlaylists(plPayload.playlists ?? []);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "An error occurred while loading screens.");
+      if (!silent) {
+        setError(err instanceof Error ? err.message : "An error occurred while loading screens.");
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -226,6 +234,11 @@ export default function ScreensPage() {
 
   useEffect(() => {
     void loadScreens();
+    const id = setInterval(() => {
+      setNowMs(Date.now());
+      void loadScreens(true);
+    }, 30_000);
+    return () => clearInterval(id);
   }, []);
 
   // Filtered devices based on search query
@@ -337,7 +350,7 @@ export default function ScreensPage() {
         <div style={{ display: "flex", alignItems: "center", gap: "20px", fontSize: "14px", color: "#64748b", flexWrap: "wrap" }}>
           
           <button
-            onClick={loadScreens}
+            onClick={() => void loadScreens()}
             style={{
               background: "none",
               border: "none",
@@ -367,7 +380,7 @@ export default function ScreensPage() {
           </button>
 
           <button
-            onClick={() => { setManagerSearch(""); setDeleteConfirmId(null); setIsManagerOpen(true); }}
+            onClick={() => { setManagerSearch(""); setIsManagerOpen(true); }}
             style={{
               background: "none",
               border: "none",
@@ -714,52 +727,38 @@ export default function ScreensPage() {
                       </div>
                     </div>
 
-                    {/* Delete area */}
-                    {deleteConfirmId === screen.id ? (
-                      <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
-                        <span style={{ fontSize: "12px", color: "#ef4444", fontWeight: 600 }}>Confirm delete?</span>
-                        <button
-                          onClick={() => handleDeleteScreen(screen.id)}
-                          disabled={deletingId === screen.id}
-                          style={{
-                            backgroundColor: "#ef4444", color: "#fff",
-                            border: "none", borderRadius: "6px",
-                            padding: "5px 10px", fontSize: "12px", fontWeight: 700,
-                            cursor: "pointer"
-                          }}
-                        >
-                          {deletingId === screen.id ? "Deleting..." : "Delete"}
-                        </button>
-                        <button
-                          onClick={() => setDeleteConfirmId(null)}
-                          style={{
-                            background: "none", border: "1px solid #e2e8f0",
-                            borderRadius: "6px", padding: "5px 10px",
-                            fontSize: "12px", cursor: "pointer", color: "#64748b"
-                          }}
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => setDeleteConfirmId(screen.id)}
-                        title="Delete screen"
-                        style={{
-                          background: "none", border: "none",
-                          cursor: "pointer", color: "#94a3b8",
-                          padding: "4px", borderRadius: "6px",
-                          display: "flex", alignItems: "center",
-                          transition: "color 0.15s"
-                        }}
-                        onMouseEnter={(e) => (e.currentTarget.style.color = "#ef4444")}
-                        onMouseLeave={(e) => (e.currentTarget.style.color = "#94a3b8")}
-                      >
-                        <svg style={{ width: 16, height: 16 }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        </svg>
-                      </button>
-                    )}
+                    {/* Delete button */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        void handleDeleteScreen(screen.id, screen.hardware_id, screen.name);
+                      }}
+                      disabled={deletingId === screen.id}
+                      title="Delete screen"
+                      style={{
+                        background: "none", border: "none",
+                        cursor: deletingId === screen.id ? "not-allowed" : "pointer", 
+                        color: deletingId === screen.id ? "#cbd5e1" : "#94a3b8",
+                        padding: "4px", borderRadius: "6px",
+                        display: "flex", alignItems: "center",
+                        transition: "color 0.15s"
+                      }}
+                      onMouseEnter={(e) => {
+                        if (deletingId !== screen.id) {
+                          e.currentTarget.style.color = "#ef4444";
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        if (deletingId !== screen.id) {
+                          e.currentTarget.style.color = "#94a3b8";
+                        }
+                      }}
+                    >
+                      <svg style={{ width: 16, height: 16 }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
                   </div>
                 ));
               })()}

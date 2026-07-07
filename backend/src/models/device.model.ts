@@ -24,6 +24,7 @@ export type DeviceDoc = {
   resolution: string | null;
   memoryTotal: string | null;
   memoryUsed: string | null;
+  diagnostics?: Record<string, any> | null;
 };
 
 const DeviceSchema = new Schema<DeviceDoc>(
@@ -57,7 +58,8 @@ const DeviceSchema = new Schema<DeviceDoc>(
     osVersion: { type: String, default: null },
     resolution: { type: String, default: null },
     memoryTotal: { type: String, default: null },
-    memoryUsed: { type: String, default: null }
+    memoryUsed: { type: String, default: null },
+    diagnostics: { type: Schema.Types.Mixed, default: null }
   },
   { timestamps: true }
 );

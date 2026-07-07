@@ -22,74 +22,47 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
+/**
+ * Application-level singleton that owns the entire player service graph.
+ *
+ * ## Idempotency guarantee (fixes K1 / Y5)
+ * [enqueueStartup] is called from three entry points:
+ *  - [MainActivity.onCreate]
+ *  - [BootReceiver.onReceive]
+ *  - Occasionally from test harnesses
+ *
+ * Without an idempotency guard every call creates a second [PlayerController],
+ * [PlaybackCoordinator], and [SocketClientManager], leaving orphaned coroutine
+ * scopes, unreleased ExoPlayer instances, and duplicate socket connections.
+ *
+ * The [started] flag (AtomicBoolean) makes the first call perform the full
+ * setup and all subsequent calls a no-op.  [forceReset] is the only path that
+ * sets [started] back to false, allowing a clean re-initialisation.
+ */
 object StartupCoordinator {
+    private const val TAG = "StartupCoordinator"
+
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    @Volatile
-    private var playerControllerRef: PlayerController? = null
-    @Volatile
-    private var backendBaseUrl: String = AppDefaults.BACKEND_BASE_URL
-    @Volatile
-    private var telemetryReporterRef: DeviceTelemetryReporter? = null
+
+    /**
+     * Guards against duplicate initialisation.  Set to true after the first
+     * successful [enqueueStartup] call; reset to false only by [forceReset].
+     */
+    private val started = AtomicBoolean(false)
+
+    @Volatile private var playerControllerRef: PlayerController? = null
+    @Volatile private var backendBaseUrl: String = AppDefaults.BACKEND_BASE_URL
+    @Volatile private var telemetryReporterRef: DeviceTelemetryReporter? = null
 
     fun getPlayerController(): PlayerController? = playerControllerRef
     fun getBackendBaseUrl(): String = backendBaseUrl
     fun getTelemetryReporter(): DeviceTelemetryReporter? = telemetryReporterRef
 
-    fun forceReset(context: Context) {
-        appScope.launch {
-            try {
-                Log.d("StartupCoordinator", "Forcing device unpair and clearing all local caches...")
-                
-                // 0. Stop SessionManager first to prevent background thread race conditions
-                SessionManager.stop()
-
-                // 1. Call backend unpair API
-                val resolvedSocketBaseUrl = getBackendBaseUrl()
-                val pairingApi = RetrofitFactory.create(resolvedSocketBaseUrl)
-                val hardwareId = HardwareIdStore(context).getOrCreateHardwareId()
-                try {
-                    pairingApi.unpairDevice(
-                        bootstrapKey = AppDefaults.BOOTSTRAP_KEY,
-                        request = UnpairRequest(hardware_id = hardwareId)
-                    )
-                    Log.d("StartupCoordinator", "Backend unpair completed successfully")
-                } catch (e: Exception) {
-                    Log.e("StartupCoordinator", "Failed to call backend unpair API", e)
-                }
-
-                // 2. Clear pairing state in store
-                val store = PairingStateStore(context)
-                store.clearPaired()
-
-                // 3. Clear database playlist
-                val db = PlayerDatabaseProvider.getDatabase(context)
-                val playlistRepository = PlaylistRepository(db.playlistDao())
-                playlistRepository.replacePlaylist(emptyList())
-
-                // 4. Delete cached media files on disk
-                val contentRoot = File(context.filesDir, "content")
-                if (contentRoot.exists()) {
-                    contentRoot.deleteRecursively()
-                }
-
-                // 5. Force pause player controller reference so playback stops
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                    playerControllerRef?.pause()
-                }
-
-                // 6. Restart SessionManager in unpaired state
-                val activePairingApi = RetrofitFactory.create(getBackendBaseUrl())
-                SessionManager.start(
-                    context = context,
-                    hardwareId = HardwareIdStore(context).getOrCreateHardwareId(),
-                    api = activePairingApi
-                )
-            } catch (e: Exception) {
-                Log.e("StartupCoordinator", "Failed to force reset", e)
-            }
-        }
-    }
+    // -------------------------------------------------------------------------
+    // Screenshot provider
+    // -------------------------------------------------------------------------
 
     private var screenshotProvider: (suspend () -> File?)? = null
 
@@ -101,18 +74,100 @@ object StartupCoordinator {
         screenshotProvider = null
     }
 
-    suspend fun takeScreenshot(): File? {
-        return screenshotProvider?.invoke()
+    suspend fun takeScreenshot(): File? = screenshotProvider?.invoke()
+
+    // -------------------------------------------------------------------------
+    // Force reset (unpair + clear)
+    // -------------------------------------------------------------------------
+
+    fun forceReset(context: Context) {
+        appScope.launch {
+            try {
+                Log.d(TAG, "Forcing device unpair and clearing all local caches…")
+
+                // Allow a new full initialisation after reset completes.
+                started.set(false)
+
+                // 0. Stop SessionManager first to prevent background thread race conditions.
+                SessionManager.stop()
+
+                // 1. Call backend unpair API.
+                val resolvedUrl = getBackendBaseUrl()
+                val pairingApi = RetrofitFactory.create(resolvedUrl)
+                val hardwareId = HardwareIdStore(context).getOrCreateHardwareId()
+                try {
+                    pairingApi.unpairDevice(
+                        bootstrapKey = AppDefaults.BOOTSTRAP_KEY,
+                        request = UnpairRequest(hardware_id = hardwareId)
+                    )
+                    Log.d(TAG, "Backend unpair completed successfully")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to call backend unpair API", e)
+                }
+
+                // 2. Clear pairing state.
+                PairingStateStore(context).clearPaired()
+
+                // 3. Clear playlist from database.
+                val db = PlayerDatabaseProvider.getDatabase(context)
+                PlaylistRepository(db.playlistDao()).replacePlaylist(emptyList())
+
+                // 4. Delete cached media files from disk.
+                val contentRoot = File(context.filesDir, "content")
+                if (contentRoot.exists()) contentRoot.deleteRecursively()
+
+                // 5. Pause current playback on Main thread to stop audio/video output.
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    playerControllerRef?.pause()
+                }
+
+                // 6. Restart SessionManager in Unpaired state so the pairing screen appears.
+                val freshApi = RetrofitFactory.create(getBackendBaseUrl())
+                SessionManager.start(
+                    context = context,
+                    hardwareId = HardwareIdStore(context).getOrCreateHardwareId(),
+                    api = freshApi
+                )
+
+                Log.d(TAG, "Force reset completed — device is now unpaired")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to force reset", e)
+            }
+        }
     }
 
+    // -------------------------------------------------------------------------
+    // Startup
+    // -------------------------------------------------------------------------
+
+    /**
+     * Initialises the full player service graph exactly once per process lifetime.
+     *
+     * Subsequent calls (e.g. from [MainActivity.onCreate] on config-change or
+     * from [BootReceiver] if the Activity is already alive) are **silently
+     * ignored** thanks to the [started] AtomicBoolean guard.
+     *
+     * Call [forceReset] to allow a fresh initialisation (e.g. after unpair).
+     */
     fun enqueueStartup(
         context: Context,
         runtimeDeviceId: String? = null,
         socketBaseUrl: String? = null
     ) {
+        // Idempotency guard — only the very first caller proceeds.
+        if (!started.compareAndSet(false, true)) {
+            Log.d(TAG, "enqueueStartup called but already initialised — skipping")
+            // Always guarantee the foreground service is alive on every call
+            // even if the rest of the setup is already done.
+            PlayerForegroundService.start(context)
+            return
+        }
+
+        Log.d(TAG, "enqueueStartup — first call, performing full setup")
+
         // Ensure the foreground service is running so the OS does not kill the
         // process during startup (e.g. while SessionManager is doing its first
-        // network handshake). This is idempotent — safe to call multiple times.
+        // network handshake).
         PlayerForegroundService.start(context)
 
         val hardwareId = HardwareIdStore(context).getOrCreateHardwareId()
@@ -128,6 +183,7 @@ object StartupCoordinator {
             hardwareId = hardwareId,
             api = pairingApi
         )
+
         val telemetryReporter = DeviceTelemetryReporter(
             baseUrl = resolvedSocketBaseUrl,
             bootstrapKey = AppDefaults.BOOTSTRAP_KEY,
@@ -136,8 +192,10 @@ object StartupCoordinator {
             deviceIdHint = runtimeDeviceId
         )
         telemetryReporterRef = telemetryReporter
+
         val db = PlayerDatabaseProvider.getDatabase(context)
         val playlistRepository = PlaylistRepository(db.playlistDao())
+
         val syncManager = ContentSyncManager(
             appContext = context,
             playlistRepository = playlistRepository,
@@ -145,8 +203,10 @@ object StartupCoordinator {
         ) { source, message, details ->
             telemetryReporter.reportError(source, message, details)
         }
+
         val playerController = PlayerController(context)
         playerControllerRef = playerController
+
         val playbackCoordinator = PlaybackCoordinator(
             context = context,
             playlistRepository = playlistRepository,
@@ -154,6 +214,7 @@ object StartupCoordinator {
         ) { source, message, details ->
             telemetryReporter.reportError(source, message, details)
         }
+
         val commandExecutor = CommandExecutor(
             appContext = context,
             onForceRefresh = {
@@ -173,7 +234,7 @@ object StartupCoordinator {
         appScope.launch {
             com.signage.player.config.OperatingHoursManager.checkAndApply(context)
             while (true) {
-                kotlinx.coroutines.delay(10000)
+                kotlinx.coroutines.delay(10_000)
                 com.signage.player.config.OperatingHoursManager.checkAndApply(context)
             }
         }
@@ -181,9 +242,6 @@ object StartupCoordinator {
         SocketClientManager.registerSyncHandler { payload ->
             try {
                 syncManager.applySyncPayload(payload)
-                // Improvement 4: graceful reload — give the current item up to
-                // GRACE_PERIOD_MS to finish naturally before swapping the playlist.
-                // On 1 000+ devices this prevents a simultaneous hard-cut on all screens.
                 playbackCoordinator.gracefulReload(PlaybackCoordinator.GRACE_PERIOD_MS)
                 playbackCoordinator.persistSnapshot()
             } catch (error: Exception) {
@@ -199,10 +257,32 @@ object StartupCoordinator {
         }
 
         SocketClientManager.registerCommandHandler { payload: CommandDispatchPayload ->
-            val ackPayload = commandExecutor.execute(socketDeviceId, payload)
+            val activeId = SocketClientManager.currentDeviceId.ifBlank { socketDeviceId }
+            val ackPayload = commandExecutor.execute(activeId, payload)
             SocketClientManager.emitCommandAck(ackPayload)
         }
 
+        // Dynamically track pairing state changes to re-initialize the socket with the
+        // correct Mongo device ID when paired, or fallback to hardwareId when unpaired.
+        // This ensures the device's WebSocket room membership matches the backend database state
+        // instantly after pairing, preventing first-publish content synchronization failures.
+        appScope.launch {
+            var currentSocketId = socketDeviceId
+            com.signage.player.network.SessionManager.state.collect { state ->
+                val targetSocketId = when (state) {
+                    is com.signage.player.network.DevicePairingState.Paired -> state.deviceId
+                    else -> hardwareId
+                }
+                if (targetSocketId != currentSocketId) {
+                    Log.i(TAG, "Pairing state changed — Re-initialising socket with ID: $targetSocketId (was: $currentSocketId)")
+                    currentSocketId = targetSocketId
+                    SocketClientManager.initialize(context, targetSocketId, resolvedSocketBaseUrl)
+                }
+            }
+        }
+
         SocketClientManager.initialize(context, socketDeviceId, resolvedSocketBaseUrl)
+
+        Log.d(TAG, "enqueueStartup — setup complete")
     }
 }
