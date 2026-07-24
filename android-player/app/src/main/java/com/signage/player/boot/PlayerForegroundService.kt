@@ -56,6 +56,26 @@ class PlayerForegroundService : Service() {
             }
         }
 
+        fun scheduleRestart(context: Context, delayMs: Long = 5_000L) {
+            try {
+                val alarmManager = context.getSystemService(android.app.AlarmManager::class.java)
+                val restartIntent = Intent(context, PlayerRestartReceiver::class.java)
+                    .setAction(PlayerRestartReceiver.ACTION_RESTART_PLAYER)
+                val pendingIntent = PendingIntent.getBroadcast(
+                    context,
+                    1002,
+                    restartIntent,
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                )
+                alarmManager.setAndAllowWhileIdle(
+                    android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    android.os.SystemClock.elapsedRealtime() + delayMs.coerceAtLeast(1_000L),
+                    pendingIntent
+                )
+            } catch (error: Exception) {
+                Log.e(TAG, "Unable to schedule player restart", error)
+            }
+        }
         /** Graceful stop — called only on factory reset / uninstall flows. */
         fun stop(context: Context) {
             context.stopService(Intent(context, PlayerForegroundService::class.java))
@@ -85,6 +105,11 @@ class PlayerForegroundService : Service() {
             startForeground(NOTIFICATION_ID, buildNotification())
         }
 
+        // START_STICKY may recreate only this Service in a brand-new process.
+        if (!StartupCoordinator.isStarted()) {
+            StartupCoordinator.enqueueStartup(applicationContext)
+        }
+
         // START_STICKY: if the OS kills this service due to low memory, it will
         // automatically restart it as soon as resources are available, replaying
         // the last non-null intent. This is the correct mode for a persistent
@@ -98,11 +123,11 @@ class PlayerForegroundService : Service() {
         // the service to keep media running in the background.
         super.onTaskRemoved(rootIntent)
         Log.d(TAG, "Task removed — scheduling service restart")
-        val restartIntent = Intent(applicationContext, PlayerForegroundService::class.java)
-        startForegroundService(restartIntent)
+        scheduleRestart(this)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
 
     // -------------------------------------------------------------------------
     // Notification helpers

@@ -1,15 +1,15 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 import { getBackendBaseUrl, getDashboardAccessToken } from "../_utils";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
     const token = await getDashboardAccessToken();
     if (!token) {
       return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
     }
 
-    const backendResponse = await fetch(`${getBackendBaseUrl()}/api/v1/content/media`, {
+    const backendResponse = await fetch(`${getBackendBaseUrl()}/api/v1/content/media${request.nextUrl.search}`, {
       headers: { authorization: `Bearer ${token}` },
       cache: "no-store"
     });

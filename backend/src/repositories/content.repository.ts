@@ -40,9 +40,13 @@ type ShadowPlaylistInput = {
   tenantId: string;
   externalId: string;
   name: string;
+  nameKey: string;
+  creationKey: string | null;
   version: number;
+  contentChecksumSha256: string;
   itemsJson: unknown;
   publishedAt: Date | null;
+  publishedVersion: number | null;
   ownerUserId?: string | null;
 };
 
@@ -50,9 +54,13 @@ export type ShadowPlaylistRow = {
   id: string;
   external_id: string;
   name: string;
+  name_key: string;
+  creation_key: string | null;
   version: number;
+  content_checksum_sha256: string;
   items_json: unknown;
   published_at: Date | null;
+  published_version: number | null;
   owner_user_id: string | null;
   created_at: Date;
   updated_at: Date;
@@ -115,7 +123,7 @@ export class ContentRepository {
         checksum_sha256, storage_path, public_url, status, owner_user_id, folder
       )
       VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-      ON CONFLICT (tenant_id, external_id)
+      ON CONFLICT (tenant_id, external_id) WHERE deleted_at IS NULL
       DO UPDATE SET
         filename = EXCLUDED.filename,
         mime_type = EXCLUDED.mime_type,
@@ -199,24 +207,33 @@ export class ContentRepository {
     const pool = getPostgresPool();
     await pool.query(
       `INSERT INTO playlists (
-        tenant_id, external_id, name, version, items_json, published_at, owner_user_id
+        tenant_id, external_id, name, name_key, creation_key, version,
+        content_checksum_sha256, items_json, published_at, published_version, owner_user_id
       )
-      VALUES ($1::uuid, $2, $3, $4, $5::jsonb, $6, $7)
-      ON CONFLICT (tenant_id, external_id)
+      VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)
+      ON CONFLICT (tenant_id, external_id) WHERE deleted_at IS NULL
       DO UPDATE SET
         name = EXCLUDED.name,
+        name_key = EXCLUDED.name_key,
+        creation_key = COALESCE(playlists.creation_key, EXCLUDED.creation_key),
         version = EXCLUDED.version,
+        content_checksum_sha256 = EXCLUDED.content_checksum_sha256,
         items_json = EXCLUDED.items_json,
         published_at = EXCLUDED.published_at,
+        published_version = EXCLUDED.published_version,
         owner_user_id = EXCLUDED.owner_user_id,
         updated_at = CURRENT_TIMESTAMP`,
       [
         input.tenantId,
         input.externalId,
         input.name,
+        input.nameKey,
+        input.creationKey,
         input.version,
+        input.contentChecksumSha256,
         JSON.stringify(input.itemsJson),
         input.publishedAt,
+        input.publishedVersion,
         input.ownerUserId ?? null
       ]
     );
@@ -237,7 +254,7 @@ export class ContentRepository {
   async setDevicesCurrentPlaylist(
     tenantId: string,
     hardwareIds: string[],
-    playlistExternalId: string
+    playlistExternalId: string | null
   ): Promise<void> {
     if (!isPostgresConnected() || hardwareIds.length === 0) {
       logger.debug('Skipping device playlist assignment', {
@@ -285,7 +302,7 @@ export class ContentRepository {
   private async performSetDevicesCurrentPlaylist(
     tenantId: string,
     hardwareIds: string[],
-    playlistExternalId: string
+    playlistExternalId: string | null
   ): Promise<void> {
     const pool = getPostgresPool();
     const result = await pool.query(
@@ -412,14 +429,14 @@ export class ContentRepository {
          FROM media
          WHERE tenant_id = $1::uuid
            AND deleted_at IS NULL`;
-      const params: any[] = [tenantId];
+      const params: unknown[] = [tenantId];
       
       if (ownerUserId) {
         params.push(ownerUserId);
         queryStr += ` AND owner_user_id = $${params.length}`;
       }
       
-      params.push(limit);
+      params.push(Math.min(Math.max(Math.trunc(limit), 1), 200));
       queryStr += ` ORDER BY updated_at DESC LIMIT $${params.length}`;
 
       const result = await pool.query<ShadowMediaRow>(queryStr, params);
@@ -483,8 +500,9 @@ export class ContentRepository {
     try {
       const pool = getPostgresPool();
       const result = await pool.query<ShadowPlaylistRow>(
-        `SELECT id, external_id, name, version, items_json,
-                published_at, owner_user_id, created_at, updated_at
+        `SELECT id, external_id, name, name_key, creation_key, version,
+                content_checksum_sha256, items_json, published_at, published_version,
+                owner_user_id, created_at, updated_at
          FROM playlists
          WHERE tenant_id = $1::uuid
            AND external_id = $2
@@ -553,19 +571,20 @@ export class ContentRepository {
     const startTime = Date.now();
     try {
       const pool = getPostgresPool();
-      let queryStr = `SELECT id, external_id, name, version, items_json,
-                published_at, owner_user_id, created_at, updated_at
+      let queryStr = `SELECT id, external_id, name, name_key, creation_key, version,
+                content_checksum_sha256, items_json, published_at, published_version,
+                owner_user_id, created_at, updated_at
          FROM playlists
          WHERE tenant_id = $1::uuid
            AND deleted_at IS NULL`;
-      const params: any[] = [tenantId];
+      const params: unknown[] = [tenantId];
       
       if (ownerUserId) {
         params.push(ownerUserId);
         queryStr += ` AND owner_user_id = $${params.length}`;
       }
       
-      params.push(limit);
+      params.push(Math.min(Math.max(Math.trunc(limit), 1), 200));
       queryStr += ` ORDER BY updated_at DESC LIMIT $${params.length}`;
 
       const result = await pool.query<ShadowPlaylistRow>(queryStr, params);
@@ -605,7 +624,7 @@ export class ContentRepository {
    * Soft delete playlist in shadow table with retry logic
    * Non-blocking: failures are logged but do not throw
    */
-  async deletePlaylist(tenantId: string, playlistExternalId: string): Promise<void> {
+  async deletePlaylist(tenantId: string, playlistExternalId: string | null): Promise<void> {
     if (!isPostgresConnected()) {
       logger.debug('PostgreSQL not connected, skipping playlist delete', {
         operation: 'deletePlaylist',

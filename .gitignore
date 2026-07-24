@@ -39,3 +39,13 @@ Thumbs.db
 android-player-*.png
 test_results_*.log
 ui.xml
+
+# Runtime data must live in object storage or a mounted volume
+backend/uploads/
+test_token.txt
+screencap.png
+
+# Android signing material
+*.jks
+*.keystore
+keystore.properties

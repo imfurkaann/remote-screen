@@ -10,9 +10,9 @@ export type PairingCodeDoc = {
 
 const PairingCodeSchema = new Schema<PairingCodeDoc>(
   {
-    deviceId: { type: String, required: true, index: true },
-    tenantId: { type: String, required: false, default: null, index: true },
-    code: { type: String, required: true, index: true },
+    deviceId: { type: String, required: true, trim: true, maxlength: 64 },
+    tenantId: { type: String, required: false, default: null, trim: true, maxlength: 64, index: true },
+    code: { type: String, required: true, trim: true, match: /^[0-9]{6}$/ },
     expiresAt: { type: Date, required: true },
     consumedAt: { type: Date, default: null }
   },
@@ -20,5 +20,13 @@ const PairingCodeSchema = new Schema<PairingCodeDoc>(
 );
 
 PairingCodeSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+PairingCodeSchema.index(
+  { deviceId: 1 },
+  { name: "unique_active_pairing_code_per_device", unique: true, partialFilterExpression: { consumedAt: null } }
+);
+PairingCodeSchema.index(
+  { code: 1 },
+  { name: "unique_active_pairing_code_value", unique: true, partialFilterExpression: { consumedAt: null } }
+);
 
 export const PairingCodeModel = model<PairingCodeDoc>("PairingCode", PairingCodeSchema);

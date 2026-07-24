@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { REMOTE_COMMANDS } from "@/lib/mock-data";
+import { buildDeviceQuery } from "@/lib/device-query";
 
 type DeviceItem = {
   id: string;
@@ -24,8 +25,9 @@ const TERMINAL_STATUSES = new Set(["completed", "failed", "timeout"]);
 const POLL_INTERVAL_MS = 2500;
 const POLL_MAX_MS = 20_000;
 
-async function fetchDevices(): Promise<DeviceItem[]> {
-  const response = await fetch("/api/content/devices", { cache: "no-store" });
+async function fetchDevices(search: string): Promise<DeviceItem[]> {
+  const query = buildDeviceQuery({ page: 1, limit: 100, search });
+  const response = await fetch(`/api/content/devices?${query.toString()}`, { cache: "no-store" });
   if (!response.ok) {
     return [];
   }
@@ -38,6 +40,7 @@ export default function RemoteControlPage() {
   const [devices, setDevices] = useState<DeviceItem[]>([]);
   const [loadingDevices, setLoadingDevices] = useState(false);
   const [deviceId, setDeviceId] = useState("");
+  const [deviceSearch, setDeviceSearch] = useState("");
   const [commandType, setCommandType] = useState("");
   const [payloadText, setPayloadText] = useState('{"volume": 45}');
   const [status, setStatus] = useState<CommandStatus | null>(null);
@@ -60,7 +63,7 @@ export default function RemoteControlPage() {
 
   const loadDevices = async () => {
     setLoadingDevices(true);
-    const data = await fetchDevices();
+    const data = await fetchDevices(deviceSearch);
     setDevices(data);
     setLoadingDevices(false);
   };
@@ -165,7 +168,15 @@ export default function RemoteControlPage() {
         </p>
       </header>
 
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <input
+          value={deviceSearch}
+          onChange={(event) => setDeviceSearch(event.target.value)}
+          onKeyDown={(event) => { if (event.key === "Enter") void loadDevices(); }}
+          placeholder="Ekran adı, konum veya cihaz kimliği"
+          aria-label="Ekran ara"
+          style={{ minWidth: 280 }}
+        />
         <button type="button" onClick={loadDevices} disabled={loadingDevices}>
           {loadingDevices ? "Yükleniyor..." : "Cihazları Yükle"}
         </button>

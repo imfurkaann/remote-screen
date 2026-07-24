@@ -23,21 +23,57 @@ import { buildSuperRouter } from "./routes/super.route.js";
 
 export function buildApp(env: Env) {
   const app = express();
+  const allowedOrigins = env.corsOrigin.split(",").map((origin) => origin.trim()).filter(Boolean);
 
+  if (env.nodeEnv === "production") {
+    app.set("trust proxy", 1);
+  }
+
+  app.disable("x-powered-by");
+  app.use((_req, res, next) => {
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("Referrer-Policy", "no-referrer");
+    res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+    if (env.nodeEnv === "production") {
+      res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+    }
+    next();
+  });
   app.use(
     cors({
-      origin: env.corsOrigin === "*" ? true : env.corsOrigin,
+      origin(origin, callback) {
+        if (!origin || env.corsOrigin === "*" || allowedOrigins.includes(origin)) {
+          callback(null, true);
+          return;
+        }
+        callback(new Error("Origin is not allowed"));
+      },
       credentials: true
     })
   );
-  app.use(express.json());
+  app.use(express.json({ limit: "1mb" }));
   app.use("/api/v1", requireObjectJsonBody({ skipPaths: ["/api/v1/content/media/upload"] }));
   app.use(attachCorrelationId);
   app.use(normalizeErrorResponses);
   app.use(requestLogging);
-  app.use("/uploads", express.static(path.resolve(process.cwd(), "uploads")));
+  app.use("/uploads", express.static(path.resolve(env.mediaStorageRoot || path.resolve(process.cwd(), "uploads")), {
+    dotfiles: "deny",
+    fallthrough: false,
+    immutable: true,
+    maxAge: "1h",
+    setHeaders(res) {
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+      res.setHeader("Cross-Origin-Resource-Policy", "same-site");
+    }
+  }));
 
-  app.use("/api/v1", buildHealthRouter());
+  app.use("/api/v1", buildHealthRouter({
+    nodeEnv: env.nodeEnv,
+    pgEnabled: env.pgEnabled,
+    metricsToken: env.opsMetricsToken ?? null
+  }));
   app.use(
     "/api/v1/auth",
     buildAuthRouter({
@@ -52,7 +88,10 @@ export function buildApp(env: Env) {
       jwtSecret: env.jwtAccessSecret,
       jwtIssuer: env.jwtIssuer,
       jwtAudience: env.jwtAudience,
-      readFromPostgresPercentage: env.readFromPostgresPercentage
+      readFromPostgresPercentage: env.readFromPostgresPercentage,
+      mediaStorageRoot: env.mediaStorageRoot,
+      mediaPublicBaseUrl: env.mediaPublicBaseUrl,
+      mediaMaxFileBytes: env.mediaMaxFileBytes
     })
   );
   app.use(

@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main, develop]
 
+permissions:
+  contents: read
+
 jobs:
   node-quality:
     runs-on: ubuntu-latest
@@ -16,31 +19,54 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
+          cache: npm
 
-      - name: Install dependencies
-        run: npm install
+      - name: Install locked dependencies
+        run: npm ci
 
-      - name: Lint
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Type check
         run: npm run lint
 
       - name: Test
         run: npm run test
 
-      - name: Build
+      - name: Production build
         run: npm run build
 
-  kotlin-quality:
+      - name: Run full system simulation
+        run: npm run test:system
+
+  android-quality:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android-player
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Kotlin quality precheck
-        run: |
-          if [ -f "android-player/.editorconfig" ]; then
-            echo "Kotlin quality baseline found"
-          else
-            echo "Missing android-player/.editorconfig"
-            exit 1
-          fi
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v4
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x gradlew
+
+      - name: Run Android unit tests
+        run: ./gradlew testDebugUnitTest --no-daemon
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Run Android lint
+        run: ./gradlew lintDebug --no-daemon

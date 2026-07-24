@@ -9,12 +9,15 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
 import java.nio.file.Files
+import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Manages download and atomic activation of playlist content.
@@ -46,14 +49,17 @@ class ContentSyncManager(
     private val onError: (source: String, message: String, details: Map<String, Any?>) -> Unit = { _, _, _ -> }
 ) {
     private val tag = "ContentSyncManager"
+    private val syncMutex = Mutex()
+    private val syncState = appContext.applicationContext
+        .getSharedPreferences("content_sync_state", Context.MODE_PRIVATE)
 
     // -----------------------------------------------------------------------
     // Idempotency: skip SYNC_CONTENT events we have already processed.
     // Volatile + AtomicInteger for thread-safe access from coroutine Dispatchers.IO.
     // -----------------------------------------------------------------------
     @Volatile
-    private var lastAppliedPlaylistId: String = ""
-    private val lastAppliedVersion = AtomicInteger(-1)
+    private var lastAppliedPlaylistId: String = syncState.getString("playlist_id", "").orEmpty()
+    private val lastAppliedVersion = AtomicInteger(syncState.getInt("playlist_version", -1))
     /**
      * SHA-256 checksum of the last successfully applied playlist.
      * Used as the primary deduplication key on socket reconnect: when the
@@ -63,7 +69,7 @@ class ContentSyncManager(
      * restart, no visible glitch on screen.
      */
     @Volatile
-    private var lastAppliedChecksum: String = ""
+    private var lastAppliedChecksum: String = syncState.getString("playlist_checksum", "").orEmpty()
 
     // -----------------------------------------------------------------------
     // Shared OkHttp client — connection pooling across all downloads in a
@@ -93,6 +99,8 @@ class ContentSyncManager(
         private const val MIN_FREE_BYTES = 200L * 1024L * 1024L
 
         private const val MAX_CACHE_BYTES = 2L * 1024L * 1024L * 1024L
+        private const val MAX_MEDIA_FILE_BYTES = 1L * 1024L * 1024L * 1024L
+        private const val STALE_STAGING_AGE_MS = 24L * 60L * 60L * 1_000L
 
         /**
          * Maximum total size (bytes) of the quarantine folder.
@@ -119,7 +127,8 @@ class ContentSyncManager(
      * then atomically swaps staging → active. Idempotent: duplicate payloads
      * (same playlistId + same or older version) are silently skipped.
      */
-    suspend fun applySyncPayload(payload: SyncContentPayload) {
+    suspend fun applySyncPayload(payload: SyncContentPayload) = syncMutex.withLock {
+        recoverInterruptedActivationUnlocked()
         // --- Idempotency guard ---
         // The backend currently emits SYNC_CONTENT twice per device (once by
         // hardwareId, once by _id). Skip the duplicate to avoid re-downloading
@@ -133,25 +142,26 @@ class ContentSyncManager(
         val incomingVersion = payload.playlistVersion
         val incomingChecksum = payload.checksumSha256.orEmpty()
 
-        if (incomingChecksum.isNotEmpty() && incomingChecksum == lastAppliedChecksum) {
+        if (incomingChecksum.isNotEmpty() && incomingChecksum == lastAppliedChecksum && isCacheUsable(payload)) {
             Log.d(
                 tag,
                 "Skipping SYNC_CONTENT: checksum matches already-applied playlist " +
                     "(checksum=${incomingChecksum.take(12)}… playlist=${payload.playlistId})"
             )
-            return
+            return@withLock
         }
 
         if (payload.playlistId == lastAppliedPlaylistId &&
             incomingVersion <= lastAppliedVersion.get() &&
-            incomingChecksum.isEmpty()
+            incomingChecksum.isEmpty() &&
+            isCacheUsable(payload)
         ) {
             Log.d(
                 tag,
                 "Skipping duplicate SYNC_CONTENT: playlist=${payload.playlistId} " +
                     "version=$incomingVersion (already applied version=${lastAppliedVersion.get()})"
             )
-            return
+            return@withLock
         }
 
         Log.d(
@@ -180,7 +190,7 @@ class ContentSyncManager(
                     "playlist_id" to payload.playlistId
                 )
             )
-            return
+            return@withLock
         }
 
         if (stagingDir.exists()) stagingDir.deleteRecursively()
@@ -197,7 +207,7 @@ class ContentSyncManager(
                     durationMs = item.durationMs
                 )
             } else {
-                val targetFile = File(stagingDir, "${item.position}-${item.filename}")
+                val targetFile = File(stagingDir, "${item.position}-${sanitizeFilename(item.filename)}")
                 var downloaded = false
 
                 try {
@@ -247,15 +257,28 @@ class ContentSyncManager(
         // Atomic activation: active → backup, staging → active.
         contentRoot.mkdirs()
         if (backupDir.exists()) backupDir.deleteRecursively()
-        if (activeDir.exists()) activeDir.renameTo(backupDir)
+        if (activeDir.exists() && !activeDir.renameTo(backupDir)) {
+            throw IOException("Unable to preserve current active content before activation")
+        }
 
+        var databaseCommitted = false
         try {
-            Files.move(
-                stagingDir.toPath(),
-                activeDir.toPath(),
-                StandardCopyOption.ATOMIC_MOVE
-            )
+            try {
+                Files.move(
+                    stagingDir.toPath(),
+                    activeDir.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE
+                )
+            } catch (_: AtomicMoveNotSupportedException) {
+                // Some Android filesystems do not implement ATOMIC_MOVE. A rename
+                // inside filesDir is still a same-filesystem operation and keeps
+                // the old generation in backup until Room commits successfully.
+                if (!stagingDir.renameTo(activeDir)) {
+                    Files.move(stagingDir.toPath(), activeDir.toPath())
+                }
+            }
             playlistRepository.replacePlaylist(rows)
+            databaseCommitted = true
             Log.d(tag, "Activated playlist version=${payload.playlistVersion} rows=${rows.size}")
 
             // Mark this version as applied — future duplicates will be skipped.
@@ -264,7 +287,11 @@ class ContentSyncManager(
             // Update checksum so reconnect-triggered SYNC_CONTENT events with
             // identical content are skipped without any disk or network access.
             lastAppliedChecksum = incomingChecksum
-
+            syncState.edit()
+                .putString("playlist_id", lastAppliedPlaylistId)
+                .putInt("playlist_version", incomingVersion)
+                .putString("playlist_checksum", incomingChecksum)
+                .commit()
             if (backupDir.exists()) backupDir.deleteRecursively()
             enforceCacheQuota(contentRoot)
             enforceQuarantineQuota(quarantineDir)
@@ -275,13 +302,67 @@ class ContentSyncManager(
                 error.message ?: "Atomic activation failed",
                 mapOf("playlist_version" to payload.playlistVersion)
             )
-            // Roll back: restore the old active dir from backup.
+            if (databaseCommitted) {
+                // Room already points at the new active files. A metadata/quota
+                // cleanup failure must never roll the filesystem back underneath it.
+                if (backupDir.exists()) backupDir.deleteRecursively()
+                return@withLock
+            }
             if (activeDir.exists()) activeDir.deleteRecursively()
             if (backupDir.exists()) backupDir.renameTo(activeDir)
             throw error
         }
     }
 
+
+    /** Restores the last known-good directory after power loss during activation. */
+    suspend fun recoverInterruptedActivation() = syncMutex.withLock {
+        recoverInterruptedActivationUnlocked()
+    }
+
+    private suspend fun recoverInterruptedActivationUnlocked() {
+        val contentRoot = File(appContext.filesDir, "content")
+        val activeDir = File(contentRoot, "active")
+        val backupDir = File(contentRoot, "backup")
+        if (!activeDir.exists() && backupDir.exists()) {
+            if (backupDir.renameTo(activeDir)) {
+                Log.w(tag, "Recovered active content from interrupted activation")
+            }
+        } else if (activeDir.exists() && backupDir.exists()) {
+            val rows = playlistRepository.getPlaylist()
+            val databaseMatchesActive = rows.isNotEmpty() && rows.all { row ->
+                row.filePath.startsWith("http://") || row.filePath.startsWith("https://") ||
+                    File(row.filePath).isFile
+            }
+            if (databaseMatchesActive) {
+                backupDir.deleteRecursively()
+            } else {
+                activeDir.deleteRecursively()
+                if (backupDir.renameTo(activeDir)) {
+                    Log.w(tag, "Rolled back incomplete content activation")
+                }
+            }
+        }
+        contentRoot.listFiles()
+            ?.filter { it.name.startsWith("staging-") && System.currentTimeMillis() - it.lastModified() > STALE_STAGING_AGE_MS }
+            ?.forEach { it.deleteRecursively() }
+    }
+
+    private suspend fun isCacheUsable(payload: SyncContentPayload): Boolean {
+        val rows = playlistRepository.getPlaylist()
+        if (payload.items.isEmpty()) return rows.isEmpty()
+        if (rows.size != payload.items.size) return false
+        return rows.all { row ->
+            row.filePath.startsWith("http://") || row.filePath.startsWith("https://") ||
+                File(row.filePath).let { it.isFile && it.length() > 0L }
+        }
+    }
+
+    private fun sanitizeFilename(raw: String): String {
+        val leaf = File(raw).name
+        val safe = leaf.replace(Regex("[^A-Za-z0-9._-]"), "_").take(180)
+        return safe.ifBlank { "media.bin" }
+    }
     suspend fun forceRefreshFromActiveCache() {
         // Prefer reading from the DB so that original durationMs values are preserved.
         val dbRows = playlistRepository.getPlaylist()
@@ -361,13 +442,35 @@ class ContentSyncManager(
             }
             val body = response.body
                 ?: throw IOException("Empty response body for $mediaUrl")
-            target.outputStream().use { output ->
-                body.byteStream().copyTo(output)
+            val declaredLength = body.contentLength()
+            if (declaredLength > MAX_MEDIA_FILE_BYTES) {
+                throw IOException("Media file exceeds the ${MAX_MEDIA_FILE_BYTES / (1024 * 1024)} MB device limit")
+            }
+            var copied = 0L
+            try {
+                body.byteStream().use { input ->
+                    target.outputStream().buffered().use { output ->
+                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read < 0) break
+                            copied += read
+                            if (copied > MAX_MEDIA_FILE_BYTES || appContext.filesDir.freeSpace < MIN_FREE_BYTES) {
+                                throw IOException("Download stopped before exhausting device storage")
+                            }
+                            output.write(buffer, 0, read)
+                        }
+                    }
+                }
+            } catch (error: Exception) {
+                target.delete()
+                throw error
             }
         }
     }
 
     private fun verifyChecksum(file: File, expected: String): Boolean {
+        if (expected.isBlank()) return file.isFile && file.length() > 0L
         val checksum = computeSha256(file)
         return checksum.equals(expected, ignoreCase = true)
     }

@@ -616,27 +616,50 @@ export default function NewPlaylistPage() {
   const [allMedia, setAllMedia] = useState<MediaFile[]>([]);
   const [items, setItems] = useState<PlaylistItem[]>([]);
   const [mediaSearch, setMediaSearch] = useState("");
+  const [mediaPage, setMediaPage] = useState(1);
+  const [mediaTotalPages, setMediaTotalPages] = useState(1);
+  const [mediaLoading, setMediaLoading] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<"recent" | "media">("media");
   const [showModal, setShowModal] = useState(false);
   const [saving, setSaving] = useState(false);
+  const creationRequestId = useRef(crypto.randomUUID());
   const [saveMsg, setSaveMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const dragFrom = useRef<number | null>(null);
   const dragOver = useRef<number | null>(null);
 
-  /* load media */
+  /* Load only the visible media page; server-side search keeps large libraries responsive. */
   useEffect(() => {
-    fetchJson<{ media?: MediaFile[] }>("/api/content/media", { cache: "no-store" })
-      .then(p => setAllMedia(p.media ?? []))
-      .catch(() => { });
-  }, []);
+    setMediaPage(1);
+  }, [mediaSearch]);
 
-  const filteredMedia = allMedia.filter(f =>
-    !f.filename.startsWith("Single Media:") &&
-    f.filename.toLowerCase().includes(mediaSearch.toLowerCase())
-  );
-  const recentMedia = [...allMedia]
-    .filter(f => !f.filename.startsWith("Single Media:"))
-    .slice(0, 8);
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setMediaLoading(true);
+      try {
+        const query = new URLSearchParams({ page: String(mediaPage), limit: "50" });
+        if (mediaSearch.trim()) query.set("search", mediaSearch.trim());
+        const payload = await fetchJson<{ media?: MediaFile[]; totalPages?: number }>(
+          `/api/content/media?${query.toString()}`,
+          { cache: "no-store", signal: controller.signal }
+        );
+        setAllMedia(payload.media ?? []);
+        setMediaTotalPages(payload.totalPages ?? 1);
+      } catch (error) {
+        if ((error as Error).name !== "AbortError") setSaveMsg({ text: "Medya listesi yüklenemedi.", ok: false });
+      } finally {
+        if (!controller.signal.aborted) setMediaLoading(false);
+      }
+    }, mediaSearch.trim() ? 250 : 0);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [mediaPage, mediaSearch]);
+
+  const filteredMedia = allMedia.filter(f => !f.filename.startsWith("Single Media:"));
+  const recentMedia = filteredMedia.slice(0, 8);
   const displayedMedia = sidebarTab === "recent" ? recentMedia : filteredMedia;
 
   /* add single item */
@@ -886,6 +909,13 @@ export default function NewPlaylistPage() {
                 ))
               )}
             </div>
+            {sidebarTab === "media" && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", borderTop: "1px solid #e8edf3" }}>
+                <button type="button" disabled={mediaPage <= 1 || mediaLoading} onClick={() => setMediaPage(page => Math.max(1, page - 1))}>Önceki</button>
+                <span style={{ fontSize: 12, color: "#64748b" }}>{mediaLoading ? "Yükleniyor…" : `${mediaPage} / ${mediaTotalPages}`}</span>
+                <button type="button" disabled={mediaPage >= mediaTotalPages || mediaLoading} onClick={() => setMediaPage(page => Math.min(mediaTotalPages, page + 1))}>Sonraki</button>
+              </div>
+            )}
           </div>
         </div>
       </div>

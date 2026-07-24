@@ -25,14 +25,15 @@ export type DeviceDoc = {
   memoryTotal: string | null;
   memoryUsed: string | null;
   diagnostics?: Record<string, any> | null;
+  deviceCredentialHash?: string | null;
 };
 
 const DeviceSchema = new Schema<DeviceDoc>(
   {
-    tenantId: { type: String, required: false, default: null, index: true },
-    hardwareId: { type: String, required: true, unique: true },
-    name: { type: String, default: null },
-    location: { type: String, default: null },
+    tenantId: { type: String, required: false, default: null, trim: true, maxlength: 64, index: true },
+    hardwareId: { type: String, required: true, trim: true, minlength: 1, maxlength: 255, unique: true },
+    name: { type: String, default: null, trim: true, maxlength: 255 },
+    location: { type: String, default: null, trim: true, maxlength: 255 },
     status: {
       type: String,
       enum: ["online", "offline", "degraded"],
@@ -44,27 +45,32 @@ const DeviceSchema = new Schema<DeviceDoc>(
       enum: [0, 90, 180, 270],
       default: 0
     },
-    timezone: { type: String, default: "Europe/Istanbul" },
-    screenGroup: { type: String, default: "Ungrouped" },
-    operatingHours: { type: String, default: "Always On" },
+    timezone: { type: String, default: "Europe/Istanbul", trim: true, maxlength: 100 },
+    screenGroup: { type: String, default: "Ungrouped", trim: true, maxlength: 120 },
+    operatingHours: { type: String, default: "Always On", trim: true, maxlength: 255 },
     scaleMode: { type: String, enum: ["fit", "fill", "stretch"], default: "fit" },
-    notes: { type: String, default: "" },
-    pairedOwnerUserId: { type: String, default: null },
-    currentPlaylistId: { type: String, default: null },
+    notes: { type: String, default: "", maxlength: 4000 },
+    pairedOwnerUserId: { type: String, default: null, trim: true, maxlength: 64 },
+    currentPlaylistId: { type: String, default: null, trim: true, maxlength: 64 },
     lastHeartbeatAt: { type: Date, default: null, index: true },
     lastSeenAt: { type: Date, default: null, index: true },
-    ipAddress: { type: String, default: null },
-    playerVersion: { type: String, default: null },
-    osVersion: { type: String, default: null },
-    resolution: { type: String, default: null },
-    memoryTotal: { type: String, default: null },
-    memoryUsed: { type: String, default: null },
-    diagnostics: { type: Schema.Types.Mixed, default: null }
+    ipAddress: { type: String, default: null, trim: true, maxlength: 64 },
+    playerVersion: { type: String, default: null, trim: true, maxlength: 64 },
+    osVersion: { type: String, default: null, trim: true, maxlength: 128 },
+    resolution: { type: String, default: null, trim: true, maxlength: 64 },
+    memoryTotal: { type: String, default: null, trim: true, maxlength: 64 },
+    memoryUsed: { type: String, default: null, trim: true, maxlength: 64 },
+    diagnostics: { type: Schema.Types.Mixed, default: null },
+    deviceCredentialHash: { type: String, default: null, select: false }
   },
   { timestamps: true }
 );
 
+DeviceSchema.index({ tenantId: 1, name: "text", hardwareId: "text", location: "text" });
 DeviceSchema.index({ tenantId: 1, pairedOwnerUserId: 1 });
+DeviceSchema.index({ tenantId: 1, status: 1, updatedAt: -1 });
+DeviceSchema.index({ tenantId: 1, screenGroup: 1, updatedAt: -1 });
+DeviceSchema.index({ tenantId: 1, status: 1, lastHeartbeatAt: 1 });
 
 export const DeviceModel = model<DeviceDoc>("Device", DeviceSchema);
 

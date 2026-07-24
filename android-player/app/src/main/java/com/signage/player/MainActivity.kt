@@ -1,5 +1,6 @@
 package com.signage.player
 
+import android.annotation.SuppressLint
 import android.os.Bundle
 import android.net.Uri
 import android.widget.ImageView
@@ -32,6 +33,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -64,6 +66,7 @@ import android.graphics.Bitmap
 import android.view.KeyEvent
 import android.view.PixelCopy
 import android.view.Window
+import android.view.WindowManager
 import java.io.FileOutputStream
 import kotlin.coroutines.resume
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -76,7 +79,7 @@ class MainActivity : ComponentActivity() {
     private var lastKeyPressTime = 0L
     private var onResetRequested: (() -> Unit)? = null
 
-    fun setOnResetRequestedListener(listener: () -> Unit) {
+    fun setOnResetRequestedListener(listener: (() -> Unit)?) {
         onResetRequested = listener
     }
 
@@ -109,10 +112,10 @@ class MainActivity : ComponentActivity() {
         val runtimeDeviceId = intent?.getStringExtra("device_id")?.trim().orEmpty().ifBlank { null }
         val socketBaseUrl = intent?.getStringExtra("socket_base_url")?.trim().orEmpty().ifBlank { null }
         StartupCoordinator.enqueueStartup(this, runtimeDeviceId, socketBaseUrl)
-        // Register PlayerController as lifecycle observer so ExoPlayer is paused/released
-        // with this Activity's lifecycle. Observer is removed in onDestroy to prevent leak
-        // when the system recreates the Activity (e.g. config change).
-        StartupCoordinator.getPlayerController()?.let { lifecycle.addObserver(it) }
+        // Keep static image/web signage awake; ExoPlayer wake locks only cover video.
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        setShowWhenLocked(true)
+        setTurnScreenOn(true)
 
         // O1: Clean up stale screenshot files from previous sessions.
         // Screenshots accumulate in cacheDir when SCREENSHOT commands are frequent.
@@ -126,7 +129,7 @@ class MainActivity : ComponentActivity() {
         } catch (_: Exception) { /* non-critical — ignore */ }
 
         // Register screenshot provider
-        StartupCoordinator.registerScreenshotProvider {
+        StartupCoordinator.registerScreenshotProvider(this) {
             val bitmap = captureWindow(window) ?: return@registerScreenshotProvider null
             val file = File(cacheDir, "screenshot_${System.currentTimeMillis()}.png")
             try {
@@ -181,9 +184,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        // Remove the observer so the old PlayerController is not retained after Activity death.
-        StartupCoordinator.getPlayerController()?.let { lifecycle.removeObserver(it) }
-        StartupCoordinator.unregisterScreenshotProvider()
+        StartupCoordinator.unregisterScreenshotProvider(this)
     }
 
     private suspend fun captureWindow(window: Window): Bitmap? = suspendCancellableCoroutine { continuation ->
@@ -225,6 +226,8 @@ class MainActivity : ComponentActivity() {
  *   [DevicePairingState.Paired]           → show content
  *   [DevicePairingState.Unpaired]         → show pairing code
  */
+@androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
+@SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun PairingScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
@@ -238,11 +241,9 @@ fun PairingScreen(modifier: Modifier = Modifier) {
     val ipAddress = remember { getLocalIpAddress() }
     val backendUrl = remember { StartupCoordinator.getBackendBaseUrl() }
 
-    remember(activity) {
-        activity?.setOnResetRequestedListener {
-            showResetDialog = true
-        }
-        Unit
+    DisposableEffect(activity) {
+        activity?.setOnResetRequestedListener { showResetDialog = true }
+        onDispose { activity?.setOnResetRequestedListener(null) }
     }
 
     if (showResetDialog) {
@@ -439,8 +440,16 @@ fun PairingScreen(modifier: Modifier = Modifier) {
                                     android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                                     android.view.ViewGroup.LayoutParams.MATCH_PARENT
                                 )
+                                // Managed web content needs JavaScript, but the view exposes no
+                                // native bridge and cannot read local files/content providers.
                                 settings.javaScriptEnabled = true
                                 settings.domStorageEnabled = true
+                                settings.allowFileAccess = false
+                                settings.allowContentAccess = false
+                                settings.javaScriptCanOpenWindowsAutomatically = false
+                                settings.setSupportMultipleWindows(false)
+                                settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                                settings.safeBrowsingEnabled = true
                                 settings.useWideViewPort = true
                                 settings.loadWithOverviewMode = false
                                 settings.mediaPlaybackRequiresUserGesture = false
@@ -499,7 +508,10 @@ fun PairingScreen(modifier: Modifier = Modifier) {
                                     "stretch" -> ImageView.ScaleType.FIT_XY
                                     else -> ImageView.ScaleType.FIT_CENTER
                             }
-                            imageView.setImageURI(Uri.fromFile(File(mediaPath)))
+                            if (imageView.tag != mediaPath) {
+                                imageView.setImageURI(Uri.fromFile(File(mediaPath)))
+                                imageView.tag = mediaPath
+                            }
                         }
                     )
                 } else if (!mediaPath.isNullOrBlank() && !uiState.currentMediaIsImage && playerController != null) {

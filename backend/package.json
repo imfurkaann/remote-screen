@@ -10,7 +10,14 @@
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "tsx --test src/**/*.test.ts",
     "db:migrate:pg": "tsx src/scripts/migrate-postgres.ts",
+    "db:validate:pg-constraints": "tsx src/scripts/validate-postgres-constraints.ts",
+    "db:migrate:accounts": "tsx src/scripts/migrate-account-ownership.ts",
+    "db:migrate:content": "tsx src/scripts/migrate-content-storage.ts",
+    "db:migrate:hardening": "tsx src/scripts/migrate-database-hardening.ts",
+    "db:check:integrity": "tsx src/scripts/check-database-integrity.ts",
+    "db:maintain:retention": "tsx src/scripts/maintain-database-retention.ts",
     "db:check:shadow": "tsx src/scripts/check-shadow-consistency.ts",
+    "db:repair:shadow": "tsx src/scripts/repair-postgres-shadow.ts",
     "db:check:content-parity": "tsx src/scripts/check-content-parity.ts",
     "db:check:rollout-guardrails": "tsx src/scripts/check-rollout-guardrails.ts",
     "db:check:slo-escalation": "tsx src/scripts/check-slo-escalation.ts",
@@ -27,6 +34,7 @@
     "db:check:governance-exceptions": "tsx src/scripts/check-governance-exceptions.ts"
   },
   "dependencies": {
+    "@socket.io/redis-adapter": "^8.3.0",
     "@types/pg": "^8.20.0",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
@@ -37,6 +45,7 @@
     "mongoose": "^8.8.0",
     "multer": "^1.4.5-lts.1",
     "pg": "^8.20.0",
+    "redis": "^6.1.0",
     "socket.io": "^4.8.1"
   },
   "devDependencies": {

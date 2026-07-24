@@ -1,3 +1,4 @@
+import { databaseIdentityToUuid } from "../lib/identity.js";
 import { getPostgresPool, isPostgresConnected } from "../lib/postgres.js";
 import { Logger } from "../lib/logger.js";
 import { postgresCircuitBreaker } from "../lib/circuit-breaker.js";
@@ -69,56 +70,27 @@ export class DeviceRepository {
    */
   private async performSyncPairingRequest(input: SyncPairingRequestInput): Promise<void> {
     const pool = getPostgresPool();
-
-    // Keep shadow table aligned with Mongo behavior by hardware_id.
-    const existing = await pool.query<{ id: string }>(
-      `SELECT id
-       FROM devices
-       WHERE hardware_id = $1
-         AND deleted_at IS NULL
-       ORDER BY updated_at DESC
-       LIMIT 1`,
-      [input.hardwareId]
-    );
-
-    if (existing.rowCount && existing.rows[0]) {
-      await pool.query(
-        `UPDATE devices
-         SET tenant_id = $1,
-             status = 'offline',
-             paired_owner_user_id = NULL,
-             current_playlist_id = NULL,
-             updated_at = CURRENT_TIMESTAMP
-         WHERE id = $2`,
-        [input.tenantId, existing.rows[0].id]
-      );
-
-      logger.debug('Device sync: updated existing device', {
-        operation: 'syncPairingRequest',
-        tenantId: input.tenantId,
-        hardwareId: input.hardwareId,
-        deviceId: existing.rows[0].id
-      });
-
-      return;
-    }
-
-    await pool.query(
+    const result = await pool.query<{ id: string }>(
       `INSERT INTO devices (
-        tenant_id,
-        hardware_id,
-        status,
-        paired_owner_user_id,
-        current_playlist_id
+        tenant_id, hardware_id, status, paired_owner_user_id, current_playlist_id
       )
-      VALUES ($1, $2, 'offline', NULL, NULL)`,
+      VALUES ($1::uuid, $2, 'offline', NULL, NULL)
+      ON CONFLICT (hardware_id) WHERE deleted_at IS NULL
+      DO UPDATE SET
+        tenant_id = EXCLUDED.tenant_id,
+        status = 'offline',
+        paired_owner_user_id = NULL,
+        current_playlist_id = NULL,
+        updated_at = CURRENT_TIMESTAMP
+      RETURNING id`,
       [input.tenantId, input.hardwareId]
     );
 
-    logger.debug('Device sync: inserted new device', {
+    logger.debug('Device pairing shadow synchronized atomically', {
       operation: 'syncPairingRequest',
       tenantId: input.tenantId,
-      hardwareId: input.hardwareId
+      hardwareId: input.hardwareId,
+      deviceId: result.rows[0]?.id ?? null
     });
   }
 
@@ -178,7 +150,7 @@ export class DeviceRepository {
            updated_at = CURRENT_TIMESTAMP
        WHERE hardware_id = $3
          AND deleted_at IS NULL`,
-      [input.tenantId, input.pairedOwnerUserId, input.hardwareId]
+      [input.tenantId, databaseIdentityToUuid(input.pairedOwnerUserId), input.hardwareId]
     );
 
     logger.debug('Device marked as paired', {
@@ -189,9 +161,31 @@ export class DeviceRepository {
     });
   }
 
-  /**
-   * Update device status by hardware ID
-   */
+  /** Clear tenant ownership while preserving the hardware record for safe re-pairing. */
+  async unpairByHardware(tenantId: string, hardwareId: string): Promise<void> {
+    if (!isPostgresConnected()) return;
+    try {
+      const pool = getPostgresPool();
+      await pool.query(
+        `UPDATE devices
+         SET tenant_id = NULL,
+             paired_owner_user_id = NULL,
+             current_playlist_id = NULL,
+             status = 'offline',
+             updated_at = CURRENT_TIMESTAMP
+         WHERE tenant_id = $1::uuid AND hardware_id = $2 AND deleted_at IS NULL`,
+        [tenantId, hardwareId]
+      );
+    } catch (error) {
+      logger.error("Failed to unpair device in PostgreSQL", error instanceof Error ? error : new Error(String(error)), {
+        operation: "unpairByHardware",
+        tenantId,
+        hardwareId
+      });
+    }
+  }
+
+  /** Update device status by hardware ID. */
   async updateStatusByHardware(tenantId: string, hardwareId: string, status: string): Promise<void> {
     if (!isPostgresConnected()) {
       return;

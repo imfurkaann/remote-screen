@@ -4,6 +4,9 @@ import { useEffect, useState, useMemo, useRef } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useConfirm } from "@/components/ConfirmProvider";
+import { useFleetSocket } from "@/lib/use-fleet-socket";
+import { commandAckStatus } from "@/lib/fleet-events";
+import { getDevicePresence, type DevicePresence } from "@/lib/device-presence";
 
 // Define Types
 type Device = {
@@ -87,6 +90,36 @@ type CommandLog = {
 const TERMINAL_STATUSES = new Set(["completed", "failed", "timeout"]);
 const POLL_INTERVAL_MS = 2500;
 const POLL_MAX_MS = 20_000;
+
+const PRESENCE_STYLE: Record<DevicePresence, {
+  label: string;
+  color: string;
+  dot: string;
+  background: string;
+  border: string;
+}> = {
+  online: {
+    label: "ONLINE",
+    color: "#10b981",
+    dot: "#10b981",
+    background: "rgba(16, 185, 129, 0.06)",
+    border: "1px solid rgba(16, 185, 129, 0.15)"
+  },
+  degraded: {
+    label: "DEGRADED",
+    color: "#d97706",
+    dot: "#f59e0b",
+    background: "rgba(245, 158, 11, 0.08)",
+    border: "1px solid rgba(245, 158, 11, 0.22)"
+  },
+  offline: {
+    label: "OFFLINE",
+    color: "#64748b",
+    dot: "#64748b",
+    background: "#f1f5f9",
+    border: "1px solid #cbd5e1"
+  }
+};
 
 type DaySchedule = {
   enabled: boolean;
@@ -214,7 +247,7 @@ export default function ScreenDetailPage() {
 
   // State Variables
   const [device, setDevice] = useState<Device | null>(null);
-  const [allDevices, setAllDevices] = useState<Device[]>([]);
+  const [existingGroups, setExistingGroups] = useState<string[]>([]);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [media, setMedia] = useState<MediaItem[]>([]);
   const [commandsList, setCommandsList] = useState<CommandLog[]>([]);
@@ -232,6 +265,7 @@ export default function ScreenDetailPage() {
   const [isPolling, setIsPolling] = useState(false);
   const [volumeLevel, setVolumeLevel] = useState<number>(50);
   const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   // Settings Form State
   const [editName, setEditName] = useState("");
@@ -285,23 +319,21 @@ export default function ScreenDetailPage() {
   const loadData = async (showLoading = false) => {
     if (showLoading) setLoading(true);
     try {
-      // 1. Fetch devices to find this specific device
-      const deviceRes = await fetch("/api/content/devices", { cache: "no-store" });
+      // Fetch only the selected device; never download the complete fleet for a detail view.
+      const deviceRes = await fetch(`/api/content/devices/${deviceId}`, { cache: "no-store" });
       if (deviceRes.status === 401 || deviceRes.status === 403) {
         await fetch("/api/auth/logout", { method: "POST" });
         window.location.href = `/login?redirect=/screens/${deviceId}`;
         return;
       }
-      if (!deviceRes.ok) throw new Error("Failed to load device list");
-      const deviceData = (await deviceRes.json()) as { devices?: Device[] };
-      setAllDevices(deviceData.devices ?? []);
-      const foundDevice = deviceData.devices?.find((d) => d.id === deviceId);
-      
-      if (!foundDevice) {
+      if (deviceRes.status === 404) {
         setError("Device not found.");
-        setLoading(false);
         return;
       }
+      if (!deviceRes.ok) throw new Error("Failed to load device");
+      const deviceData = (await deviceRes.json()) as { device?: Device };
+      const foundDevice = deviceData.device;
+      if (!foundDevice) throw new Error("Device response was incomplete");
       setDevice(foundDevice);
       setOrientation(foundDevice.orientation ?? 0);
       
@@ -329,20 +361,27 @@ export default function ScreenDetailPage() {
         setNote(foundDevice.notes || "");
       }
 
-      // 2. Fetch playlists to resolve currently playing names
-      const playlistRes = await fetch("/api/content/playlists", { cache: "no-store" });
-      if (playlistRes.ok) {
-        const playlistData = (await playlistRes.json()) as { playlists?: Playlist[] };
-        setPlaylists(playlistData.playlists ?? []);
+      if (showLoading) {
+        const [groupsRes, playlistRes, mediaRes] = await Promise.all([
+          fetch("/api/content/device-groups", { cache: "no-store" }),
+          fetch("/api/content/playlists", { cache: "no-store" }),
+          fetch("/api/content/media", { cache: "no-store" })
+        ]);
+        if (groupsRes.ok) {
+          const groupData = (await groupsRes.json()) as { groups?: { name: string; count: number }[] };
+          setExistingGroups(
+            (groupData.groups ?? []).map((group) => group.name).filter((name) => name !== "Ungrouped")
+          );
+        }
+        if (playlistRes.ok) {
+          const playlistData = (await playlistRes.json()) as { playlists?: Playlist[] };
+          setPlaylists(playlistData.playlists ?? []);
+        }
+        if (mediaRes.ok) {
+          const mediaData = (await mediaRes.json()) as { media?: MediaItem[] };
+          setMedia(mediaData.media ?? []);
+        }
       }
-
-      // 3. Fetch media to select from in the modal
-      const mediaRes = await fetch("/api/content/media", { cache: "no-store" });
-      if (mediaRes.ok) {
-        const mediaData = (await mediaRes.json()) as { media?: MediaItem[] };
-        setMedia(mediaData.media ?? []);
-      }
-
       // 4. Fetch commands history list for this device
       const commandRes = await fetch(`/api/commands/status?device_id=${deviceId}`, { cache: "no-store" });
       if (commandRes.ok) {
@@ -369,31 +408,76 @@ export default function ScreenDetailPage() {
   const loadDataRef = useRef<typeof loadData>(loadData);
   loadDataRef.current = loadData;
 
+  useFleetSocket({
+    onDeviceStatus: (event) => {
+      if (event.device_id !== deviceId) return;
+      setNowMs(Date.now());
+      setDevice((current) => current
+        ? {
+            ...current,
+            status: event.status,
+            last_seen_at: event.last_seen_at,
+            ...(event.status === "online" ? { last_heartbeat_at: event.last_seen_at } : {})
+          }
+        : current
+      );
+    },
+    onCommandAck: (event) => {
+      if (event.device_id !== deviceId) return;
+      const status = commandAckStatus(event);
+      setCommandsList((current) => current.map((command) =>
+        command.command_id === event.command_id
+          ? {
+              ...command,
+              status,
+              ...(event.screenshot_url !== undefined ? { screenshot_url: event.screenshot_url } : {}),
+              ...(event.error_message !== undefined ? { error_message: event.error_message } : {})
+            }
+          : command
+      ));
+      setActiveCommand((current) => current?.command_id === event.command_id
+        ? {
+            ...current,
+            status,
+            ...(event.screenshot_url !== undefined ? { screenshot_url: event.screenshot_url } : {}),
+            ...(event.error_message !== undefined ? { error_message: event.error_message } : {})
+          }
+        : current
+      );
+
+      if (status === "completed" || status === "failed") {
+        if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+        pollTargetRef.current = null;
+        setIsPolling(false);
+        if (event.screenshot_url) setScreenshotUrl(event.screenshot_url);
+        showToast(
+          status === "completed"
+            ? "Command completed successfully."
+            : `Command failed: ${event.error_message ?? "device error"}`,
+          status === "completed" ? "success" : "error"
+        );
+        void loadDataRef.current(false);
+      }
+    }
+  });
+
   useEffect(() => {
     if (deviceId) {
       void loadData(true);
     }
   }, [deviceId]);
 
-  // Auto-refresh loop (every 5 seconds) to get dynamic device heartbeat updates
+  // Live socket events handle immediate transitions. A low-frequency visible-tab
+  // poll remains as recovery if a proxy temporarily blocks WebSockets.
   useEffect(() => {
     if (!deviceId) return;
     const interval = setInterval(() => {
-      void loadDataRef.current(false);
-    }, 5000);
+      setNowMs(Date.now());
+      if (document.visibilityState === "visible") void loadDataRef.current(false);
+    }, 30_000);
     return () => clearInterval(interval);
   }, [deviceId]);
 
-  // Derive unique group names from all devices (excluding Ungrouped)
-  const existingGroups = useMemo(() => {
-    const names = new Set<string>();
-    for (const d of allDevices) {
-      if (d.screen_group && d.screen_group !== "Ungrouped") {
-        names.add(d.screen_group);
-      }
-    }
-    return Array.from(names).sort();
-  }, [allDevices]);
 
   // Determine currently playing playlist details
   const activePlaylist = useMemo(() => {
@@ -793,10 +877,15 @@ export default function ScreenDetailPage() {
     }
   };
 
+  const presence = getDevicePresence({
+    status: device?.status,
+    lastHeartbeatAt: device?.last_heartbeat_at
+  }, nowMs);
+  const presenceStyle = PRESENCE_STYLE[presence];
+
   // Dynamic metrics details based on device telemetry
-  const simulatedDetails = useMemo(() => {
+  const deviceDetails = useMemo(() => {
     if (!device) return null;
-    const isOnline = device.status === "online";
     
     const ipAddress = device.ip_address || "N/A";
     const playerVersion = device.player_version || "N/A";
@@ -828,22 +917,17 @@ export default function ScreenDetailPage() {
       }
     }
     
-    const lastSeenStr = device.last_seen_at ? new Date(device.last_seen_at).toLocaleString("en-US", {
-      month: "short",
-      day: "2-digit",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit"
-    }) : "Never";
-
-    let disconnectedTimeStr = "N/A";
-    if (!isOnline && device.last_seen_at) {
-      const diffMs = Date.now() - new Date(device.last_seen_at).getTime();
-      const diffMins = Math.floor(diffMs / (1000 * 60));
-      const hours = Math.floor(diffMins / 60);
-      const days = Math.floor(hours / 24);
-      disconnectedTimeStr = `${days}d ${hours % 24}h ${diffMins % 60}m`;
-    }
+    const lastContactAt = device.last_heartbeat_at ?? device.last_seen_at;
+    const lastContactMs = lastContactAt ? Date.parse(lastContactAt) : Number.NaN;
+    const lastContactStr = Number.isFinite(lastContactMs)
+      ? new Date(lastContactMs).toLocaleString("en-US", {
+          month: "short",
+          day: "2-digit",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit"
+        })
+      : "Never";
 
     return {
       ipAddress,
@@ -854,8 +938,7 @@ export default function ScreenDetailPage() {
       memory,
       memoryUsed,
       memoryPercent,
-      lastSeenStr,
-      disconnectedTimeStr
+      lastContactStr
     };
   }, [device]);
 
@@ -922,7 +1005,7 @@ export default function ScreenDetailPage() {
     );
   }
 
-  const isOnline = device.status === "online";
+  const isOnline = presence === "online";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh", backgroundColor: "#f4f5f7", boxSizing: "border-box" }}>
@@ -995,7 +1078,7 @@ export default function ScreenDetailPage() {
               </span>
             </div>
             <p style={{ margin: "4px 0 0 0", fontSize: "12px", color: "#64748b" }}>
-              Updated on {simulatedDetails?.lastSeenStr} by Furkan Çelik
+              Last device contact: {deviceDetails?.lastContactStr}
             </p>
           </div>
         </div>
@@ -1115,13 +1198,13 @@ export default function ScreenDetailPage() {
             marginBottom: "24px"
           }}>
             <div>
-              <span style={{ fontSize: "10px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.5px" }}>NOW PLAYING</span>
+              <span style={{ fontSize: "10px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.5px" }}>ASSIGNED CONTENT</span>
               <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "4px" }}>
                 <svg style={{ width: 16, height: 16, color: "#64748b" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
                 </svg>
                 <span style={{ fontSize: "15px", fontWeight: 600, color: "#0f172a" }}>
-                  {activePlaylist ? activePlaylist.name : "No playlist or media active on screen"}
+                  {activePlaylist ? activePlaylist.name : "No content assigned to this screen"}
                 </span>
               </div>
             </div>
@@ -1204,7 +1287,7 @@ export default function ScreenDetailPage() {
                 {screenshotUrl ? (
                   <img
                     src={screenshotUrl}
-                    alt="Device live screenshot preview"
+                    alt="Latest device screenshot preview"
                     style={{
                       width: "100%",
                       height: "100%",
@@ -1267,7 +1350,7 @@ export default function ScreenDetailPage() {
                       <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     <div>
-                      <h4 style={{ margin: "0 0 4px 0", fontSize: "14px", fontWeight: 700 }}>Now Playing</h4>
+                      <h4 style={{ margin: "0 0 4px 0", fontSize: "14px", fontWeight: 700 }}>Assigned Playlist</h4>
                       <p style={{ margin: 0, fontSize: "12px", color: "#9ca3af" }}>{activePlaylist.name}</p>
                     </div>
                   </div>
@@ -1295,17 +1378,18 @@ export default function ScreenDetailPage() {
                 padding: "4px 10px",
                 borderRadius: "999px",
                 fontSize: "11px",
-                color: isOnline ? "#10b981" : "#94a3b8",
+                color: presenceStyle.color,
                 fontWeight: 700
               }}>
-                <span className={`pulse-dot ${isOnline ? 'online' : 'offline'}`} style={{ width: 6, height: 6, display: "inline-block", backgroundColor: isOnline ? "#10b981" : "#64748b", borderRadius: "50%" }} />
-                <span>{isOnline ? "ONLINE" : "OFFLINE"}</span>
+                <span
+                  className={`pulse-dot ${isOnline ? "online" : "offline"}`}
+                  style={{ width: 6, height: 6, display: "inline-block", backgroundColor: presenceStyle.dot, borderRadius: "50%" }}
+                />
+                <span>{presenceStyle.label}</span>
               </div>
             </div>
             
-            <span style={{ fontSize: "12px", color: "#94a3b8", marginTop: "16px", backgroundColor: "#ffffff", padding: "4px 12px", borderRadius: "999px", border: "1px solid #e2e8f0" }}>
-              Screen Scores <span style={{ color: "#10b981", fontWeight: 700 }}>NEW</span>
-            </span>
+
           </div>
         </div>
 
@@ -1411,17 +1495,17 @@ export default function ScreenDetailPage() {
 
                 {/* Status card */}
                 <div style={{
-                  backgroundColor: isOnline ? "rgba(16, 185, 129, 0.06)" : "#f1f5f9",
-                  border: isOnline ? "1px solid rgba(16, 185, 129, 0.15)" : "1px solid #cbd5e1",
+                  backgroundColor: presenceStyle.background,
+                  border: presenceStyle.border,
                   borderRadius: "8px",
                   padding: "12px",
                   textAlign: "center",
                   fontSize: "15px",
                   fontWeight: 700,
-                  color: isOnline ? "#10b981" : "#64748b",
+                  color: presenceStyle.color,
                   textTransform: "uppercase"
                 }}>
-                  {isOnline ? "Online" : "Offline"}
+                  {presenceStyle.label}
                 </div>
 
                 {/* Brand / Model Info block */}
@@ -1442,10 +1526,10 @@ export default function ScreenDetailPage() {
                   <div>
                     <h4 style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: "#0f172a" }}>Android Device</h4>
                     <p style={{ margin: "2px 0 0 0", fontSize: "11px", color: "#64748b" }}>
-                      Android • {simulatedDetails?.resolution}, {simulatedDetails?.aspect}
+                      Android • {deviceDetails?.resolution}, {deviceDetails?.aspect}
                     </p>
                     <p style={{ margin: "2px 0 0 0", fontSize: "11px", color: "#94a3b8" }}>
-                      OS Version: {simulatedDetails?.osVer}
+                      OS Version: {deviceDetails?.osVer}
                     </p>
                   </div>
                 </div>
@@ -1458,7 +1542,8 @@ export default function ScreenDetailPage() {
                     <h3 style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: "#0f172a" }}>Diagnostics & Health</h3>
                     <button
                       onClick={() => handleDispatchCommand("GET_DIAGNOSTICS")}
-                      disabled={isPolling}
+                      disabled={isPolling || !isOnline}
+                      title={isOnline ? "Fetch current diagnostics" : "Device must be online to fetch diagnostics"}
                       type="button"
                       style={{
                         padding: "6px 12px",
@@ -1468,8 +1553,8 @@ export default function ScreenDetailPage() {
                         color: "#ffffff",
                         border: "none",
                         borderRadius: "4px",
-                        cursor: "pointer",
-                        opacity: isPolling ? 0.6 : 1
+                        cursor: isPolling || !isOnline ? "not-allowed" : "pointer",
+                        opacity: isPolling || !isOnline ? 0.6 : 1
                       }}
                     >
                       {isPolling && activeCommand?.command_type === "GET_DIAGNOSTICS" ? "Fetching..." : "Fetch Diagnostics"}
@@ -1547,7 +1632,9 @@ export default function ScreenDetailPage() {
                     </div>
                   ) : (
                     <div style={{ textAlign: "center", padding: "20px 0", color: "#94a3b8", fontSize: "13px" }}>
-                      No diagnostic data available. Click "Fetch Diagnostics" to retrieve current health stats.
+                      {isOnline
+                        ? "No diagnostic data available. Fetch diagnostics to retrieve current health stats."
+                        : "No diagnostic data available. The device must reconnect before current health stats can be fetched."}
                     </div>
                   )}
                 </div>
@@ -1556,7 +1643,7 @@ export default function ScreenDetailPage() {
                 <div style={{ display: "flex", flexDirection: "column", gap: "12px", fontSize: "13px", borderTop: "1px solid #e2e8f0", paddingTop: "16px" }}>
                   <div style={{ display: "flex", justifyContent: "space-between" }}>
                     <span style={{ color: "#64748b" }}>IP Address</span>
-                    <span style={{ fontWeight: 600 }}>{simulatedDetails?.ipAddress}</span>
+                    <span style={{ fontWeight: 600 }}>{deviceDetails?.ipAddress}</span>
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <span style={{ color: "#64748b" }}>Screen ID</span>
@@ -1578,7 +1665,7 @@ export default function ScreenDetailPage() {
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between" }}>
                     <span style={{ color: "#64748b" }}>Player Version</span>
-                    <span style={{ fontWeight: 600 }}>{simulatedDetails?.playerVersion}</span>
+                    <span style={{ fontWeight: 600 }}>{deviceDetails?.playerVersion}</span>
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between" }}>
                     <span style={{ color: "#64748b" }}>Operating System</span>
@@ -1586,7 +1673,11 @@ export default function ScreenDetailPage() {
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between" }}>
                     <span style={{ color: "#64748b" }}>OS Time zone</span>
-                    <span style={{ fontWeight: 600 }}>Europe/Istanbul</span>
+                    <span style={{ fontWeight: 600 }}>{device.timezone || "N/A"}</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "#64748b" }}>Last heartbeat</span>
+                    <span style={{ fontWeight: 600 }}>{deviceDetails?.lastContactStr}</span>
                   </div>
                 </div>
 

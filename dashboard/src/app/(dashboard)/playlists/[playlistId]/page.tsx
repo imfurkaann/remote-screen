@@ -617,10 +617,14 @@ export default function EditPlaylistPage() {
 
   const [loading, setLoading] = useState(true);
   const [playlistName, setPlaylistName] = useState("");
+  const [playlistVersion, setPlaylistVersion] = useState(1);
   const [editingName, setEditingName] = useState(false);
   const [allMedia, setAllMedia] = useState<MediaFile[]>([]);
   const [items, setItems] = useState<PlaylistItem[]>([]);
   const [mediaSearch, setMediaSearch] = useState("");
+  const [mediaPage, setMediaPage] = useState(1);
+  const [mediaTotalPages, setMediaTotalPages] = useState(1);
+  const [mediaLoading, setMediaLoading] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<"recent" | "media">("media");
   const [showModal, setShowModal] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -637,16 +641,15 @@ export default function EditPlaylistPage() {
   useEffect(() => {
     async function loadData() {
       try {
-        const [mediaPayload, playlistPayload, playlistsPayload] = await Promise.all([
-          fetchJson<{ media?: MediaFile[] }>("/api/content/media", { cache: "no-store" }),
-          fetchJson<{ playlist?: { name: string; items: any[] } }>(`/api/content/playlists/${playlistId}`, { cache: "no-store" }),
-          fetchJson<{ playlists?: { id: string; name: string }[] }>("/api/content/playlists", { cache: "no-store" })
+        const [playlistPayload, playlistsPayload] = await Promise.all([
+          fetchJson<{ playlist?: { name: string; version: number; items: any[] } }>(`/api/content/playlists/${playlistId}`, { cache: "no-store" }),
+          fetchJson<{ playlists?: { id: string; name: string }[] }>("/api/content/playlists?limit=200&include_system=true", { cache: "no-store" })
         ]);
 
-        setAllMedia(mediaPayload.media ?? []);
         setPlaylists(playlistsPayload.playlists ?? []);
         if (playlistPayload.playlist) {
           setPlaylistName(playlistPayload.playlist.name);
+          setPlaylistVersion(playlistPayload.playlist.version);
           const mappedItems = playlistPayload.playlist.items.map((item: any) => ({
             uid: uid(),
             media: {
@@ -671,13 +674,39 @@ export default function EditPlaylistPage() {
     }
   }, [playlistId]);
 
-  const filteredMedia = allMedia.filter(f =>
-    !f.filename.startsWith("Single Media:") &&
-    f.filename.toLowerCase().includes(mediaSearch.toLowerCase())
-  );
-  const recentMedia = [...allMedia]
-    .filter(f => !f.filename.startsWith("Single Media:"))
-    .slice(0, 8);
+  /* Load only the visible media page; server-side search keeps large libraries responsive. */
+  useEffect(() => {
+    setMediaPage(1);
+  }, [mediaSearch]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setMediaLoading(true);
+      try {
+        const query = new URLSearchParams({ page: String(mediaPage), limit: "50" });
+        if (mediaSearch.trim()) query.set("search", mediaSearch.trim());
+        const payload = await fetchJson<{ media?: MediaFile[]; totalPages?: number }>(
+          `/api/content/media?${query.toString()}`,
+          { cache: "no-store", signal: controller.signal }
+        );
+        setAllMedia(payload.media ?? []);
+        setMediaTotalPages(payload.totalPages ?? 1);
+      } catch (error) {
+        if ((error as Error).name !== "AbortError") setSaveMsg({ text: "Medya listesi yüklenemedi.", ok: false });
+      } finally {
+        if (!controller.signal.aborted) setMediaLoading(false);
+      }
+    }, mediaSearch.trim() ? 250 : 0);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [mediaPage, mediaSearch]);
+
+  const filteredMedia = allMedia.filter(f => !f.filename.startsWith("Single Media:"));
+  const recentMedia = filteredMedia.slice(0, 8);
   const displayedMedia = sidebarTab === "recent" ? recentMedia : filteredMedia;
 
   /* add single item */
@@ -730,11 +759,12 @@ export default function EditPlaylistPage() {
     setSaving(true);
     setSaveMsg(null);
     try {
-      await fetchJson(`/api/content/playlists/${playlistId}`, {
+      const payload = await fetchJson<{ playlist?: { version: number } }>("/api/content/playlists/" + playlistId, {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           name: playlistName.trim(),
+          expected_version: playlistVersion,
           items: items.map((item, idx) => ({
             media_id: item.media.id,
             duration_ms: item.durationMs,
@@ -742,27 +772,27 @@ export default function EditPlaylistPage() {
           })),
         }),
       });
+      if (payload.playlist) setPlaylistVersion(payload.playlist.version);
       setSaveMsg({ text: "Playlist güncellendi!", ok: true });
       setTimeout(() => router.push("/playlists"), 900);
-    } catch (e) {
-      setSaveMsg({ text: `Hata: ${(e as Error).message}`, ok: false });
+    } catch (error) {
+      setSaveMsg({ text: "Hata: " + (error as Error).message, ok: false });
     } finally {
       setSaving(false);
     }
   };
-
   /* publish */
   const handlePublishConfirm = async (selectedIds: string[]) => {
     if (selectedIds.length === 0) return;
     setSaving(true);
     setSaveMsg(null);
     try {
-      // 1. Save playlist changes first
-      await fetchJson(`/api/content/playlists/${playlistId}`, {
+      const savePayload = await fetchJson<{ playlist?: { version: number } }>("/api/content/playlists/" + playlistId, {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           name: playlistName.trim(),
+          expected_version: playlistVersion,
           items: items.map((item, idx) => ({
             media_id: item.media.id,
             duration_ms: item.durationMs,
@@ -770,24 +800,24 @@ export default function EditPlaylistPage() {
           })),
         }),
       });
+      const savedVersion = savePayload.playlist?.version ?? playlistVersion;
+      setPlaylistVersion(savedVersion);
 
-      // 2. Publish to selected screens
-      await fetchJson(`/api/content/playlists/${playlistId}/publish`, {
+      await fetchJson("/api/content/playlists/" + playlistId + "/publish", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ device_ids: selectedIds }),
+        body: JSON.stringify({ device_ids: selectedIds, expected_version: savedVersion }),
       });
 
       setSaveMsg({ text: "Playlist kaydedildi ve yayınlandı!", ok: true });
       setPublishModalOpen(false);
       setTimeout(() => router.push("/playlists"), 900);
-    } catch (e) {
-      setSaveMsg({ text: `Yayınlama hatası: ${(e as Error).message}`, ok: false });
+    } catch (error) {
+      setSaveMsg({ text: "Yayınlama hatası: " + (error as Error).message, ok: false });
     } finally {
       setSaving(false);
     }
   };
-
   if (loading) {
     return (
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100vh", background: "#f4f5f7", gap: 16 }}>
@@ -1014,6 +1044,13 @@ export default function EditPlaylistPage() {
                 ))
               )}
             </div>
+            {sidebarTab === "media" && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", borderTop: "1px solid #e8edf3" }}>
+                <button type="button" disabled={mediaPage <= 1 || mediaLoading} onClick={() => setMediaPage(page => Math.max(1, page - 1))}>Önceki</button>
+                <span style={{ fontSize: 12, color: "#64748b" }}>{mediaLoading ? "Yükleniyor…" : `${mediaPage} / ${mediaTotalPages}`}</span>
+                <button type="button" disabled={mediaPage >= mediaTotalPages || mediaLoading} onClick={() => setMediaPage(page => Math.min(mediaTotalPages, page + 1))}>Sonraki</button>
+              </div>
+            )}
           </div>
         </div>
       </div>

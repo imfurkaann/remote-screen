@@ -12,18 +12,23 @@ type User = {
   createdAt: string | null;
 };
 
-type Device = {
-  id: string;
-  status: string;
+type DeviceSummary = {
+  total: number;
+  online: number;
+  offline: number;
+  degraded: number;
 };
 
 export default function UsersPage() {
   const confirm = useConfirm();
   const [users, setUsers] = useState<User[]>([]);
-  const [devices, setDevices] = useState<Device[]>([]);
+  const [deviceSummary, setDeviceSummary] = useState<DeviceSummary>({ total: 0, online: 0, offline: 0, degraded: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [userPage, setUserPage] = useState(1);
+  const [userTotal, setUserTotal] = useState(0);
+  const [userTotalPages, setUserTotalPages] = useState(1);
   const [currentUserRole, setCurrentUserRole] = useState<string>("");
 
   // Modal State
@@ -58,6 +63,17 @@ export default function UsersPage() {
     loadData();
   }, []);
 
+  useEffect(() => {
+    setUserPage(1);
+  }, [search]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void fetchUsers().catch((err) => setError(err.message || "Failed to fetch users list."));
+    }, search.trim() ? 300 : 0);
+    return () => window.clearTimeout(timer);
+  }, [userPage, search]);
+
   async function loadData() {
     setLoading(true);
     setError(null);
@@ -71,20 +87,24 @@ export default function UsersPage() {
   }
 
   async function fetchUsers() {
-    const res = await fetch("/api/users");
+    const query = new URLSearchParams({ page: String(userPage), limit: "50" });
+    if (search.trim()) query.set("search", search.trim());
+    const res = await fetch(`/api/users?${query.toString()}`, { cache: "no-store" });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       throw new Error(data.message || "Failed to fetch users list.");
     }
     const data = await res.json();
     setUsers(data.users || []);
+    setUserTotal(data.total ?? data.users?.length ?? 0);
+    setUserTotalPages(data.totalPages ?? 1);
   }
 
   async function fetchDevices() {
-    const res = await fetch("/api/content/devices");
+    const res = await fetch("/api/content/device-summary", { cache: "no-store" });
     if (res.ok) {
-      const data = await res.json();
-      setDevices(data.devices || []);
+      const data = (await res.json()) as DeviceSummary;
+      setDeviceSummary(data);
     }
   }
 
@@ -128,6 +148,14 @@ export default function UsersPage() {
       setFormSubmitting(false);
       return;
     }
+    if (password) {
+      const categories = [/[a-z]/.test(password), /[A-Z]/.test(password), /\d/.test(password), /[^A-Za-z0-9]/.test(password)].filter(Boolean).length;
+      if (password.length < 12 || password.length > 128 || categories < 3) {
+        setFormError("Password must be 12-128 characters and include at least three of: lowercase, uppercase, number, symbol.");
+        setFormSubmitting(false);
+        return;
+      }
+    }
 
     try {
       const url = modalMode === "create" ? "/api/users" : `/api/users/${selectedUser?.id}`;
@@ -167,9 +195,9 @@ export default function UsersPage() {
 
   const handleDeleteUser = async (userId: string) => {
     const confirmed = await confirm({
-      title: "Kullanıcıyı Sil",
-      message: "Bu kullanıcıyı silmek istediğinize emin misiniz? Bu kullanıcıya atanmış tüm ekranlar Tenant Owner'a geri dönecektir.",
-      confirmText: "Kullanıcıyı Sil",
+      title: "Kullanıcıyı Pasifleştir",
+      message: "Bu kullanıcı pasifleştirilecek. Kullanıcıya ait ekranlar, medyalar, oynatma listeleri ve klasörler aktif Tenant Owner hesabına güvenle aktarılacaktır.",
+      confirmText: "Pasifleştir",
       cancelText: "Vazgeç",
       type: "danger"
     });
@@ -179,7 +207,7 @@ export default function UsersPage() {
       const res = await fetch(`/api/users/${userId}`, { method: "DELETE" });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.message || "Failed to delete user.");
+        throw new Error(data.message || "Kullanıcı pasifleştirilemedi.");
       }
       loadData();
     } catch (err: any) {
@@ -202,19 +230,13 @@ export default function UsersPage() {
     }
   };
 
-  const filteredUsers = users.filter((u) => {
-    const term = search.toLowerCase();
-    return (
-      u.displayName.toLowerCase().includes(term) ||
-      u.email.toLowerCase().includes(term) ||
-      u.role.toLowerCase().includes(term)
-    );
-  });
+  const filteredUsers = users;
+
 
   // Calculate top statistics
-  const activeScreensCount = devices.filter((d) => d.status === "online").length;
-  const passiveScreensCount = devices.length - activeScreensCount;
-  const registeredUsersCount = users.length;
+  const activeScreensCount = deviceSummary.online;
+  const passiveScreensCount = deviceSummary.total - activeScreensCount;
+  const registeredUsersCount = userTotal;
 
   return (
     <div style={{ padding: "32px 40px", maxWidth: "1200px", margin: "0 auto", width: "100%", boxSizing: "border-box" }}>
@@ -432,7 +454,7 @@ export default function UsersPage() {
                               onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "rgba(239, 68, 68, 0.15)"}
                               onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "rgba(239, 68, 68, 0.08)"}
                             >
-                              Delete
+                              Pasifleştir
                             </button>
                           )}
                         </div>
@@ -442,6 +464,16 @@ export default function UsersPage() {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+        {userTotalPages > 1 && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 16, color: "#64748b", fontSize: 13 }}>
+            <span>{userTotal.toLocaleString()} users</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <button type="button" disabled={userPage <= 1} onClick={() => setUserPage((page) => Math.max(1, page - 1))}>Previous</button>
+              <span>Page {userPage} / {userTotalPages}</span>
+              <button type="button" disabled={userPage >= userTotalPages} onClick={() => setUserPage((page) => Math.min(userTotalPages, page + 1))}>Next</button>
+            </div>
           </div>
         )}
       </div>

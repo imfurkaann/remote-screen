@@ -4,6 +4,10 @@ import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import PairScreenModal from "../../../components/PairScreenModal";
 import { useConfirm } from "@/components/ConfirmProvider";
+import { buildDeviceQuery } from "@/lib/device-query";
+import { useFleetSocket } from "@/lib/use-fleet-socket";
+import { mergeDeviceStatus } from "@/lib/fleet-events";
+import { getDevicePresence } from "@/lib/device-presence";
 
 type DeviceItem = {
   id: string;
@@ -12,6 +16,7 @@ type DeviceItem = {
   location?: string | null;
   status: string;
   last_seen_at?: string | null;
+  last_heartbeat_at?: string | null;
   current_playlist_id?: string | null;
   screen_group?: string | null;
 };
@@ -72,27 +77,6 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-/**
- * Derives a live online/degraded/offline status from the device's last_seen_at
- * timestamp, independent of the backend `status` field which only updates on
- * socket connect/disconnect events.
- *
- * Thresholds:
- *  - ONLINE:   last heartbeat < 60 s ago
- *  - DEGRADED: last heartbeat 60 s – 5 min ago (socket may have dropped)
- *  - OFFLINE:  last heartbeat > 5 min ago or null
- */
-function getDeviceStatus(
-  lastSeenAt: string | null | undefined,
-  nowMs: number
-): "online" | "degraded" | "offline" {
-  if (!lastSeenAt) return "offline";
-  const ageMs = nowMs - new Date(lastSeenAt).getTime();
-  if (ageMs < 60_000) return "online";
-  if (ageMs < 5 * 60_000) return "degraded";
-  return "offline";
-}
-
 const STATUS_STYLE: Record<
   "online" | "degraded" | "offline",
   { bg: string; color: string; border: string; label: string; dot?: string }
@@ -126,6 +110,9 @@ export default function ScreensPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
   // Ticks every 30 s so status badges update without a page refresh.
   const [nowMs, setNowMs] = useState(() => Date.now());
 
@@ -143,6 +130,15 @@ export default function ScreensPage() {
   const [groupSelectedIds, setGroupSelectedIds] = useState<Set<string>>(new Set());
   const [groupSaving, setGroupSaving] = useState(false);
   const [groupSearch, setGroupSearch] = useState("");
+  const [liveConnected, setLiveConnected] = useState(false);
+
+  useFleetSocket({
+    onConnectionChange: setLiveConnected,
+    onDeviceStatus: (event) => {
+      setNowMs(Date.now());
+      setScreens((current) => mergeDeviceStatus(current, event));
+    }
+  });
 
   const handleDeleteScreen = async (deviceId: string, hardwareId: string, screenName?: string | null) => {
     const displayName = screenName || hardwareId;
@@ -171,15 +167,14 @@ export default function ScreensPage() {
     if (!name || groupSelectedIds.size === 0) return;
     setGroupSaving(true);
     try {
-      await Promise.all(
-        Array.from(groupSelectedIds).map((id) =>
-          fetch(`/api/content/devices/${id}`, {
-            method: "PUT",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ screen_group: name })
-          })
-        )
-      );
+      const response = await fetch("/api/content/devices/bulk", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ device_ids: Array.from(groupSelectedIds), screen_group: name })
+      });
+      if (!response.ok) {
+        throw new Error("Failed to assign the selected screens to the group.");
+      }
       // Optimistic update
       setScreens((prev) =>
         prev.map((s) =>
@@ -200,19 +195,27 @@ export default function ScreensPage() {
     if (!silent) setLoading(true);
     setError(null);
     try {
-      const [devicesRes, playlistsRes] = await Promise.all([
-        fetch("/api/content/devices", { cache: "no-store" }),
-        fetch("/api/content/playlists", { cache: "no-store" })
-      ]);
-      if (devicesRes.status === 401 || devicesRes.status === 403 || playlistsRes.status === 401 || playlistsRes.status === 403) {
+      const query = buildDeviceQuery({ page, limit: 100, search: searchTerm });
+      const devicesPromise = fetch(`/api/content/devices?${query.toString()}`, { cache: "no-store" });
+      const playlistsPromise = silent
+        ? Promise.resolve<Response | null>(null)
+        : fetch("/api/content/playlists", { cache: "no-store" });
+      const [devicesRes, playlistsRes] = await Promise.all([devicesPromise, playlistsPromise]);
+      if (devicesRes.status === 401 || devicesRes.status === 403 || playlistsRes?.status === 401 || playlistsRes?.status === 403) {
         await fetch("/api/auth/logout", { method: "POST" });
         window.location.href = "/login?redirect=/screens";
         return;
       }
       if (!devicesRes.ok) throw new Error("Failed to load screens list.");
-      const devPayload = (await devicesRes.json()) as { devices?: DeviceItem[] };
+      const devPayload = (await devicesRes.json()) as {
+        devices?: DeviceItem[];
+        total?: number;
+        totalPages?: number;
+      };
       setScreens(devPayload.devices ?? []);
-      if (playlistsRes.ok) {
+      setTotal(devPayload.total ?? 0);
+      setTotalPages(devPayload.totalPages ?? 1);
+      if (playlistsRes?.ok) {
         const plPayload = (await playlistsRes.json()) as { playlists?: PlaylistItem[] };
         setPlaylists(plPayload.playlists ?? []);
       }
@@ -233,27 +236,19 @@ export default function ScreensPage() {
   }, [playlists]);
 
   useEffect(() => {
-    void loadScreens();
-    const id = setInterval(() => {
+    const initialTimer = setTimeout(() => void loadScreens(), 300);
+    const refreshTimer = setInterval(() => {
       setNowMs(Date.now());
-      void loadScreens(true);
-    }, 30_000);
-    return () => clearInterval(id);
-  }, []);
+      if (document.visibilityState === "visible") void loadScreens(true);
+    }, 60_000);
+    return () => {
+      clearTimeout(initialTimer);
+      clearInterval(refreshTimer);
+    };
+  }, [page, searchTerm]);
 
-  // Filtered devices based on search query
-  const filteredScreens = useMemo(() => {
-    return screens.filter((screen) => {
-      const term = searchTerm.toLowerCase().trim();
-      if (!term) return true;
-      return (
-        screen.id.toLowerCase().includes(term) ||
-        screen.hardware_id.toLowerCase().includes(term) ||
-        (screen.name && screen.name.toLowerCase().includes(term)) ||
-        (screen.location && screen.location.toLowerCase().includes(term))
-      );
-    });
-  }, [screens, searchTerm]);
+  // Search is performed by MongoDB so the browser only handles the current bounded page.
+  const filteredScreens = screens;
 
   // Derived: screens grouped by screen_group (must come after filteredScreens)
   const groupedScreens = useMemo(() => {
@@ -288,7 +283,7 @@ export default function ScreensPage() {
         gap: "24px"
       }}>
         {/* Title */}
-        <h1 style={{ margin: 0, fontSize: "24px", fontWeight: 700, color: "#0f172a" }}>
+        <h1 title={liveConnected ? "Live connection active" : "Live connection reconnecting"} style={{ margin: 0, fontSize: "24px", fontWeight: 700, color: "#0f172a" }}>
           Screens
         </h1>
 
@@ -310,7 +305,7 @@ export default function ScreensPage() {
             type="text"
             placeholder="Search Screens"
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={(e) => { setSearchTerm(e.target.value); setPage(1); }}
             style={{
               width: "100%",
               padding: "8px 12px 8px 36px",
@@ -572,7 +567,10 @@ export default function ScreensPage() {
                       {/* Status badge */}
                       <div style={{ flexShrink: 0 }}>
                         {(() => {
-                          const status = getDeviceStatus(screen.last_seen_at, nowMs);
+                          const status = getDevicePresence({
+                            status: screen.status,
+                            lastHeartbeatAt: screen.last_heartbeat_at
+                          }, nowMs);
                           const s = STATUS_STYLE[status];
                           return (
                             <span style={{
@@ -603,6 +601,20 @@ export default function ScreensPage() {
                 </div>
               </div>
             ))}
+          </div>
+        )}
+
+        {total > 0 && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", color: "#64748b", fontSize: 13 }}>
+            <span>{total.toLocaleString()} screens · Page {page} of {totalPages}</span>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button type="button" disabled={page <= 1 || loading} onClick={() => setPage((value) => Math.max(1, value - 1))}>
+                Previous
+              </button>
+              <button type="button" disabled={page >= totalPages || loading} onClick={() => setPage((value) => Math.min(totalPages, value + 1))}>
+                Next
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -641,7 +653,7 @@ export default function ScreensPage() {
             }}>
               <div>
                 <h3 style={{ margin: 0, fontSize: "17px", fontWeight: 700, color: "#0f172a" }}>Screens Manager</h3>
-                <p style={{ margin: "2px 0 0", fontSize: "13px", color: "#94a3b8" }}>{screens.length} screen{screens.length !== 1 ? "s" : ""} total</p>
+                <p style={{ margin: "2px 0 0", fontSize: "13px", color: "#94a3b8" }}>{total.toLocaleString()} screen{total !== 1 ? "s" : ""} total</p>
               </div>
               <button onClick={() => setIsManagerOpen(false)} type="button" style={{
                 background: "none", border: "none", cursor: "pointer",

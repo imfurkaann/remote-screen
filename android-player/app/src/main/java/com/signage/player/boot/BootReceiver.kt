@@ -33,6 +33,8 @@ class BootReceiver : BroadcastReceiver() {
 
         private val BOOT_ACTIONS = setOf(
             Intent.ACTION_BOOT_COMPLETED,
+            Intent.ACTION_MY_PACKAGE_REPLACED,
+            Intent.ACTION_USER_UNLOCKED,
             "android.intent.action.QUICKBOOT_POWERON",
             "com.htc.intent.action.QUICKBOOT_POWERON"
         )
@@ -45,12 +47,16 @@ class BootReceiver : BroadcastReceiver() {
         Log.d(TAG, "Boot broadcast received: $action — starting player")
 
         // Step 1: Initialize background services (SessionManager, sync, socket…)
-        StartupCoordinator.enqueueStartup(context)
+        val canStartMediaServiceFromBoot = android.os.Build.VERSION.SDK_INT < 35
+        StartupCoordinator.enqueueStartup(
+            context = context,
+            ensureForegroundService = canStartMediaServiceFromBoot
+        )
 
         // Step 2: Pin the process in memory via foreground service.
         // Must be called before starting the Activity so the process priority
         // is already elevated when the Activity is created.
-        PlayerForegroundService.start(context)
+        if (canStartMediaServiceFromBoot) PlayerForegroundService.start(context)
 
         // Step 3: Bring the player UI to the foreground.
         // FLAG_ACTIVITY_NEW_TASK is mandatory when starting an Activity from

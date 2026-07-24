@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { Types } from "mongoose";
 
 import { requireRoles, requireUserAuth } from "../middlewares/auth.js";
 import { CommandModel } from "../models/command.model.js";
@@ -162,7 +163,7 @@ export function buildOpsRouter(deps: OpsRouteDeps): Router {
       const telemetryLimit = Math.min(Math.max(Number(req.query.telemetry_limit ?? 50), 1), 200);
       const correlationIdFilter = String(req.query.correlation_id ?? "").trim();
 
-      if (!tenantId || !deviceId) {
+      if (!tenantId || !Types.ObjectId.isValid(deviceId)) {
         res.status(400).json({ code: "VALIDATION_ERROR", message: "tenant and deviceId are required" });
         return;
       }
@@ -294,7 +295,7 @@ export function buildOpsRouter(deps: OpsRouteDeps): Router {
         return;
       }
 
-      if (!deviceIdInput && !hardwareIdInput) {
+      if ((!deviceIdInput && !hardwareIdInput) || (deviceIdInput !== "" && !Types.ObjectId.isValid(deviceIdInput))) {
         res.status(400).json({ code: "VALIDATION_ERROR", message: "device_id or hardware_id is required" });
         return;
       }

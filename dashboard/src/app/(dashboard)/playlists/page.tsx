@@ -75,7 +75,7 @@ function PlaylistRowComponent({
 }: {
   playlist: PlaylistRow;
   isLast: boolean;
-  onPublishClick: (id: string, name: string) => void;
+  onPublishClick: (id: string, name: string, version: number) => void;
   onDeleteClick: (id: string, name: string) => void;
   isBusy: boolean;
 }) {
@@ -88,7 +88,7 @@ function PlaylistRowComponent({
   const handlePublishClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
-    onPublishClick(playlist.id, playlist.name);
+    onPublishClick(playlist.id, playlist.name, playlist.version);
   };
 
   const handleDeleteClick = (e: React.MouseEvent) => {
@@ -224,40 +224,48 @@ export default function PlaylistsPage() {
   const [isBusy, setIsBusy] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [publishStatus, setPublishStatus] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
 
   // Publish Modal State
   const [publishModalOpen, setPublishModalOpen] = useState(false);
   const [activePublishId, setActivePublishId] = useState<string | null>(null);
   const [activePublishName, setActivePublishName] = useState("");
+  const [activePublishVersion, setActivePublishVersion] = useState<number | null>(null);
 
   const realPlaylists = useMemo(
     () => playlists.filter((p) => !p.name.toLowerCase().startsWith("single media:")),
     [playlists]
   );
 
-  const filteredPlaylists = useMemo(
-    () =>
-      realPlaylists.filter((p) =>
-        p.name.toLowerCase().includes(searchQuery.toLowerCase())
-      ),
-    [realPlaylists, searchQuery]
-  );
+  const filteredPlaylists = realPlaylists;
 
-  const loadPlaylists = async () => {
-    const payload = await fetchJson<{ playlists?: PlaylistRow[] }>(
-      "/api/content/playlists",
-      { cache: "no-store" }
-    );
+  const loadPlaylists = async (targetPage = page, search = searchQuery) => {
+    const params = new URLSearchParams({
+      page: String(targetPage),
+      limit: "50",
+      include_system: "false"
+    });
+    if (search.trim()) params.set("search", search.trim());
+    const payload = await fetchJson<{
+      playlists?: PlaylistRow[];
+      totalPages?: number;
+    }>("/api/content/playlists?" + params.toString(), { cache: "no-store" });
     setPlaylists(payload.playlists ?? []);
+    setTotalPages(payload.totalPages ?? 1);
   };
 
   useEffect(() => {
-    loadPlaylists().catch(() => setPublishStatus("Failed to load playlists."));
-  }, []);
+    const timer = window.setTimeout(() => {
+      loadPlaylists(page, searchQuery).catch(() => setPublishStatus("Failed to load playlists."));
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [page, searchQuery]);
 
-  const openPublishModal = (playlistId: string, playlistName: string) => {
+  const openPublishModal = (playlistId: string, playlistName: string, version: number) => {
     setActivePublishId(playlistId);
     setActivePublishName(playlistName);
+    setActivePublishVersion(version);
     setPublishModalOpen(true);
   };
 
@@ -269,7 +277,7 @@ export default function PlaylistsPage() {
       await fetchJson(`/api/content/playlists/${activePublishId}/publish`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ device_ids: selectedIds }),
+        body: JSON.stringify({ device_ids: selectedIds, expected_version: activePublishVersion }),
       });
       await loadPlaylists();
       setPublishStatus(`Playlist published to selected screens.`);
@@ -355,7 +363,7 @@ export default function PlaylistsPage() {
               type="text"
               placeholder="Search Playlists"
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => { setSearchQuery(e.target.value); setPage(1); }}
               style={{
                 width: "100%",
                 padding: "8px 12px 8px 36px",
@@ -397,7 +405,7 @@ export default function PlaylistsPage() {
           {/* Action Buttons Row */}
           <div style={{ display: "flex", alignItems: "center", gap: "20px", fontSize: "14px", color: "#64748b", flexWrap: "wrap" }}>
             <button
-              onClick={loadPlaylists}
+              onClick={() => loadPlaylists()}
               style={{
                 background: "none",
                 border: "none",
@@ -511,6 +519,17 @@ export default function PlaylistsPage() {
                   isBusy={isBusy}
                 />
               ))}
+              {totalPages > 1 && (
+                <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 12, padding: 16, borderTop: "1px solid #e2e8f0" }}>
+                  <button type="button" disabled={page <= 1 || isBusy} onClick={() => setPage((value) => Math.max(1, value - 1))}>
+                    Önceki
+                  </button>
+                  <span style={{ fontSize: 13, color: "#64748b" }}>Sayfa {page} / {totalPages}</span>
+                  <button type="button" disabled={page >= totalPages || isBusy} onClick={() => setPage((value) => Math.min(totalPages, value + 1))}>
+                    Sonraki
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>

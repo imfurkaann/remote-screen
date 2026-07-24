@@ -2,6 +2,7 @@ package com.signage.player.network
 
 data class PairingRequest(
     val hardware_id: String,
+    val device_proof: String,
     val tenant_id: String? = null
 )
 
@@ -13,6 +14,7 @@ data class PairingResponse(
 
 data class DeviceSessionRequest(
     val hardware_id: String,
+    val device_proof: String,
     val tenant_id: String? = null
 )
 

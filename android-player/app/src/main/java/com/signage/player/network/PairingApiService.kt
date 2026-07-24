@@ -23,7 +23,7 @@ interface PairingApiService {
 
     @POST("/api/v1/pairing/unpair")
     suspend fun unpairDevice(
-        @Header("x-bootstrap-key") bootstrapKey: String,
+        @Header("Authorization") authorization: String,
         @Body request: UnpairRequest
     ): UnpairResponse
 

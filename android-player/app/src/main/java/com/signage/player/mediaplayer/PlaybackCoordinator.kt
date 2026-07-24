@@ -198,6 +198,13 @@ class PlaybackCoordinator(
     // ---------------------------------------------------------------------------
 
     private suspend fun playbackLoop() {
+        while (coroutineContext.isActive) {
+            playbackLoopUntilFailure()
+            if (coroutineContext.isActive) delay(MISSING_BACKOFF_MS)
+        }
+    }
+
+    private suspend fun playbackLoopUntilFailure() {
         try {
             val rows = playlistRepository.getPlaylist()
             val playlist = rows.sortedBy { it.position }
@@ -209,6 +216,7 @@ class PlaybackCoordinator(
 
             val state = playbackStateStore.load()
             var currentIndex = if (state.mediaIndex in playlist.indices) state.mediaIndex else 0
+            var resumePending = true
 
             // How many consecutive items in this tour were unplayable (file missing).
             var consecutiveMissCount = 0
@@ -252,6 +260,7 @@ class PlaybackCoordinator(
                         continue
                     }
 
+                    resumePending = false
                     currentIndex = (currentIndex + 1) % playlist.size
                     delay(500L) // short pause between miss checks within a tour
                     continue
@@ -260,9 +269,6 @@ class PlaybackCoordinator(
                 // Valid file found — reset miss counter.
                 consecutiveMissCount = 0
 
-                // Persist which item we are about to play (position reset to 0
-                // here; for videos we overwrite it with real position below).
-                playbackStateStore.save(currentIndex, 0L)
 
                 val isImg = !isWeb && isImagePath(item.filePath)
                 val currentPath = PlayerUiStateStore.state.value.currentMediaFilePath
@@ -293,8 +299,9 @@ class PlaybackCoordinator(
                     val displayMs = item.durationMs.coerceAtLeast(1_000L)
 
                     // Restore mid-image position if returning to this item after a restart.
-                    val remainingMs = if (state.mediaIndex == currentIndex && state.positionMs > 0) {
-                        (displayMs - state.positionMs).coerceAtLeast(1_000L)
+                    val resumeOffsetMs = if (resumePending && state.mediaIndex == currentIndex) state.positionMs else 0L
+                    val remainingMs = if (resumeOffsetMs > 0) {
+                        (displayMs - resumeOffsetMs).coerceAtLeast(1_000L)
                     } else {
                         displayMs
                     }
@@ -307,28 +314,25 @@ class PlaybackCoordinator(
                         val chunk = minOf(POSITION_SAVE_INTERVAL_MS, remainingMs - elapsed)
                         delay(chunk)
                         elapsed = System.currentTimeMillis() - startMs
-                        playbackStateStore.save(currentIndex, elapsed)
+                        playbackStateStore.save(currentIndex, resumeOffsetMs + elapsed)
                     }
                 } else {
                     // --- Improvement 3: video position restore ---
                     // --- K2: Hard watchdog timeout + frozen-position detector ---
                     // withTimeoutOrNull ensures we never block forever if the
                     // hardware decoder locks up and STATE_ENDED is never fired.
-                    val resumePositionMs = if (state.mediaIndex == currentIndex) state.positionMs else 0L
-                    val advanced = withTimeoutOrNull(VIDEO_WATCHDOG_TIMEOUT_MS) {
-                        playerController.playVideoAndWait(item.filePath, resumePositionMs, currentIndex, playbackStateStore)
-                    }
-                    if (advanced == null) {
-                        // Watchdog fired — decoder likely locked. Log and continue.
-                        Log.e(tag, "Video watchdog timeout after ${VIDEO_WATCHDOG_TIMEOUT_MS}ms for ${item.filePath} — advancing to next item")
-                        onError(
-                            "playback_watchdog_timeout",
-                            "Video decoder did not finish within ${VIDEO_WATCHDOG_TIMEOUT_MS / 60_000}min — possible hardware freeze",
-                            mapOf("file" to item.filePath, "item_index" to currentIndex)
-                        )
-                    }
+                    val resumePositionMs = if (resumePending && state.mediaIndex == currentIndex) state.positionMs else 0L
+                    // The progress watchdog inside playVideoAndWait handles frozen
+                    // decoders without imposing a maximum length on valid videos.
+                    playerController.playVideoAndWait(
+                        item.filePath,
+                        resumePositionMs,
+                        currentIndex,
+                        playbackStateStore
+                    )
                 }
 
+                resumePending = false
                 currentIndex = (currentIndex + 1) % playlist.size
                 // Clear saved position when moving to the next item.
                 playbackStateStore.save(currentIndex, 0L)
@@ -360,13 +364,40 @@ class PlaybackCoordinator(
         itemIndex: Int,
         store: PlaybackStateStore
     ) {
-        // Launch position-saver in a sibling job so it can be cancelled cleanly.
+        var forceAdvance: (() -> Unit)? = null
+        val screenStateJob = scope.launch {
+            PlayerUiStateStore.state.collect { state ->
+                if (state.isScreenOff) pause() else play()
+            }
+        }
+
         val positionSaverJob = scope.launch {
+            var lastPosition = -1L
+            var stagnantSince = 0L
             while (isActive) {
                 delay(POSITION_SAVE_INTERVAL_MS)
                 val pos = getCurrentPosition()
                 store.save(itemIndex, pos)
-                Log.v(tag, "Position snapshot saved: item=$itemIndex pos=${pos}ms")
+                val now = android.os.SystemClock.elapsedRealtime()
+                val player = asExoPlayer()
+                val shouldBeProgressing = !PlayerUiStateStore.state.value.isScreenOff &&
+                    player.playWhenReady && player.playbackState != Player.STATE_IDLE
+                if (shouldBeProgressing && pos == lastPosition) {
+                    if (stagnantSince == 0L) stagnantSince = now
+                    if (now - stagnantSince >= FROZEN_POSITION_THRESHOLD_MS) {
+                        Log.e(tag, "Frozen decoder detected at ${pos}ms; advancing")
+                        onError(
+                            "playback_decoder_frozen",
+                            "Video position did not advance for ${FROZEN_POSITION_THRESHOLD_MS / 1_000}s",
+                            mapOf("file" to filePath, "position_ms" to pos)
+                        )
+                        forceAdvance?.invoke()
+                        break
+                    }
+                } else {
+                    stagnantSince = 0L
+                }
+                lastPosition = pos
             }
         }
 
@@ -391,6 +422,11 @@ class PlaybackCoordinator(
                     }
                 }
 
+                forceAdvance = {
+                    asExoPlayer().removeListener(listener)
+                    pause()
+                    if (continuation.isActive) continuation.resume(Unit)
+                }
                 asExoPlayer().addListener(listener)
                 setSingleVideo(filePath)
 
@@ -408,6 +444,8 @@ class PlaybackCoordinator(
                 }
             }
         } finally {
+            forceAdvance = null
+            screenStateJob.cancel()
             positionSaverJob.cancel()
         }
     }

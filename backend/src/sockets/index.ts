@@ -1,9 +1,20 @@
 import type { Server as HttpServer } from "node:http";
 import { Server } from "socket.io";
+import { createAdapter } from "@socket.io/redis-adapter";
+import { createClient, type RedisClientType } from "redis";
 import jwt from "jsonwebtoken";
-import { emitDashboardCommandAck } from "./registry.js";
-import { processDeviceAck, type DeviceAckPayload } from "../services/command.service.js";
+import { Types } from "mongoose";
+import { emitDashboardCommandAck, emitDashboardDeviceStatus } from "./registry.js";
+import {
+  dispatchPendingCommandsForDevice,
+  processDeviceAck,
+  type DeviceAckPayload
+} from "../services/command.service.js";
 import { DeviceModel } from "../models/device.model.js";
+import { UserModel } from "../models/user.model.js";
+import { PlaylistModel } from "../models/playlist.model.js";
+import { playlistContentChecksum } from "../lib/playlist-policy.js";
+import { isTenantActive } from "../lib/tenant-state.js";
 import { deviceRepository } from "../repositories/device.repository.js";
 
 type SocketDeps = {
@@ -11,7 +22,18 @@ type SocketDeps = {
   jwtSecret: string;
   jwtIssuer: string;
   jwtAudience: string;
+  redisUrl: string | null;
+  nodeEnv: string;
 };
+
+type SocketRuntime = {
+  redisClients: [RedisClientType, RedisClientType] | null;
+  heartbeatBuffer: HeartbeatBuffer;
+  disconnectTimers: Map<string, ReturnType<typeof setTimeout>>;
+  staleStatusTimer: ReturnType<typeof setInterval>;
+};
+
+const runtimeByServer = new WeakMap<Server, SocketRuntime>();
 
 // ---------------------------------------------------------------------------
 // HeartbeatBuffer — batches per-device telemetry and flushes to MongoDB in a
@@ -75,45 +97,98 @@ class HeartbeatBuffer {
   }
 
   /** Drain the buffer and write all pending entries to MongoDB. */
-  private async flush(): Promise<void> {
+  async flush(): Promise<void> {
     if (this.buffer.size === 0) return;
 
     const entries = [...this.buffer.entries()];
     // Clear the buffer before awaiting so new heartbeats accumulate cleanly.
     this.buffer.clear();
 
-    const writes = entries.map(([, entry]) =>
-      DeviceModel.updateOne(entry.deviceQuery, { $set: entry.fields }).catch((err) => {
-        console.error("[HeartbeatBuffer] updateOne failed", err);
-      })
-    );
+    const operations = entries.map(([, entry]) => ({
+      updateOne: {
+        filter: entry.deviceQuery,
+        update: { $set: entry.fields },
+        upsert: false
+      }
+    }));
 
-    await Promise.allSettled(writes);
-    console.debug(`[HeartbeatBuffer] flushed ${writes.length} device heartbeats`);
+    try {
+      await DeviceModel.bulkWrite(operations, { ordered: false });
+      console.debug("[HeartbeatBuffer] flushed " + operations.length + " device heartbeats");
+    } catch (err) {
+      console.error("[HeartbeatBuffer] bulkWrite failed", err);
+      for (const [deviceKey, entry] of entries) {
+        if (!this.buffer.has(deviceKey)) {
+          this.buffer.set(deviceKey, entry);
+        }
+      }
+    }
   }
 }
 
-const heartbeatBuffer = new HeartbeatBuffer();
-heartbeatBuffer.start();
-
 // ---------------------------------------------------------------------------
 
-async function checkDeviceAccess(deviceId: string, auth: { userId: string; tenantId: string; role: string }): Promise<boolean> {
-  if (auth.role === "super_admin" || auth.role === "tenant_owner") return true;
-  const query = deviceId.match(/^[0-9a-fA-F]{24}$/)
-    ? { _id: deviceId, tenantId: auth.tenantId, pairedOwnerUserId: auth.userId }
-    : { hardwareId: deviceId, tenantId: auth.tenantId, pairedOwnerUserId: auth.userId };
-  const d = await DeviceModel.findOne(query);
-  return d !== null;
-}
+export async function createSocketServer(httpServer: HttpServer, deps: SocketDeps): Promise<Server> {
+  const heartbeatBuffer = new HeartbeatBuffer();
+  const disconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  heartbeatBuffer.start();
+  const staleStatusTimer = setInterval(() => {
+    const now = Date.now();
+    void DeviceModel.bulkWrite([
+      {
+        updateMany: {
+          filter: {
+            status: "online",
+            lastHeartbeatAt: { $lt: new Date(now - 90_000) }
+          },
+          update: { $set: { status: "degraded" } }
+        }
+      },
+      {
+        updateMany: {
+          filter: {
+            status: { $ne: "offline" },
+            lastHeartbeatAt: { $lt: new Date(now - 5 * 60_000) }
+          },
+          update: { $set: { status: "offline" } }
+        }
+      }
+    ], { ordered: true }).catch((error) =>
+      console.error("[sockets] stale device status sweep failed", error)
+    );
+  }, 60_000);
+  staleStatusTimer.unref?.();
 
-export function createSocketServer(httpServer: HttpServer, deps: SocketDeps): Server {
+  const socketOrigins = deps.corsOrigin === "*"
+    ? true
+    : deps.corsOrigin.split(",").map((origin) => origin.trim()).filter(Boolean);
   const io = new Server(httpServer, {
     cors: {
-      origin: deps.corsOrigin === "*" ? true : deps.corsOrigin,
+      origin: socketOrigins,
       credentials: true
-    }
+    },
+    maxHttpBufferSize: 1_000_000,
+    pingInterval: 25_000,
+    pingTimeout: 20_000
   });
+
+  if (deps.redisUrl) {
+    const pubClient = createClient({ url: deps.redisUrl });
+    const subClient = pubClient.duplicate();
+    pubClient.on("error", (error) => console.error("[sockets] Redis pub client error", error));
+    subClient.on("error", (error) => console.error("[sockets] Redis sub client error", error));
+    await Promise.all([pubClient.connect(), subClient.connect()]);
+    io.adapter(createAdapter(pubClient, subClient));
+    runtimeByServer.set(io, { redisClients: [pubClient, subClient], heartbeatBuffer, disconnectTimers, staleStatusTimer });
+  } else if (deps.nodeEnv === "production") {
+    throw new Error("REDIS_URL is required in production for distributed Socket.IO delivery");
+  } else {
+    console.warn("[sockets] REDIS_URL is not configured; running in single-node mode");
+  }
+
+  if (!runtimeByServer.has(io)) {
+    runtimeByServer.set(io, { redisClients: null, heartbeatBuffer, disconnectTimers, staleStatusTimer });
+  }
 
   const deviceNs = io.of("/device");
   const dashboardNs = io.of("/dashboard");
@@ -129,21 +204,32 @@ export function createSocketServer(httpServer: HttpServer, deps: SocketDeps): Se
       const decoded = jwt.verify(token, deps.jwtSecret, {
         issuer: deps.jwtIssuer,
         audience: deps.jwtAudience
-      }) as { sub: string; tenant_id: string; role: string };
+      }) as { sub: string; tenant_id: string; role: string; scope?: string };
 
-      if (!decoded.sub || !decoded.tenant_id || !decoded.role) {
+      if (!decoded.sub || !decoded.tenant_id || !decoded.role || decoded.scope !== "dashboard_socket") {
         return next(new Error("Authentication error: Invalid claims"));
       }
 
       // Check if user is active (instant deactivation check)
-      const { Types } = await import("mongoose");
-      const { UserModel } = await import("../models/user.model.js");
 
       if (Types.ObjectId.isValid(decoded.sub)) {
-        const user = await UserModel.findById(decoded.sub).lean();
+        const [user, activeTenant] = await Promise.all([
+          UserModel.findById(decoded.sub).select({ tenantId: 1, role: 1, isActive: 1 }).lean(),
+          decoded.role === "super_admin"
+            ? Promise.resolve(true)
+            : isTenantActive(decoded.tenant_id)
+        ]);
         if (!user || !user.isActive) {
           return next(new Error("Authentication error: Account deactivated or not found"));
         }
+        if (!activeTenant) {
+          return next(new Error("Authentication error: Organization is inactive"));
+        }
+        if (user.tenantId !== decoded.tenant_id || user.role !== decoded.role) {
+          return next(new Error("Authentication error: Session claims are stale"));
+        }
+      } else if (deps.nodeEnv === "production") {
+        return next(new Error("Authentication error: Invalid user identifier"));
       }
 
       // Attach auth payload to socket and socket.data for deactivation registry lookup
@@ -161,34 +247,89 @@ export function createSocketServer(httpServer: HttpServer, deps: SocketDeps): Se
     }
   });
 
+  deviceNs.use(async (socket, next) => {
+    try {
+      const token = socket.handshake.auth?.token;
+      if (!token || typeof token !== "string") {
+        return next(new Error("Authentication error: Device token is required"));
+      }
+
+      const decoded = jwt.verify(token, deps.jwtSecret, {
+        issuer: deps.jwtIssuer,
+        audience: deps.jwtAudience
+      }) as { sub: string; tenant_id: string; role: string; hardware_id: string };
+
+      if (decoded.role !== "device" || !decoded.sub || !decoded.tenant_id || !decoded.hardware_id) {
+        return next(new Error("Authentication error: Invalid device claims"));
+      }
+
+      const [device, activeTenant] = await Promise.all([
+        DeviceModel.findOne({
+          _id: decoded.sub,
+          tenantId: decoded.tenant_id,
+          hardwareId: decoded.hardware_id,
+          pairedOwnerUserId: { $ne: null }
+        }).select({ _id: 1, tenantId: 1, hardwareId: 1, pairedOwnerUserId: 1 }).lean(),
+        isTenantActive(decoded.tenant_id)
+      ]);
+
+      if (!device || !activeTenant) {
+        return next(new Error("Authentication error: Device is not paired"));
+      }
+
+      socket.data = {
+        deviceId: String(device._id),
+        hardwareId: device.hardwareId,
+        tenantId: String(device.tenantId),
+        pairedOwnerUserId: device.pairedOwnerUserId ? String(device.pairedOwnerUserId) : null
+      };
+      next();
+    } catch {
+      next(new Error("Authentication error: Invalid device token"));
+    }
+  });
+
   deviceNs.on("connection", async (socket) => {
-    const deviceId = String(
-      socket.handshake.auth?.device_id ?? socket.handshake.query?.device_id ?? ""
-    ).trim();
-    if (!deviceId) {
-      socket.disconnect(true);
-      return;
+    const deviceId = String(socket.data.deviceId);
+    const hardwareId = String(socket.data.hardwareId);
+    const tenantId = String(socket.data.tenantId);
+    const pairedOwnerUserId = socket.data.pairedOwnerUserId
+      ? String(socket.data.pairedOwnerUserId)
+      : null;
+
+    const pendingDisconnect = disconnectTimers.get(deviceId);
+    if (pendingDisconnect) {
+      clearTimeout(pendingDisconnect);
+      disconnectTimers.delete(deviceId);
     }
 
-    socket.join(`device:${deviceId}`);
+    // Join one canonical room only. Registry helpers may emit to both database and hardware IDs for compatibility;
+    // joining both would deliver every command twice to authenticated clients.
+    await socket.join([`device:${deviceId}`, `device:tenant:${tenantId}`]);
 
     // Mark device as online when socket connects
     try {
-      const query = deviceId.match(/^[0-9a-fA-F]{24}$/)
-        ? { _id: deviceId }
-        : { hardwareId: deviceId };
-
+      const query = { _id: deviceId, tenantId, hardwareId };
       const device = await DeviceModel.findOne(query);
       if (device) {
+        const connectedAt = new Date();
         device.status = "online";
-        device.lastSeenAt = new Date();
+        device.lastSeenAt = connectedAt;
+        device.lastHeartbeatAt = connectedAt;
         await device.save();
 
-        try {
-          await deviceRepository.updateStatusByHardware(device.tenantId, device.hardwareId, "online");
-        } catch (shadowErr) {
-          console.error("[sockets] postgres status sync failed on connect", shadowErr);
-        }
+        emitDashboardDeviceStatus(
+          {
+            device_id: deviceId,
+            hardware_id: hardwareId,
+            status: "online",
+            last_seen_at: connectedAt.toISOString()
+          },
+          { tenantId, pairedOwnerUserId }
+        );
+
+        void deviceRepository.updateStatusByHardware(tenantId, device.hardwareId, "online");
+        await dispatchPendingCommandsForDevice(String(device._id), String(device.tenantId));
 
         // Push current orientation to device on connection
         if (device.orientation !== undefined && device.orientation !== null) {
@@ -226,22 +367,10 @@ export function createSocketServer(httpServer: HttpServer, deps: SocketDeps): Se
         // Push active playlist content to device on connection (for offline synchronization)
         if (device.currentPlaylistId) {
           try {
-            const { PlaylistModel } = await import("../models/playlist.model.js");
-            const { createHash } = await import("node:crypto");
-
             const playlist = await PlaylistModel.findById(device.currentPlaylistId).lean();
             if (playlist) {
-              const playlistChecksum = createHash("sha256")
-                .update(
-                  JSON.stringify(
-                    playlist.items.map((item) => ({
-                      mediaId: item.mediaId,
-                      checksumSha256: item.checksumSha256,
-                      position: item.position
-                    }))
-                  )
-                )
-                .digest("hex");
+              const playlistChecksum =
+                playlist.contentChecksumSha256 || playlistContentChecksum(playlist.items);
 
               const syncPayload = {
                 playlist_id: String(playlist._id),
@@ -270,15 +399,48 @@ export function createSocketServer(httpServer: HttpServer, deps: SocketDeps): Se
       console.error("[sockets] failed to update device status to online on connect", err);
     }
 
-    socket.on("COMMAND_ACK", async (payload: DeviceAckPayload) => {
-      try {
-        await processDeviceAck(payload);
-      } catch {
-        // Ignore errors to avoid dropping active socket session.
-      }
+    socket.on(
+      "COMMAND_ACK",
+      async (
+        payload: Partial<DeviceAckPayload>,
+        respond?: (result: { accepted: boolean; code?: string }) => void
+      ) => {
+        const commandId = String(payload?.command_id ?? "").trim();
+        const status = String(payload?.status ?? "").toUpperCase();
+        if (!commandId || commandId.length > 128 || !["ACK", "COMPLETED", "FAILED"].includes(status)) {
+          respond?.({ accepted: false, code: "INVALID_ACK" });
+          return;
+        }
 
-      await emitDashboardCommandAck(payload);
-    });
+        const authenticatedPayload: DeviceAckPayload = {
+          device_id: deviceId,
+          command_id: commandId,
+          status: status as DeviceAckPayload["status"],
+          ...(typeof payload.screenshot_url === "string"
+            ? { screenshot_url: payload.screenshot_url.slice(0, 2_048) }
+            : {}),
+          ...(typeof payload.error_message === "string"
+            ? { error_message: payload.error_message.slice(0, 2_048) }
+            : {}),
+          ...(payload.diagnostics && typeof payload.diagnostics === "object"
+            ? { diagnostics: payload.diagnostics }
+            : {})
+        };
+
+        try {
+          const committed = await processDeviceAck(authenticatedPayload);
+          if (!committed) {
+            respond?.({ accepted: false, code: "COMMAND_NOT_FOUND" });
+            return;
+          }
+          emitDashboardCommandAck(authenticatedPayload, { tenantId, pairedOwnerUserId });
+          respond?.({ accepted: true });
+        } catch (error) {
+          console.error("[sockets] command ack processing failed", error);
+          respond?.({ accepted: false, code: "ACK_PROCESSING_FAILED" });
+        }
+      }
+    );
 
     // -----------------------------------------------------------------------
     // Heartbeat handler — uses HeartbeatBuffer to batch MongoDB writes.
@@ -292,50 +454,67 @@ export function createSocketServer(httpServer: HttpServer, deps: SocketDeps): Se
     //         most 1 write per flush cycle regardless of heartbeat frequency.
     // -----------------------------------------------------------------------
     socket.on("HEARTBEAT", (payload?: Record<string, unknown>) => {
-      const query = deviceId.match(/^[0-9a-fA-F]{24}$/)
-        ? { _id: deviceId }
-        : { hardwareId: deviceId };
+      const query = { _id: deviceId, tenantId, hardwareId };
 
       const fields: Record<string, unknown> = {
         lastSeenAt: new Date(),
+        lastHeartbeatAt: new Date(),
         status: "online"
       };
 
       if (payload && typeof payload === "object") {
-        if (payload.ipAddress !== undefined) fields.ipAddress = payload.ipAddress;
-        if (payload.playerVersion !== undefined) fields.playerVersion = payload.playerVersion;
-        if (payload.osVersion !== undefined) fields.osVersion = payload.osVersion;
-        if (payload.resolution !== undefined) fields.resolution = payload.resolution;
-        if (payload.memoryTotal !== undefined) fields.memoryTotal = payload.memoryTotal;
-        if (payload.memoryUsed !== undefined) fields.memoryUsed = payload.memoryUsed;
+        const copyBoundedString = (sourceKey: string, targetKey: string, maxLength: number) => {
+          const value = payload[sourceKey];
+          if (typeof value === "string" && value.length > 0) {
+            fields[targetKey] = value.slice(0, maxLength);
+          }
+        };
+        copyBoundedString("ipAddress", "ipAddress", 64);
+        copyBoundedString("playerVersion", "playerVersion", 64);
+        copyBoundedString("osVersion", "osVersion", 128);
+        copyBoundedString("resolution", "resolution", 32);
+        copyBoundedString("memoryTotal", "memoryTotal", 32);
+        copyBoundedString("memoryUsed", "memoryUsed", 32);
       }
 
-      heartbeatBuffer.upsert(deviceId, query as Record<string, string>, fields);
+      heartbeatBuffer.upsert(deviceId, query, fields);
     });
 
-    socket.on("disconnect", async () => {
-      // Remove from heartbeat buffer immediately on disconnect.
-      heartbeatBuffer.evict(deviceId);
+    socket.on("disconnect", () => {
+      // Mobile and Wi-Fi handovers often reconnect within seconds. Delaying the
+      // offline transition prevents dashboard flicker and unnecessary DB writes.
+      if (disconnectTimers.has(deviceId)) return;
+      const disconnectedAt = new Date();
+      const timer = setTimeout(async () => {
+        disconnectTimers.delete(deviceId);
+        try {
+          const remainingSockets = await deviceNs.in(`device:${deviceId}`).fetchSockets();
+          if (remainingSockets.length > 0) return;
 
-      try {
-        const query = deviceId.match(/^[0-9a-fA-F]{24}$/)
-          ? { _id: deviceId }
-          : { hardwareId: deviceId };
+          heartbeatBuffer.evict(deviceId);
+          const updated = await DeviceModel.findOneAndUpdate(
+            { _id: deviceId, tenantId, hardwareId, lastHeartbeatAt: { $lte: disconnectedAt } },
+            { $set: { status: "offline" } },
+            { new: true }
+          ).select({ _id: 1 });
+          if (!updated) return;
 
-        const device = await DeviceModel.findOne(query);
-        if (device) {
-          device.status = "offline";
-          await device.save();
-
-          try {
-            await deviceRepository.updateStatusByHardware(device.tenantId, device.hardwareId, "offline");
-          } catch (shadowErr) {
-            console.error("[sockets] postgres status sync failed on disconnect", shadowErr);
-          }
+          emitDashboardDeviceStatus(
+            {
+              device_id: deviceId,
+              hardware_id: hardwareId,
+              status: "offline",
+              last_seen_at: disconnectedAt.toISOString()
+            },
+            { tenantId, pairedOwnerUserId }
+          );
+          void deviceRepository.updateStatusByHardware(tenantId, hardwareId, "offline");
+        } catch (err) {
+          console.error("[sockets] delayed offline transition failed", err);
         }
-      } catch (err) {
-        console.error("[sockets] failed to update device status to offline on disconnect", err);
-      }
+      }, 45_000);
+      timer.unref?.();
+      disconnectTimers.set(deviceId, timer);
     });
   });
 
@@ -343,39 +522,37 @@ export function createSocketServer(httpServer: HttpServer, deps: SocketDeps): Se
     const auth = (socket as any).auth as { userId: string; tenantId: string; role: string };
 
     // Join operator's own private user room to receive isolated command ACKs
-    socket.join(`dashboard:user:${auth.userId}`);
+    socket.join([`dashboard:user:${auth.userId}`, `dashboard:tenant:${auth.tenantId}`]);
 
     // If role is tenant_owner, join tenant owner room to receive broadcast signals
     if (auth.role === "tenant_owner") {
       socket.join(`dashboard:tenant:${auth.tenantId}:owner`);
     }
 
-    socket.on("dispatch:sync", async ({ device_id, payload }) => {
-      try {
-        const hasAccess = await checkDeviceAccess(device_id, auth);
-        if (!hasAccess) {
-          socket.emit("error", { code: "FORBIDDEN", message: "Insufficient permissions for this device" });
-          return;
-        }
-        deviceNs.to(`device:${device_id}`).emit("SYNC_CONTENT", payload);
-      } catch (err) {
-        console.error("[sockets] dispatch:sync error", err);
-      }
-    });
 
-    socket.on("dispatch:command", async ({ device_id, payload }) => {
-      try {
-        const hasAccess = await checkDeviceAccess(device_id, auth);
-        if (!hasAccess) {
-          socket.emit("error", { code: "FORBIDDEN", message: "Insufficient permissions for this device" });
-          return;
-        }
-        deviceNs.to(`device:${device_id}`).emit("COMMAND_DISPATCH", payload);
-      } catch (err) {
-        console.error("[sockets] dispatch:command error", err);
-      }
-    });
   });
 
   return io;
+}
+
+export async function closeSocketServer(io: Server): Promise<void> {
+  const runtime = runtimeByServer.get(io);
+  runtime?.heartbeatBuffer.stop();
+  if (runtime) clearInterval(runtime.staleStatusTimer);
+
+  // Close sockets first so no heartbeat or disconnect timer can be added after
+  // the final drain begins.
+  await new Promise<void>((resolve) => io.close(() => resolve()));
+  if (runtime) {
+    for (const timer of runtime.disconnectTimers.values()) clearTimeout(timer);
+    runtime.disconnectTimers.clear();
+    await runtime.heartbeatBuffer.flush().catch((error) =>
+      console.error("[sockets] final heartbeat flush failed", error)
+    );
+  }
+
+  if (runtime?.redisClients) {
+    await Promise.allSettled(runtime.redisClients.map((client) => client.quit()));
+  }
+  runtimeByServer.delete(io);
 }

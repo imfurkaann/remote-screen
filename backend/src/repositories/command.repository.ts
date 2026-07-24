@@ -9,6 +9,7 @@ const logger = new Logger('CommandRepository');
 type ShadowCommandInput = {
   tenantId: string;
   deviceId: string;
+  requestedByUserId: string | null;
   commandId: string;
   commandType: string;
   payload: Record<string, unknown>;
@@ -27,6 +28,7 @@ type ShadowCommandInput = {
 export type ShadowCommandRow = {
   id: string;
   device_id: string;
+  requested_by_user_id: string | null;
   command_id: string;
   command_type: string;
   payload: Record<string, unknown>;
@@ -100,17 +102,18 @@ export class CommandRepository {
     const pool = getPostgresPool();
     await pool.query(
       `INSERT INTO commands (
-        tenant_id, device_id, command_id, command_type, payload, status,
+        tenant_id, device_id, requested_by_user_id, command_id, command_type, payload, status,
         attempts, max_attempts, timeout_ms, sent_at, ack_at, completed_at,
         timeout_at, screenshot_url, error_message
       )
       VALUES (
-        $1::uuid, $2, $3, $4, $5::jsonb, $6,
-        $7, $8, $9, $10, $11, $12,
-        $13, $14, $15
+        $1::uuid, $2, $3, $4, $5, $6::jsonb, $7,
+        $8, $9, $10, $11, $12, $13,
+        $14, $15, $16
       )
-      ON CONFLICT (tenant_id, device_id, command_id)
+      ON CONFLICT (tenant_id, device_id, command_id) WHERE deleted_at IS NULL
       DO UPDATE SET
+        requested_by_user_id = EXCLUDED.requested_by_user_id,
         command_type = EXCLUDED.command_type,
         payload = EXCLUDED.payload,
         status = EXCLUDED.status,
@@ -127,6 +130,7 @@ export class CommandRepository {
       [
         input.tenantId,
         input.deviceId,
+        input.requestedByUserId,
         input.commandId,
         input.commandType,
         JSON.stringify(input.payload),
@@ -168,7 +172,7 @@ export class CommandRepository {
     try {
       const pool = getPostgresPool();
       const result = await pool.query<ShadowCommandRow>(
-        `SELECT id, device_id, command_id, command_type, payload, status,
+        `SELECT id, device_id, requested_by_user_id, command_id, command_type, payload, status,
                 attempts, max_attempts, timeout_ms, sent_at, ack_at, completed_at,
                 timeout_at, screenshot_url, error_message
          FROM commands
@@ -177,7 +181,7 @@ export class CommandRepository {
            AND deleted_at IS NULL
          ORDER BY created_at DESC
          LIMIT $3`,
-        [tenantId, deviceId, limit]
+        [tenantId, deviceId, Math.min(Math.max(Math.trunc(limit), 1), 100)]
       );
 
       const latencyMs = Date.now() - startTime;
@@ -239,7 +243,7 @@ export class CommandRepository {
     try {
       const pool = getPostgresPool();
       const result = await pool.query<ShadowCommandRow>(
-        `SELECT id, device_id, command_id, command_type, payload, status,
+        `SELECT id, device_id, requested_by_user_id, command_id, command_type, payload, status,
                 attempts, max_attempts, timeout_ms, sent_at, ack_at, completed_at,
                 timeout_at, screenshot_url, error_message
          FROM commands

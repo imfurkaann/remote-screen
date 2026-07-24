@@ -2,6 +2,7 @@ package com.signage.player.storage
 
 import android.content.Context
 import androidx.room.Room
+import androidx.room.RoomDatabase
 
 object PlayerDatabaseProvider {
     @Volatile
@@ -13,7 +14,9 @@ object PlayerDatabaseProvider {
                 context.applicationContext,
                 PlayerDatabase::class.java,
                 "player-db"
-            ).build().also { created ->
+            )
+                .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
+                .build().also { created ->
                 instance = created
             }
         }

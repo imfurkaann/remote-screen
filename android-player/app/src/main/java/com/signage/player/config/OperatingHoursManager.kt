@@ -34,7 +34,7 @@ object OperatingHoursManager {
                 val startInSeconds = 8 * 3600 // 08:00
                 val endInSeconds = 22 * 3600  // 22:00
                 
-                val isWithin = nowInSeconds in startInSeconds..endInSeconds
+                val isWithin = isWithinScheduleWindow(nowInSeconds, startInSeconds, endInSeconds)
                 PlayerUiStateStore.setScreenOff(!isWithin)
                 return
             }
@@ -58,7 +58,7 @@ object OperatingHoursManager {
                         val startInSeconds = parseTimeToSeconds(startStr)
                         val endInSeconds = parseTimeToSeconds(endStr)
                         
-                        val isWithin = nowInSeconds in startInSeconds..endInSeconds
+                        val isWithin = isWithinScheduleWindow(nowInSeconds, startInSeconds, endInSeconds)
                         PlayerUiStateStore.setScreenOff(!isWithin)
                     } else {
                         PlayerUiStateStore.setScreenOff(true)
@@ -83,4 +83,12 @@ object OperatingHoursManager {
         val seconds = parts.getOrNull(2)?.toIntOrNull() ?: 0
         return hours * 3600 + minutes * 60 + seconds
     }
+}
+/** Supports both same-day (08:00-22:00) and overnight (22:00-06:00) windows. */
+internal fun isWithinScheduleWindow(nowSeconds: Int, startSeconds: Int, endSeconds: Int): Boolean {
+    val now = nowSeconds.coerceIn(0, 86_399)
+    val start = startSeconds.coerceIn(0, 86_399)
+    val end = endSeconds.coerceIn(0, 86_399)
+    if (start == end) return true
+    return if (start < end) now >= start && now < end else now >= start || now < end
 }

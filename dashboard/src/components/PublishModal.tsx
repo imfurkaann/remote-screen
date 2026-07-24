@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import PairScreenModal from "./PairScreenModal";
+import { buildDeviceQuery } from "@/lib/device-query";
 
 interface DeviceRow {
   id: string;
@@ -68,11 +69,8 @@ export default function PublishModal({
   const fetchScreens = async (pageNum: number, searchVal: string, append = false) => {
     setIsLoading(true);
     try {
-      const queryParams = new URLSearchParams({
-        page: String(pageNum),
-        limit: "15",
-        search: searchVal,
-      });
+      const queryParams = buildDeviceQuery({ page: pageNum, limit: 15, search: searchVal });
+
 
       const res = await fetch(`/api/content/devices?${queryParams.toString()}`);
       if (!res.ok) throw new Error("Failed to load screens");

@@ -9,9 +9,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
 import kotlin.math.min
@@ -96,7 +99,7 @@ object SessionManager {
      * definitive when the device is within the grace period. Each retry uses
      * standard exponential back-off so 3 retries ≈ 2 + 4 + 8 = ~14 s total.
      */
-    private const val GRACE_RETRY_ATTEMPTS = 3
+    private const val GRACE_RETRY_ATTEMPTS = 6
 
     // -- Public state ----------------------------------------------------------
 
@@ -111,6 +114,7 @@ object SessionManager {
 
     @Volatile private var sessionScope: CoroutineScope? = null
     @Volatile private var storeRef: PairingStateStore? = null
+    private val immediateRefresh = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
     // -------------------------------------------------------------------------
 
@@ -131,6 +135,7 @@ object SessionManager {
         api: PairingApiService
     ) {
         val store = PairingStateStore(context)
+        val deviceProof = store.getOrCreateDeviceProof()
         storeRef = store
 
         // --- Optimistic initial state -----------------------------------------
@@ -149,10 +154,14 @@ object SessionManager {
         sessionScope?.cancel()
         sessionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         sessionScope!!.launch {
-            runSessionLoop(store, hardwareId, api)
+            runSessionLoop(store, hardwareId, deviceProof, api)
         }
     }
 
+    /** Ask the loop to replace the device token now (e.g. socket auth rejection). */
+    fun requestImmediateRefresh() {
+        immediateRefresh.tryEmit(Unit)
+    }
     /** Cancel the session loop (e.g. when the app is being torn down in tests). */
     fun stop() {
         sessionScope?.cancel()
@@ -165,6 +174,7 @@ object SessionManager {
     private suspend fun runSessionLoop(
         store: PairingStateStore,
         hardwareId: String,
+        deviceProof: String,
         api: PairingApiService
     ) {
         var retryAttempt = 0
@@ -184,6 +194,7 @@ object SessionManager {
                     bootstrapKey = AppDefaults.BOOTSTRAP_KEY,
                     request = DeviceSessionRequest(
                         hardware_id = hardwareId,
+                        device_proof = deviceProof,
                         tenant_id = null
                     )
                 )
@@ -203,7 +214,7 @@ object SessionManager {
                         deviceId = sessionResponse.device_id
                     )
                     Log.d(TAG, "Session verified — paired (deviceId=${sessionResponse.device_id})")
-                    delay(TOKEN_REFRESH_INTERVAL_MS)
+                    waitForRefreshOrTimeout(TOKEN_REFRESH_INTERVAL_MS)
                 }
 
                 // ❌ Definitive "not paired" signal from backend (HTTP 404/409 or paired=false)
@@ -228,7 +239,7 @@ object SessionManager {
                                     "(last verified ${ageHours}h ago, grace retry $gracePeriodRetryCount/$GRACE_RETRY_ATTEMPTS) " +
                                     "— retrying in ${delayMs}ms"
                         )
-                        delay(delayMs)
+                        waitForRefreshOrTimeout(delayMs)
                         continue
                     }
 
@@ -249,7 +260,7 @@ object SessionManager {
                     val displayCode: String = if (needsNewCode) {
                         val reason = if (isResponseUnpaired) "paired=false" else "HTTP $httpCode"
                         Log.d(TAG, "Fetching new pairing code ($reason)")
-                        fetchPairingCode(api, hardwareId)
+                        fetchPairingCode(api, hardwareId, deviceProof)
                             ?.also { lastPairingCodeRequestAt = now }
                              ?: existingCode
                              ?: "------"
@@ -259,7 +270,7 @@ object SessionManager {
 
                     _state.value = DevicePairingState.Unpaired(pairingCode = displayCode)
                     Log.d(TAG, "Device unpaired — polling for confirmation in ${UNPAIRED_POLL_INTERVAL_MS}ms")
-                    delay(UNPAIRED_POLL_INTERVAL_MS)
+                    waitForRefreshOrTimeout(UNPAIRED_POLL_INTERVAL_MS)
                 }
 
                 // ⚠️ Transient error (network, timeout, 5xx, …)
@@ -272,7 +283,7 @@ object SessionManager {
                         "Session refresh failed (transient) — retry in ${delayMs}ms " +
                                 "(attempt $retryAttempt): ${sessionError?.message}"
                     )
-                    delay(delayMs)
+                    waitForRefreshOrTimeout(delayMs)
                 }
             }
         }
@@ -282,11 +293,12 @@ object SessionManager {
 
     private suspend fun fetchPairingCode(
         api: PairingApiService,
-        hardwareId: String
+        hardwareId: String,
+        deviceProof: String
     ): String? = runCatching {
         api.requestPairingCode(
             bootstrapKey = AppDefaults.BOOTSTRAP_KEY,
-            request = PairingRequest(hardware_id = hardwareId, tenant_id = null)
+            request = PairingRequest(hardware_id = hardwareId, device_proof = deviceProof, tenant_id = null)
         )
     }.onFailure { error ->
         Log.e(TAG, "Pairing code request failed: ${error.message}")
@@ -305,6 +317,9 @@ object SessionManager {
      * Full jitter (random in [cap/2, cap]) prevents correlated retries when
      * thousands of devices restart simultaneously.
      */
+    private suspend fun waitForRefreshOrTimeout(timeoutMs: Long) {
+        withTimeoutOrNull(timeoutMs) { immediateRefresh.first() }
+    }
     private fun nextBackoffDelay(attempt: Int): Long {
         val exp = BACKOFF_BASE_MS * (1L shl attempt.coerceAtMost(7))
         val capped = min(exp, BACKOFF_MAX_MS)

@@ -9,8 +9,10 @@ import { CommandModel } from "../models/command.model.js";
 import { hashPassword } from "../lib/bcrypt.js";
 import { randomUUID } from "node:crypto";
 import { getEnv } from "../config/env.js";
+import { assertDestructiveMaintenanceAllowed } from "../lib/maintenance-safety.js";
 
 async function run() {
+  assertDestructiveMaintenanceAllowed("seed-dosinia");
   const env = getEnv();
   await connectMongo(env.mongoUri);
   await connectPostgres(env);

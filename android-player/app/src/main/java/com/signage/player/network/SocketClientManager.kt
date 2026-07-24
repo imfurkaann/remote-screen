@@ -5,8 +5,10 @@ import com.signage.player.commands.CommandDispatchPayload
 import com.signage.player.sync.SyncContentPayload
 import com.signage.player.sync.SyncContentItem
 import android.util.Log
+import io.socket.client.Ack
 import io.socket.client.IO
 import io.socket.client.Socket
+import com.signage.player.storage.PendingCommandAckStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -16,6 +18,7 @@ import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URISyntaxException
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.min
 import kotlin.random.Random
 
@@ -23,7 +26,7 @@ object SocketClientManager {
     private const val TAG = "SocketClientManager"
     private const val BASE_DELAY_MS = 1_000L
     private const val MAX_DELAY_MS = 30_000L
-    private const val HEARTBEAT_INTERVAL_MS = 30_000L
+    private const val HEARTBEAT_INTERVAL_MS = 60_000L
     private val socketScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     @Volatile var currentDeviceId: String = ""
         private set
@@ -34,6 +37,8 @@ object SocketClientManager {
     private var socket: Socket? = null
     private var heartbeatJob: kotlinx.coroutines.Job? = null
     private var appContext: android.content.Context? = null
+    private var pendingAckStore: PendingCommandAckStore? = null
+    private val inFlightCommands = ConcurrentHashMap.newKeySet<String>()
 
     fun registerSyncHandler(handler: suspend (SyncContentPayload) -> Unit) {
         syncHandler = handler
@@ -56,14 +61,23 @@ object SocketClientManager {
      * a belt-and-suspenders safety net.
      */
     @Synchronized
-    fun initialize(context: android.content.Context, deviceId: String, socketBaseUrl: String = "http://10.0.2.2:4100") {
+    fun initialize(
+        context: android.content.Context,
+        deviceId: String,
+        accessToken: String,
+        socketBaseUrl: String = "https://10.0.2.2:4100"
+    ) {
         appContext = context.applicationContext
-        connect(deviceId, socketBaseUrl)
+        pendingAckStore = PendingCommandAckStore(context)
+        connect(deviceId, accessToken, socketBaseUrl)
     }
 
-    private fun connect(deviceId: String, socketBaseUrl: String) {
-        if (deviceId.isBlank()) {
+    private fun connect(deviceId: String, accessToken: String, socketBaseUrl: String) {
+        if (deviceId.isBlank() || accessToken.isBlank()) {
             currentDeviceId = ""
+            socket?.disconnect()
+            socket?.off()
+            socket = null
             return
         }
         currentDeviceId = deviceId
@@ -72,8 +86,7 @@ object SocketClientManager {
         socket?.off()
 
         val options = IO.Options.builder()
-            .setAuth(mapOf("device_id" to deviceId))
-            .setQuery("device_id=$deviceId")
+            .setAuth(mapOf("token" to accessToken))
             .setReconnection(true)
             .setReconnectionAttempts(Int.MAX_VALUE)
             .setReconnectionDelay(BASE_DELAY_MS)
@@ -91,10 +104,17 @@ object SocketClientManager {
             Log.d(TAG, "Connected socket for device_id=$deviceId")
             onConnected()
             startHeartbeat()
+            flushPendingAcks(newSocket)
         }
 
         newSocket.on(Socket.EVENT_CONNECT_ERROR) { args ->
-            Log.e(TAG, "Socket connect error: ${args.firstOrNull()}")
+            val message = args.firstOrNull()?.toString().orEmpty()
+            Log.e(TAG, "Socket connect error: $message")
+            if (message.contains("Authentication", ignoreCase = true) ||
+                message.contains("unauthorized", ignoreCase = true)
+            ) {
+                SessionManager.requestImmediateRefresh()
+            }
         }
 
         newSocket.on(Socket.EVENT_DISCONNECT) { args ->
@@ -115,9 +135,23 @@ object SocketClientManager {
         newSocket.on("COMMAND_DISPATCH") { args ->
             val payload = args.firstOrNull() as? JSONObject ?: return@on
             val mapped = mapCommandPayload(payload) ?: return@on
+            val pendingResult = pendingAckStore?.get(mapped.commandId)
+            if (pendingResult != null) {
+                Log.d(TAG, "Command already executed; resending durable ACK id=${mapped.commandId}")
+                sendAck(newSocket, pendingResult)
+                return@on
+            }
+            if (!inFlightCommands.add(mapped.commandId)) {
+                Log.d(TAG, "Command already executing; duplicate ignored id=${mapped.commandId}")
+                return@on
+            }
             Log.d(TAG, "Received COMMAND_DISPATCH id=${mapped.commandId} type=${mapped.commandType}")
             socketScope.launch {
-                commandHandler?.invoke(mapped)
+                try {
+                    commandHandler?.invoke(mapped)
+                } finally {
+                    inFlightCommands.remove(mapped.commandId)
+                }
             }
         }
 
@@ -133,29 +167,49 @@ object SocketClientManager {
             put("device_id", ack.deviceId)
             put("command_id", ack.commandId)
             put("status", ack.status)
-            if (!ack.screenshotUrl.isNullOrBlank()) {
-                put("screenshot_url", ack.screenshotUrl)
-            }
-            if (!ack.errorMessage.isNullOrBlank()) {
-                put("error_message", ack.errorMessage)
-            }
+            if (!ack.screenshotUrl.isNullOrBlank()) put("screenshot_url", ack.screenshotUrl)
+            if (!ack.errorMessage.isNullOrBlank()) put("error_message", ack.errorMessage)
             if (ack.diagnostics != null) {
-                val diagJson = JSONObject()
-                for ((key, value) in ack.diagnostics) {
-                    if (value is Map<*, *>) {
-                        diagJson.put(key, JSONObject(value))
-                    } else {
-                        diagJson.put(key, value)
-                    }
+                val diagnosticsJson = JSONObject()
+                ack.diagnostics.forEach { (key, value) ->
+                    diagnosticsJson.put(key, if (value is Map<*, *>) JSONObject(value) else value)
                 }
-                put("diagnostics", diagJson)
+                put("diagnostics", diagnosticsJson)
             }
         }
 
-        Log.d(TAG, "Emitting COMMAND_ACK id=${ack.commandId} status=${ack.status}")
-        socket?.emit("COMMAND_ACK", payload)
+        // Persist before emitting. Removal happens only after the backend confirms
+        // that the ACK was committed to the command store.
+        pendingAckStore?.put(ack.commandId, payload)
+        val activeSocket = socket
+        if (activeSocket?.connected() == true) sendAck(activeSocket, payload)
     }
 
+    private fun flushPendingAcks(targetSocket: Socket) {
+        pendingAckStore?.all()?.forEach { sendAck(targetSocket, it) }
+    }
+
+    private fun sendAck(targetSocket: Socket, payload: JSONObject) {
+        val commandId = payload.optString("command_id")
+        if (commandId.isBlank() || !targetSocket.connected()) return
+        targetSocket.emit("COMMAND_ACK", payload, Ack { args ->
+            val response = args.firstOrNull() as? JSONObject
+            if (response?.optBoolean("accepted", false) == true) {
+                pendingAckStore?.remove(commandId)
+                Log.d(TAG, "Backend confirmed COMMAND_ACK id=$commandId")
+            }
+        })
+    }
+    @Synchronized
+    fun reconnectNow() {
+        val active = socket ?: return
+        if (active.connected()) {
+            flushPendingAcks(active)
+        } else {
+            Log.i(TAG, "Requesting immediate socket reconnect")
+            active.connect()
+        }
+    }
     fun nextReconnectDelayMs(): Long {
         val expDelay = BASE_DELAY_MS * (1L shl reconnectAttempt.coerceAtMost(10))
         val cappedDelay = min(expDelay, MAX_DELAY_MS)
@@ -190,8 +244,15 @@ object SocketClientManager {
                     }
                 }
                 socket?.emit("HEARTBEAT", payload)
-                Log.d(TAG, "HEARTBEAT emitted: $payload")
-                delay(HEARTBEAT_INTERVAL_MS)
+                socket?.let { if (it.connected()) flushPendingAcks(it) }
+                Log.v(TAG, "HEARTBEAT emitted")
+                // Per-device jitter prevents synchronized heartbeat bursts after
+                // mass power restoration while keeping online detection prompt.
+                val jitteredDelay = Random.nextLong(
+                    HEARTBEAT_INTERVAL_MS - 5_000L,
+                    HEARTBEAT_INTERVAL_MS + 5_001L
+                )
+                delay(jitteredDelay)
             }
         }
     }

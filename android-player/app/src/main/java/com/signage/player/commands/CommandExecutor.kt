@@ -2,11 +2,9 @@ package com.signage.player.commands
 
 import android.content.Context
 import android.media.AudioManager
-import android.net.wifi.WifiManager
 import com.signage.player.ui.PlayerUiStateStore
 import com.signage.player.boot.StartupCoordinator
 import java.io.File
-import java.io.FileOutputStream
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.asRequestBody
 
@@ -19,23 +17,14 @@ class CommandExecutor(
         return try {
             when (command.commandType) {
                 "REBOOT_APP" -> {
-                    // Restart the app by launching a fresh instance of the main activity
-                    // and killing the current process cleanly.
-                    val intent = appContext.packageManager
-                        .getLaunchIntentForPackage(appContext.packageName)
-                        ?.apply {
-                            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
-                                     android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK)
-                        }
-                    if (intent != null) {
-                        appContext.startActivity(intent)
-                    }
+                    // ACK is persisted by SocketClientManager before this delayed
+                    // process exit. The watchdog then restores service + visible UI.
+                    com.signage.player.boot.PlayerForegroundService.scheduleRestart(appContext, 2_500L)
                     android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                         android.os.Process.killProcess(android.os.Process.myPid())
-                    }, 500)
+                    }, 1_500L)
                     CommandAckPayload(deviceId, command.commandId, "COMPLETED")
                 }
-
                 "SET_VOLUME" -> {
                     val volume = (command.payload["volume"] as? Number)?.toInt()
                         ?.coerceIn(0, 100)
@@ -148,14 +137,13 @@ class CommandExecutor(
                             }
                             
                             if (isWifi) {
-                                val wifiManager = appContext.applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
-                                val info = wifiManager.connectionInfo
+                                val wifiManager = appContext.applicationContext
+                                    .getSystemService(android.net.wifi.WifiManager::class.java)
+                                val info = capabilities.transportInfo as? android.net.wifi.WifiInfo
                                 if (info != null) {
                                     val rssi = info.rssi
-                                    val level = android.net.wifi.WifiManager.calculateSignalLevel(rssi, 100)
                                     diagnostics["wifi_rssi"] = rssi
-                                    diagnostics["wifi_signal_level"] = level
-                                    diagnostics["wifi_ssid"] = info.ssid
+                                    diagnostics["wifi_signal_level"] = wifiManager.calculateSignalLevel(rssi)
                                 }
                             }
                         } else {
@@ -201,51 +189,56 @@ class CommandExecutor(
 
                 "SCREENSHOT" -> {
                     val screenshotFile = StartupCoordinator.takeScreenshot()
-                    val fileToUpload = if (screenshotFile == null) {
-                        writePlaceholderScreenshot(deviceId, command.commandId)
-                        File(File(appContext.filesDir, "screenshots"), "$deviceId-${command.commandId}.png")
-                    } else {
-                        screenshotFile
-                    }
+                        ?: return CommandAckPayload(
+                            deviceId = deviceId,
+                            commandId = command.commandId,
+                            status = "FAILED",
+                            errorMessage = "Screenshot unavailable because the player UI is not visible"
+                        )
 
                     var finalUrl: String? = null
+                    var uploadError = "Screenshot upload failed"
                     try {
                         val backendUrl = StartupCoordinator.getBackendBaseUrl()
                         val api = com.signage.player.network.RetrofitFactory.create(backendUrl)
                         val reporter = StartupCoordinator.getTelemetryReporter()
                         val token = reporter?.getAccessToken()
                         val resolvedDeviceId = reporter?.getDeviceId() ?: deviceId
-
-                        if (!token.isNullOrBlank()) {
-                            val requestFile = fileToUpload.asRequestBody("image/png".toMediaTypeOrNull())
-                            val multipartBody = okhttp3.MultipartBody.Part.createFormData("file", fileToUpload.name, requestFile)
-                            val response = api.uploadScreenshot(
+                        if (token.isNullOrBlank()) {
+                            uploadError = "No authenticated device session for screenshot upload"
+                        } else {
+                            val requestFile = screenshotFile.asRequestBody("image/png".toMediaTypeOrNull())
+                            val multipartBody = okhttp3.MultipartBody.Part.createFormData(
+                                "file", screenshotFile.name, requestFile
+                            )
+                            finalUrl = api.uploadScreenshot(
                                 deviceId = resolvedDeviceId,
                                 authorization = "Bearer $token",
                                 file = multipartBody
-                            )
-                            finalUrl = response.screenshot_url
+                            ).screenshot_url
                         }
-                    } catch (e: Exception) {
-                        onError("screenshot_upload", e.message ?: "Failed to upload screenshot", emptyMap())
+                    } catch (error: Exception) {
+                        uploadError = error.message ?: uploadError
+                        onError("screenshot_upload", uploadError, emptyMap())
                     }
 
-                    if (finalUrl == null) {
-                        finalUrl = fileToUpload.toURI().toString()
+                    if (finalUrl.isNullOrBlank()) {
+                        CommandAckPayload(
+                            deviceId = deviceId,
+                            commandId = command.commandId,
+                            status = "FAILED",
+                            errorMessage = uploadError
+                        )
                     } else {
-                        if (fileToUpload.name.startsWith("screenshot_")) {
-                            fileToUpload.delete()
-                        }
+                        screenshotFile.delete()
+                        CommandAckPayload(
+                            deviceId = deviceId,
+                            commandId = command.commandId,
+                            status = "COMPLETED",
+                            screenshotUrl = finalUrl
+                        )
                     }
-
-                    CommandAckPayload(
-                        deviceId = deviceId,
-                        commandId = command.commandId,
-                        status = "COMPLETED",
-                        screenshotUrl = finalUrl
-                    )
                 }
-
                 else -> {
                     val msg = "Unsupported command type: ${command.commandType}"
                     onError(
@@ -283,41 +276,6 @@ class CommandExecutor(
         audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVolume, 0)
     }
 
-    private fun writePlaceholderScreenshot(deviceId: String, commandId: String): String {
-        val screenshotDir = File(appContext.filesDir, "screenshots").apply { mkdirs() }
-        val screenshotFile = File(screenshotDir, "$deviceId-$commandId.png")
-        try {
-            val bitmap = android.graphics.Bitmap.createBitmap(800, 600, android.graphics.Bitmap.Config.ARGB_8888)
-            val canvas = android.graphics.Canvas(bitmap)
-            val paint = android.graphics.Paint()
-            
-            paint.color = android.graphics.Color.DKGRAY
-            canvas.drawRect(0f, 0f, 800f, 600f, paint)
-            
-            paint.color = android.graphics.Color.WHITE
-            paint.textSize = 36f
-            paint.isAntiAlias = true
-            canvas.drawText("Device Screenshot", 50f, 100f, paint)
-            
-            paint.color = android.graphics.Color.LTGRAY
-            paint.textSize = 24f
-            canvas.drawText("Device ID: $deviceId", 50f, 180f, paint)
-            canvas.drawText("Command ID: $commandId", 50f, 230f, paint)
-            canvas.drawText("Timestamp: ${java.util.Date()}", 50f, 280f, paint)
-            
-            paint.color = android.graphics.Color.GREEN
-            canvas.drawCircle(700f, 100f, 30f, paint)
-            
-            FileOutputStream(screenshotFile).use { out ->
-                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
-            }
-        } catch (e: Exception) {
-            val txtFile = File(screenshotDir, "$deviceId-$commandId.txt")
-            txtFile.writeText("SCREENSHOT_FALLBACK_PLACEHOLDER")
-            return txtFile.toURI().toString()
-        }
-        return screenshotFile.toURI().toString()
-    }
     private fun getRecentLogcat(): String {
         return try {
             val process = Runtime.getRuntime().exec("logcat -d -t 60 *:I")

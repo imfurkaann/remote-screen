@@ -1,6 +1,7 @@
 import { Router } from "express";
+import { Types } from "mongoose";
 
-import { requireRoles, requireUserAuth } from "../middlewares/auth.js";
+import { requireRoles, requireUserAuth, requireUserOrDeviceAuth } from "../middlewares/auth.js";
 import { DeviceModel } from "../models/device.model.js";
 import {
   TELEMETRY_KINDS,
@@ -54,7 +55,7 @@ export function buildTelemetryRouter(deps: TelemetryRouteDeps): Router {
 
   router.post(
     "/devices/:deviceId/telemetry",
-    requireUserAuth(deps.jwtSecret, { issuer: deps.jwtIssuer, audience: deps.jwtAudience }),
+    requireUserOrDeviceAuth(deps.jwtSecret, { issuer: deps.jwtIssuer, audience: deps.jwtAudience }),
     async (req, res) => {
     try {
       const auth = req.auth;
@@ -68,7 +69,7 @@ export function buildTelemetryRouter(deps: TelemetryRouteDeps): Router {
       const correlationId =
         String(req.body?.correlation_id ?? req.correlationId ?? "").trim() || req.correlationId;
 
-      if (!tenantId || !deviceId || !isTelemetryKind(kindRaw)) {
+      if (!tenantId || !Types.ObjectId.isValid(deviceId) || !isTelemetryKind(kindRaw)) {
         res.status(400).json({
           code: "VALIDATION_ERROR",
           message: "deviceId and valid kind are required"
@@ -134,7 +135,7 @@ export function buildTelemetryRouter(deps: TelemetryRouteDeps): Router {
         const kindRaw = String(req.query.kind ?? "").trim();
         const limit = Math.min(Math.max(Number(req.query.limit ?? 100), 1), 500);
 
-        if (!tenantId || !deviceId) {
+        if (!tenantId || !Types.ObjectId.isValid(deviceId)) {
           res.status(400).json({ code: "VALIDATION_ERROR", message: "deviceId is required" });
           return;
         }

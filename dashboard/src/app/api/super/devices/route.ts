@@ -8,7 +8,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
     }
 
-    const backendResponse = await fetch(`${getBackendBaseUrl()}/api/v1/super/devices`, {
+    const backendResponse = await fetch(`${getBackendBaseUrl()}/api/v1/super/devices${request.nextUrl.search}`, {
       headers: { authorization: `Bearer ${token}` },
       cache: "no-store"
     });

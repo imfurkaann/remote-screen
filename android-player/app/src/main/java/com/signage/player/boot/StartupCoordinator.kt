@@ -9,6 +9,7 @@ import com.signage.player.mediaplayer.PlaybackCoordinator
 import com.signage.player.mediaplayer.PlayerController
 import com.signage.player.network.RetrofitFactory
 import com.signage.player.network.SessionManager
+import com.signage.player.network.NetworkMonitor
 import com.signage.player.network.SocketClientManager
 import com.signage.player.network.UnpairRequest
 import com.signage.player.storage.PlayerDatabaseProvider
@@ -38,8 +39,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  * scopes, unreleased ExoPlayer instances, and duplicate socket connections.
  *
  * The [started] flag (AtomicBoolean) makes the first call perform the full
- * setup and all subsequent calls a no-op.  [forceReset] is the only path that
- * sets [started] back to false, allowing a clean re-initialisation.
+ * setup and all subsequent calls a no-op. [forceReset] resets pairing state
+ * without rebuilding the long-lived service graph.
  */
 object StartupCoordinator {
     private const val TAG = "StartupCoordinator"
@@ -48,7 +49,7 @@ object StartupCoordinator {
 
     /**
      * Guards against duplicate initialisation.  Set to true after the first
-     * successful [enqueueStartup] call; reset to false only by [forceReset].
+     * successful [enqueueStartup] call and never reset during the process lifetime.
      */
     private val started = AtomicBoolean(false)
 
@@ -57,6 +58,7 @@ object StartupCoordinator {
     @Volatile private var telemetryReporterRef: DeviceTelemetryReporter? = null
 
     fun getPlayerController(): PlayerController? = playerControllerRef
+    fun isStarted(): Boolean = started.get()
     fun getBackendBaseUrl(): String = backendBaseUrl
     fun getTelemetryReporter(): DeviceTelemetryReporter? = telemetryReporterRef
 
@@ -64,14 +66,21 @@ object StartupCoordinator {
     // Screenshot provider
     // -------------------------------------------------------------------------
 
-    private var screenshotProvider: (suspend () -> File?)? = null
+    @Volatile private var screenshotProvider: (suspend () -> File?)? = null
+    private var screenshotProviderOwner: Any? = null
 
-    fun registerScreenshotProvider(provider: suspend () -> File?) {
+    @Synchronized
+    fun registerScreenshotProvider(owner: Any, provider: suspend () -> File?) {
+        screenshotProviderOwner = owner
         screenshotProvider = provider
     }
 
-    fun unregisterScreenshotProvider() {
-        screenshotProvider = null
+    @Synchronized
+    fun unregisterScreenshotProvider(owner: Any) {
+        if (screenshotProviderOwner === owner) {
+            screenshotProviderOwner = null
+            screenshotProvider = null
+        }
     }
 
     suspend fun takeScreenshot(): File? = screenshotProvider?.invoke()
@@ -85,8 +94,6 @@ object StartupCoordinator {
             try {
                 Log.d(TAG, "Forcing device unpair and clearing all local caches…")
 
-                // Allow a new full initialisation after reset completes.
-                started.set(false)
 
                 // 0. Stop SessionManager first to prevent background thread race conditions.
                 SessionManager.stop()
@@ -96,11 +103,16 @@ object StartupCoordinator {
                 val pairingApi = RetrofitFactory.create(resolvedUrl)
                 val hardwareId = HardwareIdStore(context).getOrCreateHardwareId()
                 try {
-                    pairingApi.unpairDevice(
-                        bootstrapKey = AppDefaults.BOOTSTRAP_KEY,
-                        request = UnpairRequest(hardware_id = hardwareId)
-                    )
-                    Log.d(TAG, "Backend unpair completed successfully")
+                    val accessToken = PairingStateStore(context).loadState().accessToken
+                    if (!accessToken.isNullOrBlank()) {
+                        pairingApi.unpairDevice(
+                            authorization = "Bearer " + accessToken,
+                            request = UnpairRequest(hardware_id = hardwareId)
+                        )
+                        Log.d(TAG, "Backend unpair completed successfully")
+                    } else {
+                        Log.w(TAG, "No active device session; backend unpair skipped")
+                    }
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to call backend unpair API", e)
                 }
@@ -152,14 +164,15 @@ object StartupCoordinator {
     fun enqueueStartup(
         context: Context,
         runtimeDeviceId: String? = null,
-        socketBaseUrl: String? = null
+        socketBaseUrl: String? = null,
+        ensureForegroundService: Boolean = true
     ) {
         // Idempotency guard — only the very first caller proceeds.
         if (!started.compareAndSet(false, true)) {
             Log.d(TAG, "enqueueStartup called but already initialised — skipping")
             // Always guarantee the foreground service is alive on every call
             // even if the rest of the setup is already done.
-            PlayerForegroundService.start(context)
+            if (ensureForegroundService) PlayerForegroundService.start(context)
             return
         }
 
@@ -168,7 +181,7 @@ object StartupCoordinator {
         // Ensure the foreground service is running so the OS does not kill the
         // process during startup (e.g. while SessionManager is doing its first
         // network handshake).
-        PlayerForegroundService.start(context)
+        if (ensureForegroundService) PlayerForegroundService.start(context)
 
         val hardwareId = HardwareIdStore(context).getOrCreateHardwareId()
         val socketDeviceId = runtimeDeviceId ?: hardwareId
@@ -178,6 +191,7 @@ object StartupCoordinator {
         // Start the session manager early — before any UI is built — so the
         // optimistic state is ready the moment PairingScreen first composes.
         val pairingApi = RetrofitFactory.create(resolvedSocketBaseUrl)
+        NetworkMonitor.start(context)
         SessionManager.start(
             context = context,
             hardwareId = hardwareId,
@@ -185,11 +199,10 @@ object StartupCoordinator {
         )
 
         val telemetryReporter = DeviceTelemetryReporter(
+            context = context,
             baseUrl = resolvedSocketBaseUrl,
-            bootstrapKey = AppDefaults.BOOTSTRAP_KEY,
             tenantId = null,
-            hardwareId = hardwareId,
-            deviceIdHint = runtimeDeviceId
+            hardwareId = hardwareId
         )
         telemetryReporterRef = telemetryReporter
 
@@ -203,6 +216,7 @@ object StartupCoordinator {
         ) { source, message, details ->
             telemetryReporter.reportError(source, message, details)
         }
+
 
         val playerController = PlayerController(context)
         playerControllerRef = playerController
@@ -228,13 +242,14 @@ object StartupCoordinator {
         )
 
         appScope.launch {
+            syncManager.recoverInterruptedActivation()
             playbackCoordinator.restoreAndPlayFromCache()
         }
 
         appScope.launch {
             com.signage.player.config.OperatingHoursManager.checkAndApply(context)
             while (true) {
-                kotlinx.coroutines.delay(10_000)
+                kotlinx.coroutines.delay(60_000)
                 com.signage.player.config.OperatingHoursManager.checkAndApply(context)
             }
         }
@@ -258,7 +273,15 @@ object StartupCoordinator {
 
         SocketClientManager.registerCommandHandler { payload: CommandDispatchPayload ->
             val activeId = SocketClientManager.currentDeviceId.ifBlank { socketDeviceId }
-            val ackPayload = commandExecutor.execute(activeId, payload)
+            val timeoutMs = payload.timeoutMs.coerceIn(1_000L, 120_000L)
+            val ackPayload = kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+                commandExecutor.execute(activeId, payload)
+            } ?: com.signage.player.commands.CommandAckPayload(
+                deviceId = activeId,
+                commandId = payload.commandId,
+                status = "FAILED",
+                errorMessage = "Command timed out after ${timeoutMs}ms"
+            )
             SocketClientManager.emitCommandAck(ackPayload)
         }
 
@@ -268,20 +291,32 @@ object StartupCoordinator {
         // instantly after pairing, preventing first-publish content synchronization failures.
         appScope.launch {
             var currentSocketId = socketDeviceId
+            var currentSocketToken = PairingStateStore(context).loadState().accessToken.orEmpty()
             com.signage.player.network.SessionManager.state.collect { state ->
                 val targetSocketId = when (state) {
                     is com.signage.player.network.DevicePairingState.Paired -> state.deviceId
                     else -> hardwareId
                 }
-                if (targetSocketId != currentSocketId) {
-                    Log.i(TAG, "Pairing state changed — Re-initialising socket with ID: $targetSocketId (was: $currentSocketId)")
+                val targetToken = when (state) {
+                    is com.signage.player.network.DevicePairingState.Paired -> state.token
+                    else -> ""
+                }
+                if (targetSocketId != currentSocketId || targetToken != currentSocketToken) {
+                    Log.i(TAG, "Pairing state changed — re-initialising authenticated socket")
                     currentSocketId = targetSocketId
-                    SocketClientManager.initialize(context, targetSocketId, resolvedSocketBaseUrl)
+                    currentSocketToken = targetToken
+                    SocketClientManager.initialize(
+                        context,
+                        targetSocketId,
+                        targetToken,
+                        resolvedSocketBaseUrl
+                    )
                 }
             }
         }
 
-        SocketClientManager.initialize(context, socketDeviceId, resolvedSocketBaseUrl)
+        val initialToken = PairingStateStore(context).loadState().accessToken.orEmpty()
+        SocketClientManager.initialize(context, socketDeviceId, initialToken, resolvedSocketBaseUrl)
 
         Log.d(TAG, "enqueueStartup — setup complete")
     }

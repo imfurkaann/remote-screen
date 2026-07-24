@@ -37,6 +37,7 @@ const CATEGORIES = [
   "Discover",
   "Live Feeds",
   "Internal Communication",
+  "Hospitality",
   "Content & Files"
 ];
 
@@ -45,7 +46,7 @@ const APP_STORE_CATALOG: AppStoreItem[] = [
   {
     id: "clock",
     name: "Clock",
-    description: "Display beautiful analog and digital clocks with timezone selection, dates, and light/dark theme options.",
+    description: "Create a modern digital, analog or split clock with timezone, color and visibility controls.",
     icon: "🕒",
     iconBg: "linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)",
     category: "Discover"
@@ -53,7 +54,7 @@ const APP_STORE_CATALOG: AppStoreItem[] = [
   {
     id: "weather",
     name: "Weather App",
-    description: "Real-time local weather forecasts, 3-day conditions, and environmental indexes formatted beautifully for digital signs.",
+    description: "Modern live weather, resilient offline caching, responsive details, and clear 3 or 5-day forecasts for digital screens.",
     icon: "🌤️",
     iconBg: "linear-gradient(135deg, #f59e0b 0%, #d97706 100%)",
     category: "Discover"
@@ -61,7 +62,7 @@ const APP_STORE_CATALOG: AppStoreItem[] = [
   {
     id: "rss",
     name: "RSS News Feed",
-    description: "Display scrolling tickers or news card slides from any standard RSS news source dynamically.",
+    description: "Modern RSS and Atom tickers, cards, and editorial layouts with offline resilience and fleet-scale shared caching.",
     icon: "📰",
     iconBg: "linear-gradient(135deg, #ef4444 0%, #b91c1c 100%)",
     category: "Live Feeds"
@@ -69,7 +70,7 @@ const APP_STORE_CATALOG: AppStoreItem[] = [
   {
     id: "notice",
     name: "Notice Board",
-    description: "Post visual bulletin board slides, welcome signs, or warnings with custom colors, fonts, and alert icons.",
+    description: "Modern welcome screens, editorial announcements, and high-visibility alerts with responsive layouts and safe content.",
     icon: "📢",
     iconBg: "linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%)",
     category: "Internal Communication"
@@ -77,10 +78,34 @@ const APP_STORE_CATALOG: AppStoreItem[] = [
   {
     id: "qrcode",
     name: "QR Code Generator",
-    description: "Generate a custom QR Code with instructions to direct viewers to website links, menu downloads, or Wi-Fi passwords.",
+    description: "Create offline-ready QR codes for links, text, and Wi-Fi with responsive layouts and automatic contrast protection.",
     icon: "📱",
     iconBg: "linear-gradient(135deg, #10b981 0%, #047857 100%)",
     category: "Content & Files"
+  },
+  {
+    id: "wayfinding",
+    name: "Hotel Wayfinding",
+    description: "Guide guests through lobbies, floors and amenities with screen-specific locations, clear directions and offline-ready layouts.",
+    icon: "⌖",
+    iconBg: "linear-gradient(135deg, #b7791f 0%, #78350f 100%)",
+    category: "Hospitality"
+  },
+  {
+    id: "events",
+    name: "Events & Meetings",
+    description: "Publish today’s event schedule, meeting rooms, live status and directions on lobby and conference screens.",
+    icon: "▦",
+    iconBg: "linear-gradient(135deg, #2563eb 0%, #172554 100%)",
+    category: "Hospitality"
+  },
+  {
+    id: "hotel-guide",
+    name: "Hotel Guide",
+    description: "Present dining, spa, Wi-Fi, concierge and other guest services with hours and contact details.",
+    icon: "i",
+    iconBg: "linear-gradient(135deg, #0f766e 0%, #134e4a 100%)",
+    category: "Hospitality"
   }
 ];
 
@@ -294,6 +319,15 @@ export default function AppsPage() {
     }
     if (path.includes("qrcode")) {
       return { name: "QR Code", icon: "📱", color: "#10b981" };
+    }
+    if (path.includes("wayfinding")) {
+      return { name: "Hotel Wayfinding", icon: "⌖", color: "#b7791f" };
+    }
+    if (path.includes("events")) {
+      return { name: "Events & Meetings", icon: "▦", color: "#2563eb" };
+    }
+    if (path.includes("hotel-guide")) {
+      return { name: "Hotel Guide", icon: "i", color: "#0f766e" };
     }
     return { name: "Web App", icon: "🌐", color: "#6b7280" };
   };

@@ -20,6 +20,17 @@ val localProps = Properties().apply {
 fun localProp(key: String, default: String): String =
     (localProps.getProperty(key) ?: default).trim()
 
+val releaseBackendUrl = localProp("BACKEND_BASE_URL", "")
+val releaseBootstrapKey = localProp("BOOTSTRAP_KEY", "")
+val releaseBuildRequested = gradle.startParameter.taskNames.any { it.contains("release", ignoreCase = true) }
+if (releaseBuildRequested) {
+    require(releaseBackendUrl.startsWith("https://")) {
+        "Release builds require an HTTPS BACKEND_BASE_URL in android-player/local.properties"
+    }
+    require(releaseBootstrapKey.length >= 32) {
+        "Release builds require a BOOTSTRAP_KEY of at least 32 characters in android-player/local.properties"
+    }
+}
 android {
     namespace = "com.signage.player"
     compileSdk = 35
@@ -33,20 +44,27 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // Inject config from local.properties (falls back to emulator defaults)
-        buildConfigField(
-            "String", "BACKEND_BASE_URL",
-            "\"${localProp("BACKEND_BASE_URL", "http://10.0.2.2:4100")}\""
-        )
-        buildConfigField(
-            "String", "BOOTSTRAP_KEY",
-            "\"${localProp("BOOTSTRAP_KEY", "local-bootstrap-key")}\""
-        )
+
     }
 
     buildTypes {
+        debug {
+            manifestPlaceholders["usesCleartextTraffic"] = "true"
+            buildConfigField(
+                "String", "BACKEND_BASE_URL",
+                "\"${localProp("BACKEND_BASE_URL", "http://10.0.2.2:4100")}\""
+            )
+            buildConfigField(
+                "String", "BOOTSTRAP_KEY",
+                "\"${localProp("BOOTSTRAP_KEY", "local-bootstrap-key")}\""
+            )
+        }
         release {
-            isMinifyEnabled = false
+            manifestPlaceholders["usesCleartextTraffic"] = "false"
+            buildConfigField("String", "BACKEND_BASE_URL", "\"$releaseBackendUrl\"")
+            buildConfigField("String", "BOOTSTRAP_KEY", "\"$releaseBootstrapKey\"")
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

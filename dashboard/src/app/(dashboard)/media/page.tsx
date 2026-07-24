@@ -424,6 +424,9 @@ export default function MediaPage() {
 
   // Search state
   const [searchQuery, setSearchQuery] = useState("");
+  const [mediaPage, setMediaPage] = useState(1);
+  const [mediaTotal, setMediaTotal] = useState(0);
+  const [mediaTotalPages, setMediaTotalPages] = useState(1);
 
   // Upload state
   const [uploading, setUploading] = useState(false);
@@ -609,15 +612,25 @@ export default function MediaPage() {
     setLoading(true);
     setErrorMsg(null);
     try {
-      const payload = await fetchJson<{ media?: MediaItem[] }>("/api/content/media", { cache: "no-store" });
+      const query = new URLSearchParams({ page: String(mediaPage), limit: "50" });
+      if (searchQuery.trim()) {
+        query.set("search", searchQuery.trim());
+      } else {
+        query.set("folder", currentFolder ?? "root");
+      }
+      const payload = await fetchJson<{
+        media?: MediaItem[];
+        total?: number;
+        totalPages?: number;
+      }>(`/api/content/media?${query.toString()}`, { cache: "no-store" });
       const list = payload.media ?? [];
       setMediaList(list);
-      
+      setMediaTotal(payload.total ?? list.length);
+      setMediaTotalPages(payload.totalPages ?? 1);
+
       const map: Record<string, string> = {};
       list.forEach((item) => {
-        if (item.folder) {
-          map[item.id] = item.folder;
-        }
+        if (item.folder) map[item.id] = item.folder;
       });
       setMediaFolderMap(map);
     } catch (err) {
@@ -637,57 +650,83 @@ export default function MediaPage() {
   };
 
   useEffect(() => {
-    void loadMedia();
     void loadPlaylists();
   }, []);
 
+  useEffect(() => {
+    setMediaPage(1);
+  }, [currentFolder, searchQuery]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadMedia();
+    }, searchQuery.trim() ? 300 : 0);
+    return () => window.clearTimeout(timer);
+  }, [mediaPage, currentFolder, searchQuery]);
+
   const handleUpload = async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const selectedFiles = Array.from(e.target.files ?? []);
+    if (selectedFiles.length === 0) return;
+    if (selectedFiles.length > 100) {
+      setUploadStatus({ text: "Bir kerede en fazla 100 medya yükleyebilirsiniz.", ok: false });
+      e.target.value = "";
+      return;
+    }
 
     setUploading(true);
     setUploadStatus(null);
 
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
+    const uploaded: MediaItem[] = [];
+    const failures: string[] = [];
+    let deduplicatedCount = 0;
+    let nextIndex = 0;
 
-      const payload = await fetchJson<{ media?: MediaItem }>("/api/content/media/upload", {
-        method: "POST",
-        body: formData,
-      });
+    const uploadNext = async () => {
+      while (nextIndex < selectedFiles.length) {
+        const file = selectedFiles[nextIndex++];
+        if (!file) continue;
 
-      if (payload.media) {
-        setUploadStatus({
-          text: `✓ File "${payload.media.filename}" uploaded successfully.`,
-          ok: true,
-        });
-        setMediaList((prev) => [payload.media!, ...prev]);
-        
-        // Auto-assign to current folder if one is active
-        if (currentFolder) {
-          try {
+        try {
+          const formData = new FormData();
+          formData.append("file", file);
+          const payload = await fetchJson<{ media?: MediaItem; deduplicated?: boolean }>("/api/content/media/upload", {
+            method: "POST",
+            body: formData,
+          });
+          if (!payload.media) throw new Error("Upload response was empty.");
+
+          uploaded.push(payload.media);
+          if (payload.deduplicated) deduplicatedCount += 1;
+
+          if (currentFolder && !payload.deduplicated) {
             await fetchJson(`/api/content/media/${payload.media.id}/folder`, {
               method: "PUT",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({ folder: currentFolder })
+              body: JSON.stringify({ folder: currentFolder }),
             });
-            setMediaFolderMap((prev) => ({ ...prev, [payload.media!.id]: currentFolder }));
-          } catch (err) {
-            console.error("Failed to auto-assign media to current folder on backend", err);
           }
+        } catch (error) {
+          failures.push(`${file.name}: ${(error as Error).message}`);
         }
-
-        triggerToast(`Uploaded "${payload.media.filename}" successfully`, "success");
-      } else {
-        throw new Error("Upload response was empty.");
       }
-    } catch (err) {
+    };
+
+    try {
+      // A small worker pool prevents browser/network saturation during batch uploads.
+      await Promise.all(Array.from({ length: Math.min(3, selectedFiles.length) }, () => uploadNext()));
+      const successfulCount = uploaded.length;
+      const newCount = successfulCount - deduplicatedCount;
       setUploadStatus({
-        text: `Upload failed: ${(err as Error).message}`,
-        ok: false,
+        text: failures.length === 0
+          ? `${newCount} medya yüklendi${deduplicatedCount ? `, ${deduplicatedCount} mevcut medya yeniden kullanıldı` : ""}.`
+          : `${successfulCount} medya işlendi, ${failures.length} medya yüklenemedi.`,
+        ok: failures.length === 0,
       });
-      triggerToast(`Upload failed: ${(err as Error).message}`, "error");
+      triggerToast(
+        failures.length === 0 ? `${successfulCount} medya başarıyla işlendi` : `${failures.length} medya yüklenemedi`,
+        failures.length === 0 ? "success" : "error"
+      );
+      await loadMedia();
     } finally {
       setUploading(false);
       e.target.value = "";
@@ -845,16 +884,7 @@ export default function MediaPage() {
     }
   };
 
-  const filteredMedia = useMemo(() => {
-    if (searchQuery.trim()) {
-      const lower = searchQuery.toLowerCase();
-      return mediaList.filter((m) => m.filename.toLowerCase().includes(lower));
-    }
-    return mediaList.filter((m) => {
-      const folder = mediaFolderMap[m.id] || null;
-      return folder === currentFolder;
-    });
-  }, [mediaList, searchQuery, currentFolder, mediaFolderMap]);
+  const filteredMedia = useMemo(() => mediaList, [mediaList]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: "100%", backgroundColor: "#f4f5f7" }}>
@@ -986,6 +1016,8 @@ export default function MediaPage() {
             {uploading ? "Uploading..." : "Upload"}
             <input
               type="file"
+              accept="image/*,video/*"
+              multiple
               onChange={handleUpload}
               disabled={uploading}
               style={{ display: "none" }}
@@ -1748,6 +1780,32 @@ export default function MediaPage() {
               </table>
             </div>
           )
+        )}
+        {mediaTotal > 0 && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 16, color: "#64748b", fontSize: 13 }}>
+            <span>{mediaTotal.toLocaleString()} media item(s)</span>
+            {mediaTotalPages > 1 && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <button
+                  type="button"
+                  disabled={mediaPage <= 1 || loading}
+                  onClick={() => setMediaPage((page) => Math.max(1, page - 1))}
+                  style={{ padding: "7px 12px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", cursor: mediaPage <= 1 ? "not-allowed" : "pointer" }}
+                >
+                  Previous
+                </button>
+                <span>Page {mediaPage} / {mediaTotalPages}</span>
+                <button
+                  type="button"
+                  disabled={mediaPage >= mediaTotalPages || loading}
+                  onClick={() => setMediaPage((page) => Math.min(mediaTotalPages, page + 1))}
+                  style={{ padding: "7px 12px", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", cursor: mediaPage >= mediaTotalPages ? "not-allowed" : "pointer" }}
+                >
+                  Next
+                </button>
+              </div>
+            )}
+          </div>
         )}
       </div>
 

@@ -8,7 +8,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
     }
 
-    const backendResponse = await fetch(`${getBackendBaseUrl()}/api/v1/auth/users`, {
+    const backendResponse = await fetch(`${getBackendBaseUrl()}/api/v1/auth/users${request.nextUrl.search}`, {
       headers: { authorization: `Bearer ${token}` },
       cache: "no-store"
     });
@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json().catch(() => ({}));
-    const backendResponse = await fetch(`${getBackendBaseUrl()}/api/v1/auth/users`, {
+    const backendResponse = await fetch(`${getBackendBaseUrl()}/api/v1/auth/users${request.nextUrl.search}`, {
       method: "POST",
       headers: {
         authorization: `Bearer ${token}`,

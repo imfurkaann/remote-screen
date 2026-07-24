@@ -4,9 +4,10 @@ import assert from "node:assert/strict";
 import { rm } from "node:fs/promises";
 import path from "node:path";
 import jwt from "jsonwebtoken";
-import mongoose from "mongoose";
+import mongoose, { Types } from "mongoose";
 
 import { buildApp } from "../app.js";
+import { CommandModel } from "../models/command.model.js";
 import { DeviceModel } from "../models/device.model.js";
 import { MediaModel } from "../models/media.model.js";
 import { PlaylistModel } from "../models/playlist.model.js";
@@ -28,13 +29,21 @@ const env = {
   jwtIssuer: "remote-screen",
   jwtAudience: "remote-screen-clients",
   deviceBootstrapKey: "bootstrap-secret",
-  corsOrigin: "*"
+  corsOrigin: "*",
+  mediaMaxFileBytes: 64
 };
+
+function pngPayload(label: string): ArrayBuffer {
+  const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  const text = Array.from(new TextEncoder().encode(label));
+  return Uint8Array.from([...signature, ...text]).buffer;
+}
 
 let server: Server | null = null;
 
 before(async () => {
   await mongoose.connect(env.mongoUri);
+  await Promise.all([MediaModel.syncIndexes(), PlaylistModel.syncIndexes()]);
 });
 
 after(async () => {
@@ -63,6 +72,7 @@ afterEach(async () => {
   }
 
   await Promise.all([
+    CommandModel.deleteMany({}),
     DeviceModel.deleteMany({}),
     MediaModel.deleteMany({}),
     PlaylistModel.deleteMany({})
@@ -115,8 +125,8 @@ describe("content lifecycle", () => {
     const uploadForm = new FormData();
     uploadForm.set(
       "file",
-      new Blob([Buffer.from("hello content")], { type: "text/plain" }),
-      "poster.txt"
+      new Blob([pngPayload("hello content")], { type: "text/html" }),
+      "poster.png"
     );
 
     const uploadResponse = await fetch(`${baseUrl}/api/v1/content/media/upload`, {
@@ -138,10 +148,10 @@ describe("content lifecycle", () => {
       };
     };
 
-    assert.equal(uploadPayload.media.filename, "poster.txt");
+    assert.equal(uploadPayload.media.filename, "poster.png");
     assert.equal(uploadPayload.media.checksum_sha256.length, 64);
 
-    const mediaDoc = await MediaModel.findOne({ tenantId: "tenant-test", filename: "poster.txt" }).lean();
+    const mediaDoc = await MediaModel.findOne({ tenantId: "tenant-test", filename: "poster.png" }).lean();
     assert.ok(mediaDoc);
     assert.equal(mediaDoc?.checksumSha256, uploadPayload.media.checksum_sha256);
 
@@ -153,6 +163,7 @@ describe("content lifecycle", () => {
       },
       body: JSON.stringify({
         name: "Morning Loop",
+        request_id: "morning_request_123",
         items: [
           {
             media_id: uploadPayload.media.id,
@@ -181,18 +192,162 @@ describe("content lifecycle", () => {
     assert.ok(playlistDoc);
     assert.equal(playlistDoc?.items.length, 1);
     assert.equal(playlistDoc?.items[0]?.checksumSha256, uploadPayload.media.checksum_sha256);
+
+    const repeatedCreate = await fetch(baseUrl + "/api/v1/content/playlists", {
+      method: "POST",
+      headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Morning Loop",
+        request_id: "morning_request_123",
+        items: [{ media_id: uploadPayload.media.id, duration_ms: 12000, position: 0 }]
+      })
+    });
+    assert.equal(repeatedCreate.status, 200);
+    assert.equal(((await repeatedCreate.json()) as any).playlist.id, playlistPayload.playlist.id);
+
+    const staleUpdate = await fetch(baseUrl + "/api/v1/content/playlists/" + playlistPayload.playlist.id, {
+      method: "PUT",
+      headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Morning Loop Updated",
+        expected_version: 99,
+        items: [{ media_id: uploadPayload.media.id, duration_ms: 12000, position: 0 }]
+      })
+    });
+    assert.equal(staleUpdate.status, 409);
+    assert.equal(((await staleUpdate.json()) as any).code, "PLAYLIST_VERSION_CONFLICT");
   });
 
-  it("publishes playlists and emits SYNC_CONTENT to both device ids and hardware ids", async () => {
+  it("deduplicates identical account media and rejects unsupported uploads", async () => {
     const baseUrl = await startServer();
     const token = makeUserToken("tenant_owner");
 
-    const emitted: Array<{ namespace: string; room: string; event: string; payload: unknown }> = [];
+    const upload = async (content: string, type: string, filename: string) => {
+      const form = new FormData();
+      form.set("file", new Blob([type === "image/png" ? pngPayload(content) : new TextEncoder().encode(content).buffer], { type }), filename);
+      return fetch(`${baseUrl}/api/v1/content/media/upload`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+        body: form
+      });
+    };
+
+    const [first, second] = await Promise.all([
+      upload("same image", "image/png", "safe.png"),
+      upload("same image", "image/png", "duplicate.png")
+    ]);
+    assert.deepEqual([first.status, second.status].sort(), [200, 201]);
+    const payloads = await Promise.all([first.json(), second.json()]) as Array<{ deduplicated: boolean }>;
+    assert.equal(payloads.filter((payload) => payload.deduplicated).length, 1);
+    assert.equal(await MediaModel.countDocuments({ tenantId: "tenant-test" }), 1);
+
+    const oversizedBytes = Uint8Array.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      ...new Array(80).fill(1)
+    ]).buffer;
+    const oversizedForm = new FormData();
+    oversizedForm.set("file", new Blob([oversizedBytes], { type: "image/png" }), "large.png");
+    const oversized = await fetch(baseUrl + "/api/v1/content/media/upload", {
+      method: "POST",
+      headers: { authorization: "Bearer " + token },
+      body: oversizedForm
+    });
+    assert.equal(oversized.status, 413);
+
+    const unsupported = await upload("script", "text/html", "payload.html");
+    assert.equal(unsupported.status, 415);
+    assert.equal(await MediaModel.countDocuments({ tenantId: "tenant-test" }), 1);
+  });
+  it("allows tenant admins to manage tenant assets while keeping operators isolated", async () => {
+    const baseUrl = await startServer();
+    await MediaModel.create([
+      {
+        tenantId: "tenant-test",
+        ownerUserId: "user-demo",
+        filename: "own.png",
+        mimeType: "image/png",
+        sizeBytes: 10,
+        checksumSha256: "a".repeat(64),
+        storagePath: "uploads/own.png",
+        publicUrl: "/uploads/own.png",
+        status: "ready",
+        folder: null
+      },
+      {
+        tenantId: "tenant-test",
+        ownerUserId: "another-user",
+        filename: "shared.png",
+        mimeType: "image/png",
+        sizeBytes: 10,
+        checksumSha256: "b".repeat(64),
+        storagePath: "uploads/shared.png",
+        publicUrl: "/uploads/shared.png",
+        status: "ready",
+        folder: null
+      }
+    ]);
+
+    const adminResponse = await fetch(`${baseUrl}/api/v1/content/media?folder=root`, {
+      headers: { authorization: `Bearer ${makeUserToken("tenant_admin")}` }
+    });
+    assert.equal(adminResponse.status, 200);
+    const adminPayload = (await adminResponse.json()) as { total: number };
+    assert.equal(adminPayload.total, 2);
+
+    const operatorResponse = await fetch(`${baseUrl}/api/v1/content/media?folder=root`, {
+      headers: { authorization: `Bearer ${makeUserToken("operator")}` }
+    });
+    assert.equal(operatorResponse.status, 200);
+    const operatorPayload = (await operatorResponse.json()) as { total: number };
+    assert.equal(operatorPayload.total, 1);
+  });
+  it("detaches removed screens without deleting hardware identity or replaying old commands", async () => {
+    const baseUrl = await startServer();
+    const device = await DeviceModel.create({
+      tenantId: "tenant-test",
+      hardwareId: "hardware-detach-test",
+      status: "online",
+      pairedOwnerUserId: "user-demo",
+      currentPlaylistId: null
+    });
+    const command = await CommandModel.create({
+      tenantId: "tenant-test",
+      deviceId: String(device._id),
+      commandId: "detach-command",
+      commandType: "FORCE_REFRESH",
+      payload: {},
+      status: "queued",
+      attempts: 0,
+      maxAttempts: 2,
+      timeoutMs: 15_000
+    });
+
+    const response = await fetch(`${baseUrl}/api/v1/content/devices/${device._id}`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${makeUserToken("tenant_owner")}` }
+    });
+    assert.equal(response.status, 204);
+
+    const [detachedDevice, failedCommand] = await Promise.all([
+      DeviceModel.findById(device._id).lean(),
+      CommandModel.findById(command._id).lean()
+    ]);
+    assert.ok(detachedDevice);
+    assert.equal(detachedDevice.tenantId, null);
+    assert.equal(detachedDevice.pairedOwnerUserId, null);
+    assert.equal(detachedDevice.status, "offline");
+    assert.equal(failedCommand?.status, "failed");
+  });
+  it("publishes playlists with one canonical fleet fan-out", async () => {
+    const baseUrl = await startServer();
+    const token = makeUserToken("tenant_owner");
+
+    const emitted: Array<{ namespace: string; room: string | string[]; event: string; payload: unknown }> = [];
     setSocketServer(
       {
         of(namespace: string) {
           return {
-            to(room: string) {
+            to(room: string | string[]) {
               return {
                 emit(event: string, payload: unknown) {
                   emitted.push({ namespace, room, event, payload });
@@ -207,8 +362,8 @@ describe("content lifecycle", () => {
     const uploadForm = new FormData();
     uploadForm.set(
       "file",
-      new Blob([Buffer.from("sync payload")], { type: "text/plain" }),
-      "sync.txt"
+      new Blob([pngPayload("sync payload")], { type: "image/png" }),
+      "sync.png"
     );
 
     const uploadResponse = await fetch(`${baseUrl}/api/v1/content/media/upload`, {
@@ -249,8 +404,18 @@ describe("content lifecycle", () => {
       lastSeenAt: null
     });
 
-    const publishResponse = await fetch(
-      `${baseUrl}/api/v1/content/playlists/${playlistPayload.playlist.id}/publish`,
+    const missingTargetResponse = await fetch(
+      baseUrl + "/api/v1/content/playlists/" + playlistPayload.playlist.id + "/publish",
+      {
+        method: "POST",
+        headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+        body: JSON.stringify({ device_ids: [String(device._id), new Types.ObjectId().toString()] })
+      }
+    );
+    assert.equal(missingTargetResponse.status, 404);
+    assert.equal((await DeviceModel.findById(device._id).lean())?.currentPlaylistId, null);
+
+    const publishResponse = await fetch(      `${baseUrl}/api/v1/content/playlists/${playlistPayload.playlist.id}/publish`,
       {
         method: "POST",
         headers: {
@@ -276,15 +441,9 @@ describe("content lifecycle", () => {
     assert.equal(updatedDevice?.currentPlaylistId, playlistPayload.playlist.id);
 
     const syncEvents = emitted.filter((entry) => entry.event === "SYNC_CONTENT");
-    assert.equal(syncEvents.length, 2);
-    assert.deepEqual(
-      syncEvents.map((entry) => entry.namespace),
-      ["/device", "/device"]
-    );
-    assert.deepEqual(
-      syncEvents.map((entry) => entry.room).sort(),
-      [`device:${device.hardwareId}`, `device:${device._id.toString()}`].sort()
-    );
+    assert.equal(syncEvents.length, 1);
+    assert.equal(syncEvents[0]?.namespace, "/device");
+    assert.deepEqual(syncEvents[0]?.room, [`device:${device._id.toString()}`]);
 
     const firstPayload = syncEvents[0]?.payload as { playlist_id?: string; items?: Array<{ checksum_sha256: string }> };
     assert.equal(firstPayload?.playlist_id, playlistPayload.playlist.id);
@@ -299,8 +458,8 @@ describe("content lifecycle", () => {
     const uploadForm = new FormData();
     uploadForm.set(
       "file",
-      new Blob([Buffer.from("delete payload")], { type: "text/plain" }),
-      "delete.txt"
+      new Blob([pngPayload("delete payload")], { type: "image/png" }),
+      "delete.png"
     );
 
     const uploadResponse = await fetch(`${baseUrl}/api/v1/content/media/upload`, {
@@ -340,12 +499,12 @@ describe("content lifecycle", () => {
       lastSeenAt: null
     });
 
-    const emitted: Array<{ namespace: string; room: string; event: string; payload: unknown }> = [];
+    const emitted: Array<{ namespace: string; room: string | string[]; event: string; payload: unknown }> = [];
     setSocketServer(
       {
         of(namespace: string) {
           return {
-            to(room: string) {
+            to(room: string | string[]) {
               return {
                 emit(event: string, payload: unknown) {
                   emitted.push({ namespace, room, event, payload });

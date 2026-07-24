@@ -1,17 +1,33 @@
 import { Router } from "express";
-import { randomInt } from "node:crypto";
+import { createHash, randomInt, timingSafeEqual } from "node:crypto";
 import rateLimit from "express-rate-limit";
 
-import { requireBootstrapKey, requireRoles, requireUserAuth } from "../middlewares/auth.js";
+import { requireBootstrapKey, requireDeviceAuth, requireRoles, requireUserAuth } from "../middlewares/auth.js";
 import { DeviceModel } from "../models/device.model.js";
 import { PairingAuditModel } from "../models/pairing-audit.model.js";
 import { PairingCodeModel } from "../models/pairing-code.model.js";
 import { deviceRepository } from "../repositories/device.repository.js";
 import jwt from "jsonwebtoken";
 import { isPostgresConnected, getPostgresPool } from "../lib/postgres.js";
+import { disconnectDeviceSockets } from "../sockets/registry.js";
 
 function generatePairingCode(): string {
   return randomInt(100000, 1000000).toString();
+}
+
+function hashDeviceProof(proof: string): string {
+  return createHash("sha256").update(proof, "utf8").digest("hex");
+}
+
+function isValidDeviceProof(proof: string): boolean {
+  return /^[A-Za-z0-9_-]{32,128}$/.test(proof);
+}
+
+function deviceProofMatches(storedHash: string | null | undefined, proof: string): boolean {
+  if (!storedHash || !/^[a-f0-9]{64}$/i.test(storedHash)) return false;
+  const expected = Buffer.from(storedHash, "hex");
+  const actual = Buffer.from(hashDeviceProof(proof), "hex");
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
 type PairingRouteDeps = {
@@ -29,7 +45,11 @@ export function buildPairingRouter(deps: PairingRouteDeps): Router {
     windowMs: 60_000,
     max: isDev ? 1000 : 15,
     standardHeaders: true,
-    legacyHeaders: false
+    legacyHeaders: false,
+    keyGenerator(req) {
+      const hardwareId = String(req.body?.hardware_id ?? "").trim().slice(0, 160);
+      return hardwareId || req.socket.remoteAddress || "unknown";
+    }
   });
 
   router.post(
@@ -40,31 +60,41 @@ export function buildPairingRouter(deps: PairingRouteDeps): Router {
       try {
         const hardwareId = String(req.body?.hardware_id ?? "").trim();
         const tenantId = req.body?.tenant_id ? String(req.body.tenant_id).trim() : null;
+        const deviceProof = String(req.body?.device_proof ?? "").trim();
 
-        if (!hardwareId) {
+        if (!hardwareId || !isValidDeviceProof(deviceProof)) {
           res.status(400).json({
             code: "VALIDATION_ERROR",
-            message: "hardware_id is required"
+            message: "hardware_id and a valid device_proof are required"
           });
           return;
         }
 
-        let device = await DeviceModel.findOne({ hardwareId });
+        let device = await DeviceModel.findOne({ hardwareId }).select("+deviceCredentialHash");
 
         if (!device) {
           device = await DeviceModel.create({
             hardwareId,
             tenantId: tenantId || null,
-            status: "offline"
+            status: "offline",
+            deviceCredentialHash: hashDeviceProof(deviceProof)
           });
-        } else if (tenantId && device.tenantId !== tenantId) {
-          // In local/dev pairing workflows, move the device to the requested tenant
-          // so the dashboard and emulator stay in the same tenant context.
-          device.tenantId = tenantId;
-          device.pairedOwnerUserId = null;
-          device.currentPlaylistId = null;
-          device.status = "offline";
-          await device.save();
+        } else {
+          if (device.pairedOwnerUserId) {
+            res.status(409).json({
+              code: "DEVICE_ALREADY_PAIRED",
+              message: "Device is already paired; an authenticated unpair is required before re-enrollment"
+            });
+            return;
+          }
+          if (device.deviceCredentialHash && !deviceProofMatches(device.deviceCredentialHash, deviceProof)) {
+            res.status(401).json({ code: "DEVICE_CREDENTIAL_INVALID", message: "Invalid device credential" });
+            return;
+          }
+          if (!device.deviceCredentialHash) {
+            device.deviceCredentialHash = hashDeviceProof(deviceProof);
+            await device.save();
+          }
         }
 
         try {
@@ -73,16 +103,44 @@ export function buildPairingRouter(deps: PairingRouteDeps): Router {
           console.error("[pairing] postgres shadow write failed (request-code)", error);
         }
 
-        const code = generatePairingCode();
-        const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+        const now = new Date();
+        const requestedExpiresAt = new Date(now.getTime() + 5 * 60 * 1000);
+        const deviceId = String(device._id);
+        await PairingCodeModel.deleteMany({ deviceId, consumedAt: null, expiresAt: { $lte: now } });
 
-        await PairingCodeModel.create({
-          code,
-          deviceId: String(device._id),
-          tenantId: tenantId || null,
-          expiresAt,
-          consumedAt: null
-        });
+        let activeCode = await PairingCodeModel.findOne({
+          deviceId,
+          consumedAt: null,
+          expiresAt: { $gt: now }
+        }).select({ code: 1, expiresAt: 1 }).lean();
+
+        for (let attempt = 0; !activeCode && attempt < 10; attempt += 1) {
+          const candidate = generatePairingCode();
+          try {
+            activeCode = await PairingCodeModel.create({
+              code: candidate,
+              deviceId,
+              tenantId: device.tenantId || tenantId || null,
+              expiresAt: requestedExpiresAt,
+              consumedAt: null
+            });
+          } catch (error) {
+            const duplicateKey = typeof error === "object" && error !== null && "code" in error && error.code === 11000;
+            if (!duplicateKey) throw error;
+            activeCode = await PairingCodeModel.findOne({
+              deviceId,
+              consumedAt: null,
+              expiresAt: { $gt: now }
+            }).select({ code: 1, expiresAt: 1 }).lean();
+          }
+        }
+
+        const code = activeCode?.code ?? null;
+        const codeExpiresAt = activeCode?.expiresAt ?? requestedExpiresAt;
+        if (!code) {
+          res.status(503).json({ code: "PAIRING_CODE_CAPACITY", message: "Could not allocate a pairing code; retry shortly" });
+          return;
+        }
 
         await PairingAuditModel.create({
           tenantId: tenantId || "unassigned",
@@ -97,7 +155,7 @@ export function buildPairingRouter(deps: PairingRouteDeps): Router {
 
         res.status(201).json({
           code,
-          expires_at: expiresAt.toISOString(),
+          expires_at: codeExpiresAt.toISOString(),
           device_id: String(device._id)
         });
       } catch {
@@ -119,11 +177,15 @@ export function buildPairingRouter(deps: PairingRouteDeps): Router {
           return;
         }
 
-        const doc = await PairingCodeModel.findOne({
-          code: pairingCode,
-          consumedAt: null,
-          expiresAt: { $gt: new Date() }
-        }).sort({ createdAt: -1 });
+        const doc = await PairingCodeModel.findOneAndUpdate(
+          {
+            code: pairingCode,
+            consumedAt: null,
+            expiresAt: { $gt: new Date() }
+          },
+          { $set: { consumedAt: new Date() } },
+          { new: true, sort: { createdAt: -1 } }
+        );
 
         if (!doc) {
           await PairingAuditModel.create({
@@ -141,14 +203,36 @@ export function buildPairingRouter(deps: PairingRouteDeps): Router {
           return;
         }
 
-        await DeviceModel.updateOne(
-          { _id: doc.deviceId },
-          { $set: { tenantId: req.auth?.tenantId, pairedOwnerUserId: req.auth?.userId, status: "online", lastSeenAt: new Date() } }
-        );
-
-        const mongoDevice = await DeviceModel.findOne({ _id: doc.deviceId })
+        const mongoDevice = await DeviceModel.findOneAndUpdate(
+          { _id: doc.deviceId, pairedOwnerUserId: null },
+          {
+            $set: {
+              tenantId: req.auth!.tenantId,
+              pairedOwnerUserId: req.auth!.userId,
+              // Pairing confirmation does not prove that the Android player has
+              // established its authenticated socket session.
+              status: "offline"
+            }
+          },
+          { new: true }
+        )
           .select({ hardwareId: 1 })
           .lean();
+
+        if (!mongoDevice) {
+          await PairingAuditModel.create({
+            tenantId: req.auth!.tenantId,
+            deviceId: doc.deviceId,
+            hardwareId: null,
+            eventType: "PAIRING_CONFIRM_FAILED",
+            actorType: "user",
+            actorId: req.auth!.userId,
+            result: "failure",
+            reason: "DEVICE_ALREADY_PAIRED_OR_MISSING"
+          });
+          res.status(409).json({ code: "DEVICE_ALREADY_PAIRED", message: "Device is already paired or no longer available" });
+          return;
+        }
 
         if (mongoDevice?.hardwareId && req.auth?.userId && req.auth?.tenantId) {
           try {
@@ -162,8 +246,6 @@ export function buildPairingRouter(deps: PairingRouteDeps): Router {
           }
         }
 
-        doc.consumedAt = new Date();
-        await doc.save();
 
         await PairingAuditModel.create({
           tenantId: req.auth?.tenantId ?? doc.tenantId,
@@ -190,16 +272,26 @@ export function buildPairingRouter(deps: PairingRouteDeps): Router {
     async (req, res) => {
       try {
         const hardwareId = String(req.body?.hardware_id ?? "").trim();
+        const deviceProof = String(req.body?.device_proof ?? "").trim();
 
-        if (!hardwareId) {
-          res.status(400).json({ code: "VALIDATION_ERROR", message: "hardware_id is required" });
+        if (!hardwareId || !isValidDeviceProof(deviceProof)) {
+          res.status(400).json({ code: "VALIDATION_ERROR", message: "hardware_id and a valid device_proof are required" });
           return;
         }
 
-        const device = await DeviceModel.findOne({ hardwareId });
+        const device = await DeviceModel.findOne({ hardwareId }).select("+deviceCredentialHash");
         if (!device) {
           res.status(404).json({ code: "DEVICE_NOT_FOUND", message: "Device not found" });
           return;
+        }
+
+        if (!deviceProofMatches(device.deviceCredentialHash, deviceProof)) {
+          if (device.deviceCredentialHash) {
+            res.status(401).json({ code: "DEVICE_CREDENTIAL_INVALID", message: "Invalid device credential" });
+            return;
+          }
+          device.deviceCredentialHash = hashDeviceProof(deviceProof);
+          await device.save();
         }
 
         if (!device.pairedOwnerUserId || !device.tenantId) {
@@ -241,7 +333,7 @@ export function buildPairingRouter(deps: PairingRouteDeps): Router {
           tenant_id: device.tenantId,
           access_token: deviceToken,
           token_type: "Bearer",
-          expires_in: 60 * 60 * 12
+          expires_in: 60 * 60 * 48
         });
       } catch {
         res.status(500).json({ code: "DEVICE_SESSION_FAILED", message: "Failed to refresh device session" });
@@ -252,16 +344,16 @@ export function buildPairingRouter(deps: PairingRouteDeps): Router {
   router.post(
     "/unpair",
     pairingLimiter,
-    requireBootstrapKey(deps.bootstrapKey),
+    requireDeviceAuth(deps.jwtSecret, { issuer: deps.jwtIssuer, audience: deps.jwtAudience }),
     async (req, res) => {
       try {
-        const hardwareId = String(req.body?.hardware_id ?? "").trim();
-        if (!hardwareId) {
-          res.status(400).json({ code: "VALIDATION_ERROR", message: "hardware_id is required" });
+        const hardwareId = req.auth?.hardwareId;
+        if (!hardwareId || req.auth?.role !== "device") {
+          res.status(401).json({ code: "DEVICE_UNAUTHORIZED", message: "Valid device session required" });
           return;
         }
 
-        const device = await DeviceModel.findOne({ hardwareId });
+        const device = await DeviceModel.findOne({ _id: req.auth.userId, hardwareId, tenantId: req.auth.tenantId });
         if (!device) {
           res.status(404).json({ code: "DEVICE_NOT_FOUND", message: "Device not found" });
           return;
@@ -274,6 +366,7 @@ export function buildPairingRouter(deps: PairingRouteDeps): Router {
         device.currentPlaylistId = null;
         device.status = "offline";
         await device.save();
+        disconnectDeviceSockets(String(device._id));
 
         if (isPostgresConnected() && oldTenantId) {
           try {

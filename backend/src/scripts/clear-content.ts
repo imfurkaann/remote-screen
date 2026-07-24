@@ -1,4 +1,5 @@
 import { getEnv } from "../config/env.js";
+import { assertDestructiveMaintenanceAllowed } from "../lib/maintenance-safety.js";
 import { connectMongo, disconnectMongo } from "../lib/mongo.js";
 import { connectPostgres, disconnectPostgres, getPostgresPool } from "../lib/postgres.js";
 import { DeviceModel } from "../models/device.model.js";
@@ -6,6 +7,7 @@ import { MediaModel } from "../models/media.model.js";
 import { PlaylistModel } from "../models/playlist.model.js";
 
 async function run(): Promise<void> {
+  assertDestructiveMaintenanceAllowed("clear-content");
   console.log("[clear-content] Starting database cleanup...");
   
   const env = getEnv();

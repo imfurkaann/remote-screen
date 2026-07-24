@@ -85,12 +85,40 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+function PaginationBar({ page, totalPages, total, onPageChange }: {
+  page: number;
+  totalPages: number;
+  total: number;
+  onPageChange: (page: number) => void;
+}) {
+  if (totalPages <= 1) return null;
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderTop: "1px solid #e2e8f0", color: "#64748b", fontSize: 13 }}>
+      <span>{total.toLocaleString()} record(s)</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <button type="button" disabled={page <= 1} onClick={() => onPageChange(Math.max(1, page - 1))}>Previous</button>
+        <span>Page {page} / {totalPages}</span>
+        <button type="button" disabled={page >= totalPages} onClick={() => onPageChange(Math.min(totalPages, page + 1))}>Next</button>
+      </div>
+    </div>
+  );
+}
+
 export default function SuperAdminPage() {
   const [activeTab, setActiveTab] = useState<"stats" | "tenants" | "users" | "devices">("stats");
   const [stats, setStats] = useState<StatsData | null>(null);
   const [tenants, setTenants] = useState<TenantItem[]>([]);
   const [users, setUsers] = useState<UserItem[]>([]);
   const [devices, setDevices] = useState<DeviceItem[]>([]);
+  const [tenantPage, setTenantPage] = useState(1);
+  const [tenantTotal, setTenantTotal] = useState(0);
+  const [tenantTotalPages, setTenantTotalPages] = useState(1);
+  const [globalUserPage, setGlobalUserPage] = useState(1);
+  const [globalUserTotal, setGlobalUserTotal] = useState(0);
+  const [globalUserTotalPages, setGlobalUserTotalPages] = useState(1);
+  const [devicePage, setDevicePage] = useState(1);
+  const [deviceTotal, setDeviceTotal] = useState(0);
+  const [deviceTotalPages, setDeviceTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -121,10 +149,12 @@ export default function SuperAdminPage() {
 
   const fetchTenants = async () => {
     try {
-      const res = await fetch("/api/super/tenants");
+      const res = await fetch(`/api/super/tenants?page=${tenantPage}&limit=50`, { cache: "no-store" });
       if (!res.ok) throw new Error("Kiracılar listesi alınamadı");
       const data = await res.json();
       setTenants(data.tenants || []);
+      setTenantTotal(data.total ?? data.tenants?.length ?? 0);
+      setTenantTotalPages(data.totalPages ?? 1);
     } catch (err: any) {
       setError(err.message);
     }
@@ -132,10 +162,12 @@ export default function SuperAdminPage() {
 
   const fetchUsers = async () => {
     try {
-      const res = await fetch("/api/super/users");
+      const res = await fetch(`/api/super/users?page=${globalUserPage}&limit=50`, { cache: "no-store" });
       if (!res.ok) throw new Error("Kullanıcılar listesi alınamadı");
       const data = await res.json();
       setUsers(data.users || []);
+      setGlobalUserTotal(data.total ?? data.users?.length ?? 0);
+      setGlobalUserTotalPages(data.totalPages ?? 1);
     } catch (err: any) {
       setError(err.message);
     }
@@ -143,10 +175,12 @@ export default function SuperAdminPage() {
 
   const fetchDevices = async () => {
     try {
-      const res = await fetch("/api/super/devices");
+      const res = await fetch(`/api/super/devices?page=${devicePage}&limit=50`, { cache: "no-store" });
       if (!res.ok) throw new Error("Ekranlar listesi alınamadı");
       const data = await res.json();
       setDevices(data.devices || []);
+      setDeviceTotal(data.total ?? data.devices?.length ?? 0);
+      setDeviceTotalPages(data.totalPages ?? 1);
     } catch (err: any) {
       setError(err.message);
     }
@@ -160,8 +194,20 @@ export default function SuperAdminPage() {
   };
 
   useEffect(() => {
-    loadAll();
+    void loadAll();
   }, []);
+
+  useEffect(() => {
+    if (activeTab === "tenants") void fetchTenants();
+  }, [tenantPage]);
+
+  useEffect(() => {
+    if (activeTab === "users") void fetchUsers();
+  }, [globalUserPage]);
+
+  useEffect(() => {
+    if (activeTab === "devices") void fetchDevices();
+  }, [devicePage]);
 
   const handleCreateTenant = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -189,10 +235,35 @@ export default function SuperAdminPage() {
     }
   };
 
+  const handleToggleTenant = async (tenant: TenantItem) => {
+    if (tenant.isActive && !window.confirm("Bu hesabı pasifleştirmek tüm kullanıcı ve ekran bağlantılarını kapatır. Devam edilsin mi?")) {
+      return;
+    }
+    setError(null);
+    try {
+      const response = await fetch(`/api/super/tenants/${tenant._id}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ isActive: !tenant.isActive })
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.message || "Tenant status could not be updated");
+      }
+      await Promise.all([fetchTenants(), fetchStats(), fetchDevices()]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Tenant status could not be updated");
+    }
+  };
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!userEmail.trim() || !userPassword || !userRole || !userDisplayName.trim() || !userTenantId) {
       setError("Lütfen tüm zorunlu alanları doldurun.");
+      return;
+    }
+    const passwordCategories = [/[a-z]/.test(userPassword), /[A-Z]/.test(userPassword), /\d/.test(userPassword), /[^A-Za-z0-9]/.test(userPassword)].filter(Boolean).length;
+    if (userPassword.length < 12 || userPassword.length > 128 || passwordCategories < 3) {
+      setError("Şifre 12-128 karakter olmalı ve küçük harf, büyük harf, sayı, sembol gruplarından en az üçünü içermelidir.");
       return;
     }
 
@@ -556,12 +627,13 @@ export default function SuperAdminPage() {
                       <th style={{ padding: "16px", color: "#475569", fontSize: "13px", fontWeight: 700 }}>KİRACI ADI</th>
                       <th style={{ padding: "16px", color: "#475569", fontSize: "13px", fontWeight: 700 }}>ID / UUID</th>
                       <th style={{ padding: "16px", color: "#475569", fontSize: "13px", fontWeight: 700 }}>DURUM</th>
+                      <th style={{ padding: "16px", color: "#475569", fontSize: "13px", fontWeight: 700 }}>İŞLEM</th>
                     </tr>
                   </thead>
                   <tbody>
                     {tenants.length === 0 ? (
                       <tr>
-                        <td colSpan={3} style={{ padding: "32px", textAlign: "center", color: "#64748b" }}>
+                        <td colSpan={4} style={{ padding: "32px", textAlign: "center", color: "#64748b" }}>
                           Kayıtlı kiracı bulunmamaktadır.
                         </td>
                       </tr>
@@ -586,11 +658,29 @@ export default function SuperAdminPage() {
                               {t.isActive ? "Aktif" : "Pasif"}
                             </span>
                           </td>
+                          <td style={{ padding: "16px" }}>
+                            <button
+                              type="button"
+                              onClick={() => void handleToggleTenant(t)}
+                              style={{
+                                border: "1px solid #cbd5e1",
+                                borderRadius: 6,
+                                padding: "6px 10px",
+                                background: "#fff",
+                                color: t.isActive ? "#dc2626" : "#059669",
+                                cursor: "pointer",
+                                fontWeight: 600
+                              }}
+                            >
+                              {t.isActive ? "Pasifleştir" : "Etkinleştir"}
+                            </button>
+                          </td>
                         </tr>
                       ))
                     )}
                   </tbody>
                 </table>
+                <PaginationBar page={tenantPage} totalPages={tenantTotalPages} total={tenantTotal} onPageChange={setTenantPage} />
               </div>
             </div>
           )}
@@ -694,6 +784,7 @@ export default function SuperAdminPage() {
                     )}
                   </tbody>
                 </table>
+                <PaginationBar page={globalUserPage} totalPages={globalUserTotalPages} total={globalUserTotal} onPageChange={setGlobalUserPage} />
               </div>
             </div>
           )}
@@ -754,6 +845,7 @@ export default function SuperAdminPage() {
                   )}
                 </tbody>
               </table>
+              <PaginationBar page={devicePage} totalPages={deviceTotalPages} total={deviceTotal} onPageChange={setDevicePage} />
             </div>
           )}
         </div>

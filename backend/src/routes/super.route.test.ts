@@ -127,6 +127,24 @@ function createNormalUserToken(): string {
   );
 }
 
+function createTenantOwnerToken(userId: string, tenantId: string): string {
+  return jwt.sign(
+    {
+      sub: userId,
+      tenant_id: tenantId,
+      role: "tenant_owner",
+      email: "owner-new@test.com"
+    },
+    env.jwtAccessSecret,
+    {
+      issuer: env.jwtIssuer,
+      audience: env.jwtAudience,
+      expiresIn: "5m",
+      notBefore: "0s"
+    }
+  );
+}
+
 describe("super admin routes", () => {
   it("blocks requests without super_admin role", async () => {
     const baseUrl = await startServer();
@@ -162,6 +180,25 @@ describe("super admin routes", () => {
 
     const tenantId = createData.tenant._id;
 
+    const duplicateTenantRes = await fetch(baseUrl + "/api/v1/super/tenants", {
+      method: "POST",
+      headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+      body: JSON.stringify({ name: "  new test tenant  " })
+    });
+    assert.equal(duplicateTenantRes.status, 409);
+
+    const elevatedUserRes = await fetch(baseUrl + "/api/v1/super/tenants/" + tenantId + "/users", {
+      method: "POST",
+      headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+      body: JSON.stringify({
+        email: "illegal-super@test.com",
+        password: "StrongPass123!",
+        role: "super_admin",
+        displayName: "Illegal Super"
+      })
+    });
+    assert.equal(elevatedUserRes.status, 400);
+
     // 2. List tenants
     const listRes = await fetch(`${baseUrl}/api/v1/super/tenants`, {
       headers: {
@@ -182,7 +219,7 @@ describe("super admin routes", () => {
       },
       body: JSON.stringify({
         email: "owner-new@test.com",
-        password: "password123",
+        password: "StrongPass123!",
         role: "tenant_owner",
         displayName: "New Tenant Owner"
       })
@@ -191,6 +228,54 @@ describe("super admin routes", () => {
     const userData = (await userRes.json()) as any;
     assert.equal(userData.user.email, "owner-new@test.com");
     assert.equal(userData.user.role, "tenant_owner");
+
+    const deactivateRes = await fetch(baseUrl + "/api/v1/super/tenants/" + tenantId, {
+      method: "PUT",
+      headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+      body: JSON.stringify({ isActive: false })
+    });
+    assert.equal(deactivateRes.status, 200);
+    const deactivatedTenant = (await deactivateRes.json()) as any;
+    assert.equal(deactivatedTenant.tenant.isActive, false);
+
+    const reactivateRes = await fetch(baseUrl + "/api/v1/super/tenants/" + tenantId, {
+      method: "PUT",
+      headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+      body: JSON.stringify({ isActive: true })
+    });
+    assert.equal(reactivateRes.status, 200);
+
+    const operatorRes = await fetch(baseUrl + "/api/v1/super/tenants/" + tenantId + "/users", {
+      method: "POST",
+      headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+      body: JSON.stringify({
+        email: "operator-new@test.com",
+        password: "StrongPass123!",
+        role: "operator",
+        displayName: "New Tenant Operator"
+      })
+    });
+    assert.equal(operatorRes.status, 201);
+    const operatorData = (await operatorRes.json()) as any;
+    const ownerToken = createTenantOwnerToken(userData.user.id, tenantId);
+
+    const unsafeDeactivateRes = await fetch(baseUrl + "/api/v1/auth/users/" + operatorData.user.id, {
+      method: "PUT",
+      headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+      body: JSON.stringify({ isActive: false })
+    });
+    assert.equal(unsafeDeactivateRes.status, 409);
+    assert.equal(((await unsafeDeactivateRes.json()) as any).code, "USE_DEACTIVATION_ENDPOINT");
+
+    const lastOwnerRes = await fetch(
+      baseUrl + "/api/v1/auth/users/" + userData.user.id + "?transfer_to_user_id=" + operatorData.user.id,
+      {
+        method: "DELETE",
+        headers: { authorization: "Bearer " + ownerToken }
+      }
+    );
+    assert.equal(lastOwnerRes.status, 409);
+    assert.equal(((await lastOwnerRes.json()) as any).code, "SELF_LOCKOUT_PREVENTED");
 
     // 4. Fetch global stats
     const statsRes = await fetch(`${baseUrl}/api/v1/super/stats`, {
@@ -201,6 +286,6 @@ describe("super admin routes", () => {
     assert.equal(statsRes.status, 200);
     const statsData = (await statsRes.json()) as any;
     assert.equal(statsData.stats.totalTenants, 1);
-    assert.equal(statsData.stats.totalUsers, 1);
+    assert.equal(statsData.stats.totalUsers, 2);
   });
 });

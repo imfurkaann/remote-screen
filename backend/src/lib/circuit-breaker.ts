@@ -30,6 +30,7 @@ export class CircuitBreaker {
   private consecutiveFailures = 0;
   private lastFailureTime: Date | undefined;
   private nextAttemptTime: Date | undefined;
+  private halfOpenProbeInFlight = false;
   private config: CircuitBreakerConfig;
 
   constructor(config: Partial<CircuitBreakerConfig> = {}) {
@@ -58,13 +59,16 @@ export class CircuitBreaker {
           name: this.config.name
         });
         this.state = 'HALF_OPEN';
+        this.halfOpenProbeInFlight = true;
         return true;
       }
 
       return false;
     }
 
-    // HALF_OPEN: allow single attempt
+    // HALF_OPEN: allow exactly one recovery probe at a time.
+    if (this.halfOpenProbeInFlight) return false;
+    this.halfOpenProbeInFlight = true;
     return true;
   }
 
@@ -80,6 +84,7 @@ export class CircuitBreaker {
       this.consecutiveFailures = 0;
       this.lastFailureTime = undefined;
       this.nextAttemptTime = undefined;
+      this.halfOpenProbeInFlight = false;
       metrics.resetCircuitBreaker();
       return;
     }
@@ -92,7 +97,18 @@ export class CircuitBreaker {
   /**
    * Record failed operation
    */
-  recordFailure(error: Error): void {
+  recordFailure(error: Error): void {    if (this.state === 'HALF_OPEN') {
+      this.halfOpenProbeInFlight = false;
+      this.state = 'OPEN';
+      this.lastFailureTime = new Date();
+      this.nextAttemptTime = new Date(Date.now() + this.config.resetTimeoutMs);
+      metrics.recordCircuitBreakerFailure();
+      logger.warn(`${this.config.name} recovery probe failed; circuit reopened`, {
+        name: this.config.name,
+        resetTimeoutMs: this.config.resetTimeoutMs
+      }, error);
+      return;
+    }
     this.consecutiveFailures++;
     this.lastFailureTime = new Date();
 

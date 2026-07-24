@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { Router } from "express";
 import multer from "multer";
+import { Types } from "mongoose";
 import path from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 
-import { requireRoles, requireUserAuth } from "../middlewares/auth.js";
+import { requireRoles, requireUserAuth, requireUserOrDeviceAuth } from "../middlewares/auth.js";
 import { COMMAND_TYPES, CommandModel, type CommandType } from "../models/command.model.js";
 import { DeviceModel } from "../models/device.model.js";
 import { Logger } from "../lib/logger.js";
@@ -15,7 +16,24 @@ import { commandRepository, type ShadowCommandRow } from "../repositories/comman
 import { queueCommand } from "../services/command.service.js";
 
 const logger = new Logger('CommandRoute');
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+const SCREENSHOT_MIME_TO_EXTENSION: Record<string, string> = {
+  "image/png": ".png",
+  "image/jpeg": ".jpg",
+  "image/webp": ".webp"
+};
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, callback) => callback(null, file.mimetype in SCREENSHOT_MIME_TO_EXTENSION)
+});
+
+function hasValidImageSignature(buffer: Buffer, mimeType: string): boolean {
+  if (mimeType === "image/png") return buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  if (mimeType === "image/jpeg") return buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+  if (mimeType === "image/webp") return buffer.subarray(0, 4).toString("ascii") === "RIFF" && buffer.subarray(8, 12).toString("ascii") === "WEBP";
+  return false;
+}
 
 type CommandRouteDeps = {
   jwtSecret: string;
@@ -31,6 +49,7 @@ function isCommandType(value: string): value is CommandType {
 type CommandView = {
   _id: unknown;
   deviceId: string;
+  requestedByUserId?: string | null;
   commandId: string;
   commandType: string;
   payload: Record<string, unknown>;
@@ -50,6 +69,7 @@ function toApiCommand(command: CommandView): Record<string, unknown> {
   return {
     id: String(command._id),
     device_id: command.deviceId,
+    requested_by_user_id: command.requestedByUserId ?? null,
     command_id: command.commandId,
     command_type: command.commandType,
     payload: command.payload,
@@ -83,6 +103,7 @@ function fromShadowRow(row: ShadowCommandRow): CommandView {
   return {
     _id: row.id,
     deviceId: row.device_id,
+    requestedByUserId: row.requested_by_user_id,
     commandId: row.command_id,
     commandType: row.command_type,
     payload: row.payload,
@@ -102,15 +123,17 @@ function fromShadowRow(row: ShadowCommandRow): CommandView {
 export function buildCommandRouter(deps: CommandRouteDeps): Router {
   const router = Router();
 
-  router.use(requireUserAuth(deps.jwtSecret, { issuer: deps.jwtIssuer, audience: deps.jwtAudience }));
-
-  router.post("/devices/:deviceId/screenshot", upload.single("file"), async (req, res) => {
+  router.post(
+    "/devices/:deviceId/screenshot",
+    requireUserOrDeviceAuth(deps.jwtSecret, { issuer: deps.jwtIssuer, audience: deps.jwtAudience }),
+    upload.single("file"),
+    async (req, res) => {
     try {
       const auth = req.auth;
       const tenantId = auth?.tenantId;
       const deviceId = String(req.params.deviceId ?? "").trim();
 
-      if (!tenantId || !deviceId) {
+      if (!tenantId || !Types.ObjectId.isValid(deviceId)) {
         res.status(400).json({ code: "VALIDATION_ERROR", message: "deviceId is required" });
         return;
       }
@@ -122,12 +145,12 @@ export function buildCommandRouter(deps: CommandRouteDeps): Router {
 
       let isAllowed = false;
       if (auth.role === "device") {
-        isAllowed = auth.userId === deviceId;
-      } else if (auth.role === "tenant_owner") {
-        isAllowed = true;
-      } else if (["tenant_admin", "operator"].includes(auth.role)) {
-        const d = await DeviceModel.findOne({ _id: deviceId, tenantId, pairedOwnerUserId: auth.userId });
-        isAllowed = d !== null;
+        isAllowed = auth.userId === deviceId && auth.hardwareId !== undefined;
+      } else {
+        const ownershipFilter: Record<string, unknown> = { _id: deviceId };
+        if (!(auth.role === "super_admin" && tenantId === "system")) ownershipFilter.tenantId = tenantId;
+        if (["tenant_admin", "operator"].includes(auth.role)) ownershipFilter.pairedOwnerUserId = auth.userId;
+        isAllowed = await DeviceModel.exists(ownershipFilter) !== null;
       }
 
       if (!isAllowed) {
@@ -135,7 +158,12 @@ export function buildCommandRouter(deps: CommandRouteDeps): Router {
         return;
       }
 
-      const extension = path.extname(req.file.originalname) || ".png";
+      if (!hasValidImageSignature(req.file.buffer, req.file.mimetype)) {
+        res.status(400).json({ code: "INVALID_SCREENSHOT", message: "Only valid PNG, JPEG, or WebP screenshots are accepted" });
+        return;
+      }
+
+      const extension = SCREENSHOT_MIME_TO_EXTENSION[req.file.mimetype];
       const fileName = `${randomUUID()}${extension}`;
       const relativePath = path.join("uploads", "screenshots", tenantId, fileName);
       const absolutePath = path.resolve(process.cwd(), relativePath);
@@ -150,8 +178,10 @@ export function buildCommandRouter(deps: CommandRouteDeps): Router {
       logger.error("Screenshot upload failed", err, { deviceId: req.params.deviceId });
       res.status(500).json({ code: "SCREENSHOT_UPLOAD_FAILED", message: "Failed to upload screenshot" });
     }
-  });
+    }
+  );
 
+  router.use(requireUserAuth(deps.jwtSecret, { issuer: deps.jwtIssuer, audience: deps.jwtAudience }));
   router.use(requireRoles(["tenant_owner", "tenant_admin", "operator"]));
 
   router.post("/devices/:deviceId/commands", async (req, res) => {
@@ -165,7 +195,7 @@ export function buildCommandRouter(deps: CommandRouteDeps): Router {
           ? (req.body.payload as Record<string, unknown>)
           : {};
 
-      if (!tenantId || !deviceId || !isCommandType(commandTypeRaw) || !commandId) {
+      if (!tenantId || !Types.ObjectId.isValid(deviceId) || !isCommandType(commandTypeRaw) || !commandId) {
         res.status(400).json({
           code: "VALIDATION_ERROR",
           message: "deviceId, command_type and command_id are required"
@@ -187,44 +217,13 @@ export function buildCommandRouter(deps: CommandRouteDeps): Router {
       const queued = await queueCommand({
         tenantId,
         deviceId,
+        requestedByUserId: req.auth!.userId,
         commandId,
         commandType: commandTypeRaw,
         payload,
         maxAttempts,
         timeoutMs
       });
-
-      // Async shadow write (non-blocking, errors are logged)
-      try {
-        const shadow = queued.command as unknown as CommandView;
-        await commandRepository.upsertShadowCommand({
-          tenantId,
-          deviceId,
-          commandId: shadow.commandId,
-          commandType: shadow.commandType,
-          payload: shadow.payload,
-          status: shadow.status,
-          attempts: shadow.attempts,
-          maxAttempts: shadow.maxAttempts,
-          timeoutMs: shadow.timeoutMs,
-          sentAt: shadow.sentAt,
-          ackAt: shadow.ackAt,
-          completedAt: shadow.completedAt,
-          timeoutAt: shadow.timeoutAt,
-          screenshotUrl: shadow.screenshotUrl,
-          errorMessage: shadow.errorMessage
-        });
-      } catch (shadowError) {
-        // Log but don't fail the main request
-        const err = shadowError instanceof Error ? shadowError : new Error(String(shadowError));
-        logger.warn('Async shadow command write failed', {
-          tenantId,
-          deviceId,
-          commandId,
-          commandType: commandTypeRaw,
-          errorMessage: err.message
-        }, err);
-      }
 
       res.status(queued.created ? 201 : 200).json({
         deduped: !queued.created,
@@ -255,7 +254,7 @@ export function buildCommandRouter(deps: CommandRouteDeps): Router {
       const deviceId = String(req.params.deviceId ?? "").trim();
       const limit = Math.min(Math.max(Number(req.query.limit ?? 20), 1), 100);
 
-      if (!tenantId || !deviceId) {
+      if (!tenantId || !Types.ObjectId.isValid(deviceId)) {
         res.status(400).json({ code: "VALIDATION_ERROR", message: "deviceId is required" });
         return;
       }
@@ -310,7 +309,7 @@ export function buildCommandRouter(deps: CommandRouteDeps): Router {
       const deviceId = String(req.params.deviceId ?? "").trim();
       const commandId = String(req.params.commandId ?? "").trim();
 
-      if (!tenantId || !deviceId || !commandId) {
+      if (!tenantId || !Types.ObjectId.isValid(deviceId) || !commandId) {
         res.status(400).json({
           code: "VALIDATION_ERROR",
           message: "deviceId and commandId are required"

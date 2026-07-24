@@ -1,37 +1,42 @@
-/**
- * Retry logic with exponential backoff for shadow write operations.
- * Ensures shadow writes are eventually consistent even during transient PostgreSQL failures.
- */
+import { Logger } from "./logger.js";
+import { metrics } from "./metrics.js";
 
-import { Logger } from './logger.js';
-import { metrics } from './metrics.js';
-
-const logger = new Logger('Retry');
+const logger = new Logger("Retry");
 
 export interface RetryConfig {
-  // Maximum number of retry attempts (total attempts = maxRetries + 1)
   maxRetries: number;
-  // Initial backoff delay in milliseconds
   initialDelayMs: number;
-  // Maximum backoff delay in milliseconds
   maxDelayMs: number;
-  // Exponential backoff multiplier (2 = double each retry)
   backoffMultiplier: number;
-  // Add random jitter (0-1) to prevent thundering herd
   jitterFactor: number;
+  shouldRetry: (error: Error) => boolean;
+}
+
+const TRANSIENT_ERROR_CODES = new Set([
+  "40001", // serialization_failure
+  "40P01", // deadlock_detected
+  "55P03", // lock_not_available
+  "53300", // too_many_connections
+  "57P01", "57P02", "57P03", // server shutdown/startup states
+  "ECONNRESET", "ECONNREFUSED", "EPIPE", "ETIMEDOUT", "ENETUNREACH", "EHOSTUNREACH"
+]);
+
+export function isTransientDatabaseError(error: Error): boolean {
+  const code = typeof (error as Error & { code?: unknown }).code === "string"
+    ? String((error as Error & { code: string }).code)
+    : "";
+  return code.startsWith("08") || TRANSIENT_ERROR_CODES.has(code);
 }
 
 const DEFAULT_CONFIG: RetryConfig = {
   maxRetries: 3,
   initialDelayMs: 100,
-  maxDelayMs: 5000,
+  maxDelayMs: 5_000,
   backoffMultiplier: 2,
-  jitterFactor: 0.1
+  jitterFactor: 0.1,
+  shouldRetry: isTransientDatabaseError
 };
 
-/**
- * Execute function with automatic retry on failure
- */
 export async function withRetry<T>(
   operation: () => Promise<T>,
   operationName: string,
@@ -41,73 +46,57 @@ export async function withRetry<T>(
   let lastError: Error | null = null;
   let retried = false;
 
-  for (let attempt = 0; attempt <= finalConfig.maxRetries; attempt++) {
+  for (let attempt = 0; attempt <= finalConfig.maxRetries; attempt += 1) {
     try {
-      const startTime = Date.now();
+      const startedAt = Date.now();
       const result = await operation();
-      const latencyMs = Date.now() - startTime;
-
+      const latencyMs = Date.now() - startedAt;
+      metrics.recordShadowWrite(true, latencyMs, attempt > 0);
       if (attempt > 0) {
-        logger.info(`${operationName} succeeded after ${attempt} retries`, {
-          operationName,
-          attempt,
-          latencyMs
-        });
-        metrics.recordShadowWrite(true, latencyMs, true);
-      } else {
-        metrics.recordShadowWrite(true, latencyMs, false);
+        logger.info(`${operationName} succeeded after ${attempt} retries`, { operationName, attempt, latencyMs });
       }
-
       return result;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
+      const retryable = finalConfig.shouldRetry(lastError);
+      const canRetry = retryable && attempt < finalConfig.maxRetries;
 
-      if (attempt < finalConfig.maxRetries) {
-        const delayMs = calculateBackoff(attempt, finalConfig);
-
-        logger.warn(`${operationName} failed, retrying in ${delayMs}ms`, {
-          operationName,
-          attempt,
-          maxRetries: finalConfig.maxRetries,
-          nextDelayMs: delayMs
-        }, lastError);
-
-        retried = true;
-        await sleep(delayMs);
-      } else {
-        // Record final failure
+      if (!canRetry) {
         metrics.recordShadowWrite(false, 0, retried);
-
-        logger.error(`${operationName} failed after ${finalConfig.maxRetries} retries`, lastError, {
-          operationName,
-          totalAttempts: attempt + 1,
-          maxRetries: finalConfig.maxRetries
-        });
+        logger.error(
+          retryable
+            ? `${operationName} failed after ${attempt} retries`
+            : `${operationName} failed with a non-retryable error`,
+          lastError,
+          { operationName, totalAttempts: attempt + 1, retryable }
+        );
+        break;
       }
+
+      const delayMs = calculateBackoff(attempt, finalConfig);
+      logger.warn(`${operationName} failed, retrying in ${delayMs}ms`, {
+        operationName,
+        attempt,
+        maxRetries: finalConfig.maxRetries,
+        nextDelayMs: delayMs
+      }, lastError);
+      retried = true;
+      await sleep(delayMs);
     }
   }
 
-  throw lastError || new Error(`${operationName} failed`);
+  throw lastError ?? new Error(`${operationName} failed`);
 }
 
-/**
- * Calculate exponential backoff delay with jitter
- */
 function calculateBackoff(attemptNumber: number, config: RetryConfig): number {
-  // Exponential: initialDelay * (multiplier ^ attemptNumber)
-  let delayMs = config.initialDelayMs * Math.pow(config.backoffMultiplier, attemptNumber);
-
-  // Cap at maxDelay
-  delayMs = Math.min(delayMs, config.maxDelayMs);
-
-  // Add jitter: random between delayMs * (1 - jitter) and delayMs
-  const jitter = delayMs * config.jitterFactor * Math.random();
-  return delayMs + jitter;
+  const baseDelay = Math.min(
+    config.initialDelayMs * Math.pow(config.backoffMultiplier, attemptNumber),
+    config.maxDelayMs
+  );
+  const jitterRange = baseDelay * Math.max(0, Math.min(1, config.jitterFactor));
+  return Math.max(0, Math.round(baseDelay - jitterRange + Math.random() * jitterRange * 2));
 }
 
-/**
- * Sleep helper
- */
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

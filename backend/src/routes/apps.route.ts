@@ -1,12 +1,186 @@
 import { createHash, randomUUID } from "node:crypto";
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import { Router } from "express";
+import { Types } from "mongoose";
+import rateLimit from "express-rate-limit";
 import { Logger } from "../lib/logger.js";
+import { renderNoticeHtml } from "../lib/notice-renderer.js";
+import { renderQrHtml } from "../lib/qr-renderer.js";
+import { parseRssXml, renderRssHtml, type ParsedRssFeed } from "../lib/rss-renderer.js";
+import { renderWeatherHtml } from "../lib/weather-renderer.js";
+import { renderWayfindingHtml } from "../lib/wayfinding-renderer.js";
+import { renderEventsHtml, renderHotelGuideHtml } from "../lib/hotel-renderers.js";
 import { requireRoles, requireUserAuth } from "../middlewares/auth.js";
 import { MediaModel } from "../models/media.model.js";
 import { contentRepository } from "../repositories/content.repository.js";
 
 const logger = new Logger("AppsRoute");
+const SUPPORTED_APP_TYPES = new Set(["clock", "weather", "rss", "notice", "qrcode", "wayfinding", "events", "hotel-guide"]);
 
+const RSS_MAX_BYTES = 1_000_000;
+const RSS_MAX_REDIRECTS = 3;
+
+function isPrivateAddress(address: string): boolean {
+  const normalized = address.toLowerCase().replace(/^::ffff:/, "");
+  if (isIP(normalized) === 4) {
+    const parts = normalized.split(".").map(Number);
+    const [a = 0, b = 0] = parts;
+    return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) || a >= 224;
+  }
+  return normalized === "::1" || normalized === "::" ||
+    normalized.startsWith("fc") || normalized.startsWith("fd") ||
+    normalized.startsWith("fe8") || normalized.startsWith("fe9") ||
+    normalized.startsWith("fea") || normalized.startsWith("feb");
+}
+
+async function assertPublicHttpsUrl(rawUrl: string): Promise<URL> {
+  const url = new URL(rawUrl);
+  if (url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443")) {
+    throw new Error("Only public HTTPS feed URLs are allowed");
+  }
+  const addresses = await lookup(url.hostname, { all: true, verbatim: true });
+  if (addresses.length === 0 || addresses.some((entry) => isPrivateAddress(entry.address))) {
+    throw new Error("Feed host resolves to a private or restricted address");
+  }
+  return url;
+}
+
+async function fetchPublicRss(rawUrl: string): Promise<string> {
+  let currentUrl = rawUrl;
+  for (let redirectCount = 0; redirectCount <= RSS_MAX_REDIRECTS; redirectCount += 1) {
+    const validatedUrl = await assertPublicHttpsUrl(currentUrl);
+    const response = await fetch(validatedUrl, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(5_000),
+      headers: { "user-agent": "RemoteScreen-RSS/1.0", accept: "application/rss+xml, application/xml, text/xml" }
+    });
+
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location");
+      if (!location || redirectCount === RSS_MAX_REDIRECTS) throw new Error("Unsafe or excessive RSS redirect");
+      currentUrl = new URL(location, validatedUrl).toString();
+      continue;
+    }
+    if (!response.ok || !response.body) throw new Error("RSS upstream returned HTTP " + response.status);
+
+    const declaredLength = Number(response.headers.get("content-length") || 0);
+    if (declaredLength > RSS_MAX_BYTES) throw new Error("RSS response is too large");
+
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > RSS_MAX_BYTES) {
+        await reader.cancel();
+        throw new Error("RSS response is too large");
+      }
+      chunks.push(value);
+    }
+    return Buffer.concat(chunks).toString("utf8");
+  }
+  throw new Error("RSS redirect limit exceeded");
+}
+
+type RssCacheEntry = {
+  feed: ParsedRssFeed;
+  freshUntil: number;
+  staleUntil: number;
+  lastAccess: number;
+};
+
+const RSS_CACHE_FRESH_MS = 5 * 60_000;
+const RSS_CACHE_STALE_MS = 6 * 60 * 60_000;
+const RSS_CACHE_MAX_ENTRIES = 500;
+const rssFeedCache = new Map<string, RssCacheEntry>();
+const rssFeedRequests = new Map<string, Promise<ParsedRssFeed & { stale: boolean }>>();
+
+function normalizeRssCacheKey(rawUrl: string): string {
+  const url = new URL(rawUrl);
+  url.hash = "";
+  return url.toString();
+}
+
+function pruneRssCache(): void {
+  if (rssFeedCache.size < RSS_CACHE_MAX_ENTRIES) return;
+  const oldest = [...rssFeedCache.entries()].sort((a, b) => a[1].lastAccess - b[1].lastAccess)[0]?.[0];
+  if (oldest) rssFeedCache.delete(oldest);
+}
+
+async function loadCachedRss(rawUrl: string): Promise<ParsedRssFeed & { stale: boolean }> {
+  const cacheKey = normalizeRssCacheKey(rawUrl);
+  const now = Date.now();
+  const cached = rssFeedCache.get(cacheKey);
+  if (cached && cached.freshUntil > now) {
+    cached.lastAccess = now;
+    return { ...cached.feed, stale: false };
+  }
+  const pending = rssFeedRequests.get(cacheKey);
+  if (pending) return pending;
+
+  const request = (async () => {
+    try {
+      const feed = parseRssXml(await fetchPublicRss(cacheKey));
+      if (feed.items.length === 0) throw new Error("RSS feed contains no supported items");
+      pruneRssCache();
+      rssFeedCache.set(cacheKey, {
+        feed,
+        freshUntil: Date.now() + RSS_CACHE_FRESH_MS,
+        staleUntil: Date.now() + RSS_CACHE_STALE_MS,
+        lastAccess: Date.now()
+      });
+      return { ...feed, stale: false };
+    } catch (error) {
+      if (cached && cached.staleUntil > Date.now()) {
+        cached.lastAccess = Date.now();
+        return { ...cached.feed, stale: true };
+      }
+      throw error;
+    } finally {
+      rssFeedRequests.delete(cacheKey);
+    }
+  })();
+  rssFeedRequests.set(cacheKey, request);
+  return request;
+}
+function escapeHtml(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function safeJson(value: unknown): string {
+  return JSON.stringify(value)
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e")
+    .replace(/&/g, "\\u0026")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
+}
+
+function safeExternalUrl(value: unknown): string {
+  try {
+    const url = new URL(String(value ?? ""));
+    return url.protocol === "https:" ? url.toString() : "";
+  } catch {
+    return "";
+  }
+}
+
+function safeCssColor(value: unknown, fallback: string): string {
+  const candidate = String(value ?? "").trim();
+  return /^(#[0-9a-fA-F]{3,8}|rgba?\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+(?:\s*,\s*[\d.]+)?\s*\)|hsla?\(\s*[\d.]+(?:deg)?\s*,\s*[\d.]+%\s*,\s*[\d.]+%(?:\s*,\s*[\d.]+)?\s*\))$/.test(candidate)
+    ? candidate
+    : fallback;
+}
 type AppsRouterDeps = {
   jwtSecret: string;
   jwtIssuer: string;
@@ -15,14 +189,24 @@ type AppsRouterDeps = {
 
 export function buildAppsRouter(deps: AppsRouterDeps): Router {
   const router = Router();
+  const rssProxyLimiter = rateLimit({
+    windowMs: 60_000,
+    max: 6_000,
+    standardHeaders: true,
+    legacyHeaders: false
+  });
 
   // 1. PUBLIC RENDERING ENDPOINT
   // Serves standalone interactive HTML pages for each widget type
   router.get("/render/:id", async (req, res) => {
     try {
       const mediaId = req.params.id;
+      if (!Types.ObjectId.isValid(mediaId)) {
+        res.status(404).send("<html><body><h1>App Widget Not Found</h1></body></html>");
+        return;
+      }
       const media = await MediaModel.findById(mediaId).lean();
-      
+
       if (!media || media.mimeType !== "text/html") {
         res.status(404).send("<html><body><h1>App Widget Not Found</h1></body></html>");
         return;
@@ -30,7 +214,7 @@ export function buildAppsRouter(deps: AppsRouterDeps): Router {
 
       const config = (media as any).appConfig || {};
       const appType = (media.storagePath || "").replace("app://", "").split("?")[0];
-      const title = media.filename;
+      const title = escapeHtml(media.filename);
 
       let htmlContent = "";
 
@@ -50,11 +234,26 @@ export function buildAppsRouter(deps: AppsRouterDeps): Router {
         case "qrcode":
           htmlContent = renderQrHtml(title, config);
           break;
+        case "wayfinding":
+          htmlContent = renderWayfindingHtml(title, config);
+          break;
+        case "events":
+          htmlContent = renderEventsHtml(title, config);
+          break;
+        case "hotel-guide":
+          htmlContent = renderHotelGuideHtml(title, config);
+          break;
         default:
           htmlContent = `<html><body><h1>Unknown App Type: ${appType}</h1></body></html>`;
       }
 
-      res.setHeader("Content-Type", "text/html");
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Referrer-Policy", "no-referrer");
+      res.setHeader(
+        "Content-Security-Policy",
+        "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' https: data:; connect-src 'self' https:; font-src https: data:; base-uri 'none'; frame-ancestors 'none'"
+      );
       res.send(htmlContent);
     } catch (err) {
       logger.error("Failed to render app", err instanceof Error ? err : new Error(String(err)));
@@ -63,51 +262,22 @@ export function buildAppsRouter(deps: AppsRouterDeps): Router {
   });
 
   // 2. PUBLIC RSS PROXY ENDPOINT
-  // Fetches XML feeds and returns clean JSON to bypass CORS blocks in WebViews
-  router.get("/rss-proxy", async (req, res) => {
+  router.get("/rss-proxy", rssProxyLimiter, async (req, res) => {
     try {
       const feedUrl = req.query.url;
       if (!feedUrl || typeof feedUrl !== "string") {
-        res.status(400).json({ error: "Missing url parameter" });
+        res.status(400).json({ code: "VALIDATION_ERROR", message: "A feed URL is required" });
         return;
       }
 
-      const response = await fetch(feedUrl);
-      if (!response.ok) {
-        res.status(500).json({ error: `Failed to fetch feed: HTTP ${response.status}` });
-        return;
-      }
-
-      const text = await response.text();
-      // Simple parser for standard RSS XML format
-      const items: any[] = [];
-      const itemRegex = /<item>([\s\S]*?)<\/item>/g;
-      let match;
-
-      while ((match = itemRegex.exec(text)) !== null) {
-        const itemContent = match[1] || "";
-        const titleMatch = itemContent.match(/<title><!\[CDATA\[([\s\S]*?)\]\]><\/title>/) || itemContent.match(/<title>([\s\S]*?)<\/title>/);
-        const descMatch = itemContent.match(/<description><!\[CDATA\[([\s\S]*?)\]\]><\/description>/) || itemContent.match(/<description>([\s\S]*?)<\/description>/);
-        const linkMatch = itemContent.match(/<link>([\s\S]*?)<\/link>/);
-
-        const titleVal = titleMatch && titleMatch[1] ? cleanXml(titleMatch[1]) : "No Title";
-        const descVal = descMatch && descMatch[1] ? cleanXml(descMatch[1]) : "";
-        const linkVal = linkMatch && linkMatch[1] ? linkMatch[1].trim() : "";
-
-        items.push({
-          title: titleVal,
-          description: descVal,
-          link: linkVal
-        });
-        if (items.length >= 25) break; // Limit to 25 items for size optimization
-      }
-
-      res.json({ items });
+      const feed = await loadCachedRss(feedUrl);
+      res.setHeader("Cache-Control", "public, max-age=120, stale-while-revalidate=300");
+      res.json(feed);
     } catch (err) {
-      res.status(500).json({ error: "RSS Proxy failed to parse feed" });
+      logger.warn("RSS proxy rejected or failed upstream request", {}, err instanceof Error ? err : new Error(String(err)));
+      res.status(502).json({ code: "RSS_PROXY_FAILED", message: "Feed could not be fetched safely" });
     }
   });
-
   // 3. AUTHENTICATED ENDPOINTS FOR MANAGING INSTANCES
   router.use(requireUserAuth(deps.jwtSecret, { issuer: deps.jwtIssuer, audience: deps.jwtAudience }));
   router.use(requireRoles(["tenant_owner", "tenant_admin", "operator"]));
@@ -120,6 +290,10 @@ export function buildAppsRouter(deps: AppsRouterDeps): Router {
 
       if (!tenantId || !name || !appType || !config) {
         res.status(400).json({ code: "VALIDATION_ERROR", message: "name, appType, and config are required" });
+        return;
+      }
+      if (!SUPPORTED_APP_TYPES.has(String(appType))) {
+        res.status(400).json({ code: "UNSUPPORTED_APP_TYPE", message: "This app type is not supported" });
         return;
       }
 
@@ -178,7 +352,7 @@ export function buildAppsRouter(deps: AppsRouterDeps): Router {
       const appId = req.params.id;
       const { name, config } = req.body;
 
-      if (!tenantId || !appId || !name || !config) {
+      if (!tenantId || !Types.ObjectId.isValid(appId) || !name || !config) {
         res.status(400).json({ code: "VALIDATION_ERROR", message: "name and config are required" });
         return;
       }
@@ -235,871 +409,239 @@ export function buildAppsRouter(deps: AppsRouterDeps): Router {
 // -------------------------------------------------------------
 
 function cleanXml(str: string): string {
-  return str
+  const plainText = str
     .replace(/<[^>]*>/g, "")
     .replace(/&quot;/g, '"')
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .trim();
+  return escapeHtml(plainText);
 }
 
-function renderClockHtml(title: string, config: any): string {
-  const theme = config.theme || "glassmorphism";
-  const format = config.format || "24h";
-  const showSeconds = config.showSeconds !== false;
-  const timezone = config.timezone || "local";
-  const layout = config.layout || "hybrid";
+function getOverlayStyle(pos: string, x: number, y: number, widthOrSize?: number, isText: boolean = false, textColor?: string, textSize?: number): string {
+  let styleStr = "position: absolute; z-index: 10; display: flex; align-items: center; justify-content: center;";
 
-  const isDigital = layout === "digital";
-  const isAnalog = layout === "analog";
-  const isHybrid = layout === "hybrid";
+  if (widthOrSize && !isText) {
+    styleStr += ` width: ${widthOrSize}px;`;
+  }
+  if (isText) {
+    styleStr += ` color: ${textColor || "#ffffff"}; font-size: ${textSize || 24}px; font-weight: 700; text-shadow: 0 2px 10px rgba(0,0,0,0.5);`;
+  }
 
-  return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>${title}</title>
-  <style>
-    * {
-      box-sizing: border-box;
-    }
-    :root {
-      --bg-color: ${theme === "light" ? "#f8fafc" : "#0f172a"};
-      --card-bg: ${theme === "light" ? "rgba(255,255,255,0.85)" : "rgba(15,23,42,0.6)"};
-      --text-color: ${theme === "light" ? "#0f172a" : "#f8fafc"};
-      --muted-color: ${theme === "light" ? "#64748b" : "#94a3b8"};
-      --border-color: ${theme === "light" ? "rgba(226,232,240,0.8)" : "rgba(51,65,85,0.45)"};
-      --primary-color: #10b981;
-    }
-    html, body {
-      margin: 0;
-      padding: 0;
-      width: 100%;
-      height: 100%;
-    }
-    body {
-      background-color: var(--bg-color);
-      color: var(--text-color);
-      font-family: system-ui, -apple-system, sans-serif;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      overflow: hidden;
-    }
-    
-    /* Digital Layout */
-    .digital-container {
-      text-align: center;
-      padding: clamp(24px, 5vw, 48px);
-      border-radius: clamp(16px, 3.5vw, 32px);
-      background: ${theme === "glassmorphism" ? "linear-gradient(135deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.01) 100%)" : "var(--card-bg)"};
-      border: 1px solid var(--border-color);
-      box-shadow: 0 25px 50px -12px rgba(0,0,0,0.3);
-      backdrop-filter: ${theme === "glassmorphism" ? "blur(12px)" : "none"};
-      width: clamp(280px, 85vw, 650px);
-    }
-    .digital-container .time {
-      font-size: clamp(38px, 11vw, 92px);
-      font-weight: 900;
-      letter-spacing: -2px;
-      margin: 12px 0;
-      color: var(--text-color);
-      text-shadow: 0 0 30px rgba(16, 185, 129, 0.15);
-      line-height: 1.1;
-      font-variant-numeric: tabular-nums;
-    }
-    .digital-container .date {
-      font-size: clamp(12px, 3.2vw, 22px);
-      color: var(--primary-color);
-      text-transform: uppercase;
-      font-weight: 700;
-      letter-spacing: 1px;
-    }
-    .digital-container .timezone {
-      font-size: clamp(10px, 2.2vw, 15px);
-      color: var(--muted-color);
-      margin-top: 14px;
-      font-weight: 500;
-    }
-
-    /* Analog / Hybrid Circle */
-    .clock-circle {
-      position: relative;
-      width: clamp(260px, 80vw, 460px);
-      height: clamp(260px, 80vw, 460px);
-      border-radius: 50%;
-      border: 4px solid var(--border-color);
-      background: ${theme === "glassmorphism" ? "radial-gradient(circle, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.01) 100%)" : "var(--card-bg)"};
-      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.35), inset 0 0 30px rgba(255,255,255,0.05);
-      backdrop-filter: ${theme === "glassmorphism" ? "blur(12px)" : "none"};
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .ticks {
-      position: absolute;
-      width: 100%;
-      height: 100%;
-      top: 0;
-      left: 0;
-      pointer-events: none;
-    }
-    .tick {
-      position: absolute;
-      width: 100%;
-      height: 100%;
-      top: 0;
-      left: 0;
-    }
-    .tick::before {
-      content: '';
-      position: absolute;
-      top: 10px;
-      left: 50%;
-      width: 2px;
-      height: 12px;
-      background-color: var(--muted-color);
-      transform: translateX(-50%);
-      border-radius: 1px;
-    }
-    .tick.hour-3::before, .tick.hour-6::before, .tick.hour-9::before, .tick.hour-12::before {
-      width: 4px;
-      height: 18px;
-      background-color: var(--primary-color);
-      box-shadow: 0 0 8px var(--primary-color);
-    }
-    .center-display {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      text-align: center;
-      pointer-events: none;
-      z-index: 1;
-      padding: 24px;
-    }
-    .hybrid-date {
-      font-size: clamp(10px, 2.5vw, 15px);
-      font-weight: 700;
-      text-transform: uppercase;
-      color: var(--primary-color);
-      letter-spacing: 1px;
-    }
-    .hybrid-time {
-      font-size: clamp(22px, 6.2vw, 42px);
-      font-weight: 800;
-      margin: 8px 0;
-      letter-spacing: -1px;
-      color: var(--text-color);
-      text-shadow: 0 0 20px rgba(16, 185, 129, 0.25);
-      font-variant-numeric: tabular-nums;
-    }
-    .hybrid-timezone {
-      font-size: clamp(9px, 2vw, 13px);
-      color: var(--muted-color);
-      font-weight: 500;
-    }
-    .hand {
-      position: absolute;
-      bottom: 50%;
-      left: 50%;
-      transform-origin: 50% 100%;
-      border-radius: 4px;
-      transition: transform 0.2s cubic-bezier(0.4, 2.08, 0.55, 0.44);
-    }
-    .hour-hand {
-      width: clamp(4px, 1.2vw, 7px);
-      height: 25%;
-      background-color: var(--text-color);
-      z-index: 3;
-    }
-    .minute-hand {
-      width: clamp(3px, 0.8vw, 5px);
-      height: 35%;
-      background-color: var(--text-color);
-      opacity: 0.95;
-      z-index: 2;
-    }
-    .second-hand {
-      width: clamp(1.5px, 0.4vw, 2.5px);
-      height: 42%;
-      background-color: var(--primary-color);
-      z-index: 4;
-      transition: transform 0.1s linear;
-    }
-    .center-dot {
-      position: absolute;
-      width: clamp(10px, 2.5vw, 15px);
-      height: clamp(10px, 2.5vw, 15px);
-      background-color: var(--primary-color);
-      border-radius: 50%;
-      z-index: 5;
-      box-shadow: 0 0 10px var(--primary-color);
-    }
-  </style>
-</head>
-<body>
-  ${isDigital ? `
-  <div class="digital-container">
-    <div class="date" id="date">-- -- ----</div>
-    <div class="time" id="time">00:00:00</div>
-    <div class="timezone" id="tz">${timezone === "local" ? "Local Time" : timezone}</div>
-  </div>
-  ` : `
-  <div class="clock-circle">
-    <div class="ticks">
-      <div class="tick hour-12" style="transform: rotate(0deg)"></div>
-      <div class="tick" style="transform: rotate(30deg)"></div>
-      <div class="tick" style="transform: rotate(60deg)"></div>
-      <div class="tick hour-3" style="transform: rotate(90deg)"></div>
-      <div class="tick" style="transform: rotate(120deg)"></div>
-      <div class="tick" style="transform: rotate(150deg)"></div>
-      <div class="tick hour-6" style="transform: rotate(180deg)"></div>
-      <div class="tick" style="transform: rotate(210deg)"></div>
-      <div class="tick" style="transform: rotate(240deg)"></div>
-      <div class="tick hour-9" style="transform: rotate(270deg)"></div>
-      <div class="tick" style="transform: rotate(300deg)"></div>
-      <div class="tick" style="transform: rotate(330deg)"></div>
-    </div>
-    
-    <div class="center-display">
-      <div class="hybrid-date" id="date">-- -- ----</div>
-      ${isHybrid ? `<div class="hybrid-time" id="time">00:00:00</div>` : ""}
-      <div class="hybrid-timezone" id="tz">${timezone === "local" ? "Local Time" : timezone}</div>
-    </div>
-    
-    <div class="hand hour-hand" id="hour-hand"></div>
-    <div class="hand minute-hand" id="minute-hand"></div>
-    ${showSeconds ? `<div class="hand second-hand" id="second-hand"></div>` : ""}
-    <div class="center-dot"></div>
-  </div>
-  `}
-
-  <script>
-    function updateClock() {
-      const now = new Date();
-      
-      let tzDate = now;
-      const timezone = "${timezone}";
-      if (timezone !== "local") {
-        try {
-          tzDate = new Date(now.toLocaleString("en-US", { timeZone: timezone }));
-        } catch(e) {}
-      }
-      
-      const hours = tzDate.getHours();
-      const minutes = tzDate.getMinutes();
-      const seconds = tzDate.getSeconds();
-      
-      const hrRot = ((hours % 12) * 30) + (minutes * 0.5);
-      const minRot = (minutes * 6) + (seconds * 0.1);
-      const secRot = seconds * 6;
-      
-      const hrHand = document.getElementById("hour-hand");
-      const minHand = document.getElementById("minute-hand");
-      const secHand = document.getElementById("second-hand");
-      
-      if (hrHand) hrHand.style.transform = "translateX(-50%) rotate(" + hrRot + "deg)";
-      if (minHand) minHand.style.transform = "translateX(-50%) rotate(" + minRot + "deg)";
-      if (secHand) secHand.style.transform = "translateX(-50%) rotate(" + secRot + "deg)";
-      
-      const options = {
-        timeZone: "${timezone === "local" ? "" : timezone}",
-        hour: "numeric",
-        minute: "numeric",
-        second: ${showSeconds ? '"numeric"' : "undefined"},
-        hour12: ${format === "12h" ? "true" : "false"}
-      };
-      
-      const dateOptions = {
-        timeZone: "${timezone === "local" ? "" : timezone}",
-        weekday: "long",
-        year: "numeric",
-        month: "long",
-        day: "numeric"
-      };
-
-      try {
-        const formatter = new Intl.DateTimeFormat("en-US", options);
-        const timeElems = document.querySelectorAll("#time");
-        timeElems.forEach(el => el.innerText = formatter.format(now));
-
-        const dateDom = new Intl.DateTimeFormat("en-US", dateOptions);
-        const dateElems = document.querySelectorAll("#date");
-        dateElems.forEach(el => el.innerText = dateDom.format(now));
-      } catch (e) {
-        const timeElems = document.querySelectorAll("#time");
-        timeElems.forEach(el => el.innerText = now.toLocaleTimeString());
-        
-        const dateElems = document.querySelectorAll("#date");
-        dateElems.forEach(el => el.innerText = now.toLocaleDateString());
-      }
-    }
-    
-    updateClock();
-    setInterval(updateClock, 1000);
-  </script>
-</body>
-</html>`;
+  switch (pos) {
+    case "top-left":
+      styleStr += " top: 5%; left: 5%;";
+      break;
+    case "top-right":
+      styleStr += " top: 5%; right: 5%;";
+      break;
+    case "bottom-left":
+      styleStr += " bottom: 5%; left: 5%;";
+      break;
+    case "bottom-right":
+      styleStr += " bottom: 5%; right: 5%;";
+      break;
+    case "top-center":
+      styleStr += " top: 5%; left: 50%; transform: translateX(-50%);";
+      break;
+    case "bottom-center":
+      styleStr += " bottom: 5%; left: 50%; transform: translateX(-50%);";
+      break;
+    case "center":
+      styleStr += " top: 50%; left: 50%; transform: translate(-50%, -50%);";
+      break;
+    case "custom":
+    default:
+      styleStr += ` top: ${y}%; left: ${x}%; transform: translate(-${x}%, -${y}%);`;
+      break;
+  }
+  return styleStr;
 }
 
-function renderWeatherHtml(title: string, config: any): string {
-  const city = config.city || "London";
-  const units = config.units || "metric";
-  const theme = config.theme || "glassmorphism";
+type ModernClockConfig = {
+  timezone: string;
+  locale: "tr" | "en";
+  format: "24h" | "12h";
+  layout: "digital" | "analog" | "split";
+  theme: "midnight" | "paper" | "aurora" | "warm";
+  primaryColor: string;
+  showSeconds: boolean;
+  showDate: boolean;
+  showTimezone: boolean;
+};
 
-  return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>${title}</title>
-  <style>
-    * {
-      box-sizing: border-box;
-    }
-    :root {
-      --bg-color: ${theme === "light" ? "#f1f5f9" : "#0f172a"};
-      --card-bg: ${theme === "light" ? "rgba(255,255,255,0.9)" : "rgba(30,41,59,0.7)"};
-      --text-color: ${theme === "light" ? "#0f172a" : "#f8fafc"};
-      --muted-color: ${theme === "light" ? "#64748b" : "#94a3b8"};
-      --border-color: ${theme === "light" ? "rgba(226,232,240,0.8)" : "rgba(51,65,85,0.5)"};
-    }
-    html, body {
-      margin: 0;
-      padding: 0;
-      width: 100%;
-      height: 100%;
-    }
-    body {
-      background: var(--bg-color);
-      color: var(--text-color);
-      font-family: system-ui, -apple-system, sans-serif;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      overflow: hidden;
-    }
-    .widget {
-      background: ${theme === "glassmorphism" ? "linear-gradient(135deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.01) 100%)" : "var(--card-bg)"};
-      border: 1px solid var(--border-color);
-      backdrop-filter: ${theme === "glassmorphism" ? "blur(16px)" : "none"};
-      border-radius: clamp(16px, 3vw, 32px);
-      padding: clamp(20px, 4vw, 40px);
-      width: clamp(280px, 85vw, 650px);
-      box-shadow: 0 20px 25px -5px rgba(0,0,0,0.15);
-      text-align: center;
-    }
-    .city {
-      font-size: clamp(16px, 4.5vw, 32px);
-      font-weight: 800;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      margin-bottom: 8px;
-    }
-    .temp-row {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: clamp(10px, 3vw, 30px);
-      margin: clamp(12px, 3vw, 30px) 0;
-    }
-    .icon {
-      font-size: clamp(38px, 11vw, 80px);
-    }
-    .temp {
-      font-size: clamp(42px, 13vw, 90px);
-      font-weight: 800;
-    }
-    .condition {
-      font-size: clamp(13px, 3.5vw, 22px);
-      color: #10b981;
-      font-weight: 700;
-      margin-bottom: clamp(16px, 4vw, 30px);
-    }
-    .forecast-grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: clamp(8px, 2vw, 20px);
-      border-top: 1px solid var(--border-color);
-      padding-top: clamp(12px, 3vw, 24px);
-    }
-    .forecast-day {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      font-size: clamp(11px, 2.2vw, 16px);
-    }
-    .day-name {
-      color: var(--muted-color);
-      font-weight: 600;
-      margin-bottom: 6px;
-    }
-    .day-temp {
-      font-weight: 700;
-      margin-top: 6px;
-    }
-  </style>
-</head>
-<body>
-  <div class="widget">
-    <div class="city" id="city-name">${city}</div>
-    <div class="temp-row">
-      <span class="icon" id="weather-icon">🌤️</span>
-      <span class="temp" id="temp">--°</span>
-    </div>
-    <div class="condition" id="condition">Loading Weather...</div>
-    
-    <div class="forecast-grid" id="forecast">
-      <div class="forecast-day">
-        <span class="day-name">Mon</span>
-        <span>☀️</span>
-        <span class="day-temp">--°</span>
-      </div>
-      <div class="forecast-day">
-        <span class="day-name">Tue</span>
-        <span>☁️</span>
-        <span class="day-temp">--°</span>
-      </div>
-      <div class="forecast-day">
-        <span class="day-name">Wed</span>
-        <span>🌧️</span>
-        <span class="day-temp">--°</span>
-      </div>
-    </div>
-  </div>
-
-  <script>
-    const weatherCodes = {
-      0: { text: "Clear Sky", icon: "☀️" },
-      1: { text: "Mainly Clear", icon: "🌤️" },
-      2: { text: "Partly Cloudy", icon: "⛅" },
-      3: { text: "Overcast", icon: "☁️" },
-      45: { text: "Foggy", icon: "🌫️" },
-      48: { text: "Rime Fog", icon: "🌫️" },
-      51: { text: "Light Drizzle", icon: "🌦️" },
-      61: { text: "Light Rain", icon: "🌧️" },
-      63: { text: "Moderate Rain", icon: "🌧️" },
-      80: { text: "Rain Showers", icon: "🌦️" },
-      95: { text: "Thunderstorm", icon: "⛈️" }
-    };
-
-    async function fetchWeather() {
-      try {
-        // 1. Geocode city name to lat/lon using public open-meteo geocoding
-        const geoRes = await fetch("https://geocoding-api.open-meteo.com/v1/search?name=" + encodeURIComponent("${city}") + "&count=1&language=en&format=json");
-        const geoData = await geoRes.json();
-        
-        if (!geoData.results || geoData.results.length === 0) {
-          document.getElementById("condition").innerText = "City Not Found";
-          return;
-        }
-        
-        const loc = geoData.results[0];
-        document.getElementById("city-name").innerText = loc.name + ", " + (loc.country_code || "").toUpperCase();
-
-        // 2. Fetch forecast
-        const weatherRes = await fetch("https://api.open-meteo.com/v1/forecast?latitude=" + loc.latitude + "&longitude=" + loc.longitude + "&current_weather=true&daily=weathercode,temperature_2m_max&timezone=auto");
-        const weatherData = await weatherRes.json();
-        
-        const cur = weatherData.current_weather;
-        const tempVal = Math.round(cur.temperature);
-        
-        // Handle metric/imperial conversion
-        const displayTemp = "${units}" === "imperial" ? Math.round((tempVal * 9/5) + 32) + "°F" : tempVal + "°C";
-        document.getElementById("temp").innerText = displayTemp;
-        
-        const codeInfo = weatherCodes[cur.weathercode] || { text: "Cloudy", icon: "☁️" };
-        document.getElementById("weather-icon").innerText = codeInfo.icon;
-        document.getElementById("condition").innerText = codeInfo.text;
-
-        // Render 3-Day Forecast
-        const daily = weatherData.daily;
-        let forecastHtml = "";
-        const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-        
-        for (let i = 1; i <= 3; i++) {
-          const dateObj = new Date(daily.time[i]);
-          const dayName = days[dateObj.getDay()];
-          const forecastCode = weatherCodes[daily.weathercode[i]] || { text: "Cloudy", icon: "☁️" };
-          const fMaxTemp = Math.round(daily.temperature_2m_max[i]);
-          const displayFMax = "${units}" === "imperial" ? Math.round((fMaxTemp * 9/5) + 32) + "°" : fMaxTemp + "°";
-
-          forecastHtml += '<div class="forecast-day">' +
-            '<span class="day-name">' + dayName + '</span>' +
-            '<span style="font-size: 18px;">' + forecastCode.icon + '</span>' +
-            '<span class="day-temp">' + displayFMax + '</span>' +
-            '</div>';
-        }
-        
-        document.getElementById("forecast").innerHTML = forecastHtml;
-
-      } catch (err) {
-        document.getElementById("condition").innerText = "Weather Unavailable";
-      }
-    }
-
-    fetchWeather();
-    setInterval(fetchWeather, 600000); // refresh every 10 mins
-  </script>
-</body>
-</html>`;
-}
-
-function renderRssHtml(title: string, config: any): string {
-  const rssUrl = config.rssUrl || "";
-  const speed = config.speed || "medium";
-  const layout = config.layout || "ticker";
-
-  // Calculate marquee animation speeds
-  let animationSec = 25;
-  if (speed === "slow") animationSec = 35;
-  if (speed === "fast") animationSec = 15;
-
-  return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>${title}</title>
-  <style>
-    * {
-      box-sizing: border-box;
-    }
-    html, body {
-      margin: 0;
-      padding: 0;
-      width: 100%;
-      height: 100%;
-    }
-    body {
-      background-color: #0f172a;
-      color: #f8fafc;
-      font-family: system-ui, -apple-system, sans-serif;
-      overflow: hidden;
-    }
-    
-    /* Layout 1: News Ticker marquee bar at bottom */
-    .ticker-wrapper {
-      position: absolute;
-      bottom: 0;
-      left: 0;
-      width: 100%;
-      height: clamp(50px, 8vw, 80px);
-      background-color: #1e293b;
-      border-top: 3px solid #10b981;
-      display: flex;
-      align-items: center;
-      overflow: hidden;
-      box-sizing: border-box;
-    }
-    .ticker-label {
-      background-color: #10b981;
-      color: #000000;
-      font-weight: bold;
-      text-transform: uppercase;
-      font-size: clamp(11px, 2vw, 16px);
-      padding: 0 clamp(10px, 3vw, 30px);
-      height: 100%;
-      display: flex;
-      align-items: center;
-      z-index: 10;
-      letter-spacing: 0.5px;
-    }
-    .ticker-content {
-      display: inline-flex;
-      white-space: nowrap;
-      animation: marquee ${animationSec}s linear infinite;
-    }
-    .ticker-item {
-      display: inline-flex;
-      align-items: center;
-      padding-right: clamp(24px, 6vw, 64px);
-      font-size: clamp(14px, 2.5vw, 24px);
-      font-weight: 600;
-    }
-    .ticker-item::after {
-      content: "✦";
-      color: #10b981;
-      margin-left: clamp(12px, 3vw, 32px);
-    }
-    
-    @keyframes marquee {
-      0% { transform: translateX(100vw); }
-      100% { transform: translateX(-100%); }
-    }
- 
-    /* Layout 2: Card Display */
-    .card-wrapper {
-      width: 100%;
-      height: 100%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
-      box-sizing: border-box;
-    }
-    .news-card {
-      background: linear-gradient(135deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.01) 100%);
-      border: 1px solid rgba(255,255,255,0.08);
-      border-radius: clamp(16px, 3vw, 32px);
-      padding: clamp(20px, 4vw, 40px);
-      width: clamp(280px, 85vw, 750px);
-      text-align: left;
-      box-shadow: 0 20px 25px -5px rgba(0,0,0,0.3);
-      animation: cardFade 0.8s ease-out;
-    }
-    .card-source {
-      font-size: clamp(11px, 2vw, 16px);
-      font-weight: bold;
-      color: #10b981;
-      text-transform: uppercase;
-      letter-spacing: 1px;
-    }
-    .card-title {
-      font-size: clamp(16px, 4.5vw, 28px);
-      font-weight: 800;
-      margin: clamp(10px, 2.5vw, 20px) 0;
-      line-height: 1.3;
-    }
-    .card-desc {
-      font-size: clamp(12px, 3.2vw, 18px);
-      color: #94a3b8;
-      line-height: 1.6;
-    }
-    @keyframes cardFade {
-      from { opacity: 0; transform: translateY(10px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-  </style>
-</head>
-<body>
-  <div id="content-area">Loading RSS Feed...</div>
-
-  <script>
-    async function loadFeed() {
-      if (!"${rssUrl}") {
-        document.getElementById("content-area").innerHTML = '<div style="padding: 20px;">No RSS URL configured</div>';
-        return;
-      }
-
-      try {
-        const res = await fetch("/api/v1/apps/rss-proxy?url=" + encodeURIComponent("${rssUrl}"));
-        const data = await res.json();
-        
-        if (!data.items || data.items.length === 0) {
-          document.getElementById("content-area").innerHTML = '<div style="padding: 20px;">Empty News Feed</div>';
-          return;
-        }
-
-        if ("${layout}" === "ticker") {
-          let tickerItems = "";
-          data.items.forEach(item => {
-            tickerItems += '<div class="ticker-item">' + item.title + '</div>';
-          });
-          
-          document.getElementById("content-area").innerHTML = 
-            '<div class="ticker-wrapper">' +
-            '  <div class="ticker-label">NEWS UPDATE</div>' +
-            '  <div class="ticker-content">' + tickerItems + '</div>' +
-            '</div>';
-        } else {
-          // Cards view - display first item and cycle every 8 seconds
-          let currentIndex = 0;
-          
-          function showCard() {
-            const item = data.items[currentIndex];
-            document.getElementById("content-area").innerHTML = 
-              '<div class="card-wrapper">' +
-              '  <div class="news-card">' +
-              '    <div class="card-source">${title}</div>' +
-              '    <div class="card-title">' + item.title + '</div>' +
-              '    <div class="card-desc">' + item.description + '</div>' +
-              '  </div>' +
-              '</div>';
-            currentIndex = (currentIndex + 1) % data.items.length;
-          }
-          
-          showCard();
-          setInterval(showCard, 8000);
-        }
-      } catch (err) {
-        document.getElementById("content-area").innerHTML = '<div style="padding: 20px;">Failed to load feed</div>';
-      }
-    }
-
-    loadFeed();
-  </script>
-</body>
-</html>`;
-}
-
-function renderNoticeHtml(title: string, config: any): string {
-  const headline = config.headline || "Notice";
-  const body = config.body || "No message body specified.";
-  const icon = config.icon || "info";
-  const bgColor = config.bgColor || "#4c1d95";
-  const textColor = config.textColor || "#ffffff";
-
-  const icons: Record<string, string> = {
-    info: "ℹ️",
-    warning: "⚠️",
-    alert: "🚨",
-    checkmark: "✅",
-    none: ""
+export function normalizeClockConfig(config: Record<string, unknown>): ModernClockConfig {
+  const legacyLayout = String(config.layout ?? "");
+  const layout: ModernClockConfig["layout"] = legacyLayout === "analog"
+    ? "analog"
+    : legacyLayout === "digital"
+      ? "digital"
+      : legacyLayout === "split" || legacyLayout === "hybrid"
+        ? "split"
+        : "split";
+  const legacyTheme = String(config.theme ?? "");
+  const theme: ModernClockConfig["theme"] = legacyTheme === "paper" || legacyTheme === "light"
+    ? "paper"
+    : legacyTheme === "aurora" || legacyTheme === "oceanic"
+      ? "aurora"
+      : legacyTheme === "warm" || legacyTheme === "sunset"
+        ? "warm"
+        : "midnight";
+  const defaultAccent: Record<ModernClockConfig["theme"], string> = {
+    midnight: "#6ee7b7",
+    paper: "#0f766e",
+    aurora: "#67e8f9",
+    warm: "#fdba74"
   };
-
-  return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>${title}</title>
-  <style>
-    * {
-      box-sizing: border-box;
-    }
-    html, body {
-      margin: 0;
-      padding: 0;
-      width: 100%;
-      height: 100%;
-    }
-    body {
-      background-color: #0f172a;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-family: system-ui, -apple-system, sans-serif;
-      overflow: hidden;
-    }
-    .card {
-      width: clamp(280px, 85vw, 750px);
-      padding: clamp(24px, 5vw, 48px);
-      border-radius: clamp(18px, 3.5vw, 36px);
-      background-color: ${bgColor};
-      color: ${textColor};
-      text-align: center;
-      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.4);
-      border: 1px solid rgba(255,255,255,0.06);
-      animation: slideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-    }
-    .icon {
-      font-size: clamp(40px, 11vw, 80px);
-      margin-bottom: clamp(16px, 3vw, 24px);
-    }
-    .title {
-      font-size: clamp(20px, 6vw, 40px);
-      font-weight: 800;
-      margin: 0 0 clamp(12px, 3vw, 20px) 0;
-      letter-spacing: -0.5px;
-    }
-    .message {
-      font-size: clamp(13px, 3.8vw, 24px);
-      line-height: 1.6;
-      margin: 0;
-      opacity: 0.9;
-    }
-    @keyframes slideUp {
-      from { opacity: 0; transform: translateY(20px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-  </style>
-</head>
-<body>
-  <div class="card">
-    ${icon !== "none" ? `<div class="icon">${icons[icon] || "ℹ️"}</div>` : ""}
-    <h1 class="title">${headline}</h1>
-    <p class="message">${body}</p>
-  </div>
-</body>
-</html>`;
+  return {
+    timezone: typeof config.timezone === "string" && config.timezone ? config.timezone : "Europe/Istanbul",
+    locale: config.locale === "en" ? "en" : "tr",
+    format: config.format === "12h" ? "12h" : "24h",
+    layout,
+    theme,
+    primaryColor: safeCssColor(config.primaryColor, defaultAccent[theme]),
+    showSeconds: config.showSeconds !== false,
+    showDate: config.showDate !== false,
+    showTimezone: config.showTimezone !== false
+  };
 }
 
-function renderQrHtml(title: string, config: any): string {
-  const url = config.url || "https://screencloud.com";
-  const qrTitle = config.title || "Scan the QR Code";
-  const description = config.description || "Point your phone's camera at the screen.";
+export function renderClockHtml(title: string, rawConfig: Record<string, unknown>): string {
+  const config = normalizeClockConfig(rawConfig);
+  const configJson = safeJson(config);
+  const ticks = Array.from({ length: 60 }, (_, index) =>
+    `<i class="tick${index % 5 === 0 ? " major" : ""}" style="--i:${index}" aria-hidden="true"></i>`
+  ).join("");
 
-  return `<!DOCTYPE html>
-<html>
+  return `<!doctype html>
+<html lang="${config.locale}">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
   <title>${title}</title>
   <style>
-    * {
-      box-sizing: border-box;
+    :root {
+      color-scheme: dark;
+      --accent: ${config.primaryColor};
+      --bg: linear-gradient(145deg,#101827 0%,#07111f 58%,#050a12 100%);
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --line: rgba(255,255,255,.11);
+      --glow-opacity: .13;
     }
-    html, body {
-      margin: 0;
-      padding: 0;
-      width: 100%;
-      height: 100%;
-    }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
     body {
-      background-color: #0f172a;
-      color: #ffffff;
-      font-family: system-ui, -apple-system, sans-serif;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      overflow: hidden;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      text-rendering: geometricPrecision;
+      -webkit-font-smoothing: antialiased;
     }
-    .container {
-      text-align: center;
-      padding: clamp(20px, 4vw, 40px);
-      background: linear-gradient(135deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.01) 100%);
-      border: 1px solid rgba(255,255,255,0.08);
-      border-radius: clamp(16px, 3vw, 32px);
-      width: clamp(280px, 85vw, 650px);
-      box-shadow: 0 20px 25px -5px rgba(0,0,0,0.3);
+    body.theme-paper { color-scheme: light; --bg: linear-gradient(145deg,#fff 0%,#eef2f7 100%); --text:#0f172a; --muted:#64748b; --line:rgba(15,23,42,.11); --glow-opacity:.07; }
+    body.theme-aurora { --bg:linear-gradient(145deg,#071a24 0%,#102a33 48%,#172554 100%); --text:#f0fdfa; --muted:#a5f3fc; --line:rgba(125,211,252,.18); --glow-opacity:.14; }
+    body.theme-warm { --bg:linear-gradient(145deg,#2a1714 0%,#42231d 50%,#1c1012 100%); --text:#fff7ed; --muted:#fed7aa; --line:rgba(253,186,116,.18); --glow-opacity:.12; }
+    .app { position:relative; width:100%; height:100%; min-height:100vh; isolation:isolate; }
+    .ambient { position:absolute; border-radius:50%; background:var(--accent); opacity:var(--glow-opacity); filter:blur(12vmin); pointer-events:none; z-index:-1; }
+    .ambient.one { width:58vmin; height:58vmin; left:-18vmin; top:-25vmin; }
+    .ambient.two { width:44vmin; height:44vmin; right:-14vmin; bottom:-24vmin; opacity:calc(var(--glow-opacity) * .7); }
+    .stage { width:100%; height:100%; min-height:100vh; padding:clamp(34px,6vmin,92px); display:grid; align-items:center; }
+    .digital { min-width:0; font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .time-row { display:flex; align-items:baseline; justify-content:center; }
+    .time-main { font-size:clamp(82px,15.8vw,300px); line-height:.82; letter-spacing:-.072em; font-weight:720; }
+    .colon { color:var(--accent); padding:0 .045em; }
+    .seconds { margin-left:.55em; color:var(--accent); font-size:clamp(24px,3.2vw,62px); font-weight:680; letter-spacing:-.03em; }
+    .period { margin-left:.65em; color:var(--muted); font-size:clamp(14px,1.5vw,30px); font-weight:760; }
+    .meta { color:var(--text); }
+    .date { font-size:clamp(18px,2.2vw,42px); line-height:1.18; font-weight:650; letter-spacing:-.025em; text-transform:capitalize; }
+    .timezone { margin-top:.8em; color:var(--accent); font-size:clamp(12px,1.05vw,21px); font-weight:780; letter-spacing:.14em; text-transform:uppercase; }
+    .meta-mark { display:block; width:clamp(32px,3vw,58px); height:clamp(4px,.38vw,7px); margin-bottom:auto; border-radius:999px; background:var(--accent); }
+    .analog { position:relative; width:min(62vmin,610px); aspect-ratio:1; margin:auto; border:1px solid var(--line); border-radius:50%; box-shadow:inset 0 0 0 clamp(7px,1vmin,13px) rgba(255,255,255,.025),0 5vmin 12vmin rgba(0,0,0,.18); }
+    .analog::after { content:""; position:absolute; inset:17%; border:1px solid var(--line); border-radius:50%; opacity:.36; }
+    .tick { --size:1px; position:absolute; inset:0; transform:rotate(calc(var(--i) * 6deg)); }
+    .tick::after { content:""; position:absolute; left:50%; top:4%; width:var(--size); height:2.2%; border-radius:2px; background:currentColor; opacity:.22; transform:translateX(-50%); }
+    .tick.major { --size:clamp(2px,.2vmin,3px); }
+    .tick.major::after { height:5.5%; opacity:.78; }
+    .number { position:absolute; z-index:1; color:var(--muted); font-size:clamp(15px,2.1vmin,28px); font-weight:700; }
+    .n12 { left:50%; top:10%; transform:translateX(-50%); } .n3 { right:11%; top:50%; transform:translateY(-50%); } .n6 { left:50%; bottom:9%; transform:translateX(-50%); } .n9 { left:11%; top:50%; transform:translateY(-50%); }
+    .hand { position:absolute; z-index:3; left:50%; bottom:50%; border-radius:999px; background:currentColor; transform-origin:50% 100%; transform:translateX(-50%) rotate(0deg); }
+    .hour-hand { width:clamp(5px,.65vmin,9px); height:25%; }
+    .minute-hand { width:clamp(3px,.42vmin,6px); height:35%; }
+    .second-hand { width:1px; height:39%; background:var(--accent); }
+    .pin { position:absolute; z-index:5; left:50%; top:50%; width:clamp(12px,1.7vmin,22px); aspect-ratio:1; border-radius:50%; background:var(--accent); box-shadow:0 0 0 clamp(4px,.6vmin,8px) color-mix(in srgb,var(--accent) 22%,transparent); transform:translate(-50%,-50%); }
+    .stage[data-layout="digital"] { grid-template-rows:1fr auto; gap:clamp(24px,5vmin,70px); text-align:center; }
+    .stage[data-layout="digital"] .analog, .stage[data-layout="split"] .analog { display:none; }
+    .stage[data-layout="digital"] .meta-mark { display:none; }
+    .stage[data-layout="digital"] .meta { padding-bottom:2vmin; text-align:center; }
+    .stage[data-layout="analog"] { grid-template-rows:minmax(0,1fr) auto; gap:clamp(20px,3vmin,42px); text-align:center; }
+    .stage[data-layout="analog"] .digital { display:none; }
+    .stage[data-layout="analog"] .meta { text-align:center; }
+    .stage[data-layout="analog"] .meta-mark { display:none; }
+    .stage[data-layout="split"] { grid-template-columns:minmax(0,1.7fr) minmax(260px,.75fr); }
+    .stage[data-layout="split"] .digital { padding-right:7vw; }
+    .stage[data-layout="split"] .time-main { font-size:clamp(72px,10.8vw,210px); }
+    .stage[data-layout="split"] .meta { align-self:stretch; display:flex; flex-direction:column; justify-content:flex-end; padding:7% 0 7% 14%; border-left:1px solid var(--line); text-align:left; }
+    [hidden] { display:none !important; }
+    @media (max-aspect-ratio:1/1) {
+      .stage { padding:clamp(28px,7vmin,64px); }
+      .stage[data-layout="split"] { grid-template-columns:1fr; grid-template-rows:minmax(0,1fr) auto; }
+      .stage[data-layout="split"] .digital { padding:0; align-self:center; }
+      .stage[data-layout="split"] .time-main { font-size:clamp(68px,19vw,180px); }
+      .stage[data-layout="split"] .meta { padding:7% 0 0; border-left:0; border-top:1px solid var(--line); }
+      .stage[data-layout="split"] .meta-mark { margin:0 0 7%; }
+      .analog { width:min(76vw,58vh); }
     }
-    .header {
-      font-size: clamp(16px, 4.5vw, 30px);
-      font-weight: 800;
-      margin-bottom: clamp(16px, 3.5vw, 32px);
-      letter-spacing: -0.5px;
-    }
-    .qr-box {
-      background-color: #ffffff;
-      padding: clamp(12px, 3vw, 24px);
-      border-radius: clamp(10px, 2vw, 20px);
-      display: inline-block;
-      box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1);
-      margin-bottom: clamp(16px, 3.5vw, 32px);
-    }
-    .desc {
-      font-size: clamp(12px, 3.2vw, 18px);
-      color: #94a3b8;
-      line-height: 1.5;
-      margin: 0;
-    }
+    @media (prefers-reduced-motion:reduce) { * { scroll-behavior:auto !important; } }
   </style>
 </head>
-<body>
-  <div class="container">
-    <div class="header">${qrTitle}</div>
-    <div class="qr-box">
-      <div id="qrcode"></div>
-    </div>
-    <div class="desc">${description}</div>
-  </div>
-
-  <!-- Load QRCode library from public cdnjs -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<body class="theme-${config.theme}">
+  <main class="app" aria-label="${escapeHtml(title)}">
+    <span class="ambient one" aria-hidden="true"></span><span class="ambient two" aria-hidden="true"></span>
+    <section class="stage" data-layout="${config.layout}">
+      <div class="digital" aria-live="off"><div class="time-row"><span class="time-main"><span id="hour">00</span><span class="colon">:</span><span id="minute">00</span></span><span class="seconds" id="second"${config.showSeconds ? "" : " hidden"}>00</span><span class="period" id="period"></span></div></div>
+      <div class="analog" aria-label="Analog clock">${ticks}<b class="number n12">12</b><b class="number n3">3</b><b class="number n6">6</b><b class="number n9">9</b><span class="hand hour-hand" id="hour-hand"></span><span class="hand minute-hand" id="minute-hand"></span><span class="hand second-hand" id="second-hand"${config.showSeconds ? "" : " hidden"}></span><span class="pin"></span></div>
+      <aside class="meta"><span class="meta-mark" aria-hidden="true"></span><div class="date" id="date"${config.showDate ? "" : " hidden"}></div><div class="timezone" id="timezone"${config.showTimezone ? "" : " hidden"}></div></aside>
+    </section>
+  </main>
   <script>
-    const qrSize = Math.min(300, Math.max(150, Math.round(Math.min(window.innerWidth * 0.45, window.innerHeight * 0.45))));
-    new QRCode(document.getElementById("qrcode"), {
-      text: "${url}",
-      width: qrSize,
-      height: qrSize,
-      colorDark : "#000000",
-      colorLight : "#ffffff",
-      correctLevel : QRCode.CorrectLevel.H
-    });
+    const config = ${configJson};
+    const hourEl = document.getElementById("hour");
+    const minuteEl = document.getElementById("minute");
+    const secondEl = document.getElementById("second");
+    const periodEl = document.getElementById("period");
+    const dateEl = document.getElementById("date");
+    const timezoneEl = document.getElementById("timezone");
+    const hourHand = document.getElementById("hour-hand");
+    const minuteHand = document.getElementById("minute-hand");
+    const secondHand = document.getElementById("second-hand");
+    const locale = config.locale === "tr" ? "tr-TR" : "en-GB";
+    let resolvedTimeZone = config.timezone === "local" ? undefined : config.timezone;
+
+    function formatter(options) {
+      try { return new Intl.DateTimeFormat(locale, { ...options, timeZone: resolvedTimeZone }); }
+      catch { resolvedTimeZone = undefined; return new Intl.DateTimeFormat(locale, options); }
+    }
+    function part(parts, type) { return parts.find((item) => item.type === type)?.value || ""; }
+    function update() {
+      const now = new Date();
+      const displayParts = formatter({ hour:"2-digit", minute:"2-digit", second:"2-digit", hour12:config.format === "12h", ...(config.format === "24h" ? { hourCycle:"h23" } : {}) }).formatToParts(now);
+      hourEl.textContent = part(displayParts,"hour").padStart(2,"0");
+      minuteEl.textContent = part(displayParts,"minute").padStart(2,"0");
+      secondEl.textContent = part(displayParts,"second").padStart(2,"0");
+      periodEl.textContent = part(displayParts,"dayPeriod");
+      if (config.showDate) dateEl.textContent = formatter({ weekday:"long", day:"numeric", month:"long", year:"numeric" }).format(now);
+      if (config.showTimezone) timezoneEl.textContent = config.timezone === "local" ? (config.locale === "tr" ? "Yerel saat" : "Local time") : config.timezone.split("/").pop().replaceAll("_"," ");
+
+      const numericParts = new Intl.DateTimeFormat("en-GB", { timeZone:resolvedTimeZone, hour:"2-digit", minute:"2-digit", second:"2-digit", hourCycle:"h23" }).formatToParts(now);
+      const numberPart = (type) => Number(part(numericParts,type) || 0);
+      const hours = numberPart("hour"); const minutes = numberPart("minute"); const seconds = numberPart("second") + now.getMilliseconds() / 1000;
+      hourHand.style.transform = "translateX(-50%) rotate(" + ((hours % 12) * 30 + minutes * .5) + "deg)";
+      minuteHand.style.transform = "translateX(-50%) rotate(" + (minutes * 6 + seconds * .1) + "deg)";
+      secondHand.style.transform = "translateX(-50%) rotate(" + (seconds * 6) + "deg)";
+    }
+    update();
+    setInterval(update, config.layout === "analog" && config.showSeconds ? 100 : 1000);
   </script>
 </body>
 </html>`;

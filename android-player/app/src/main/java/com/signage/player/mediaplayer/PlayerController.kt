@@ -1,17 +1,15 @@
 package com.signage.player.mediaplayer
 
 import android.content.Context
-import androidx.lifecycle.DefaultLifecycleObserver
-import androidx.lifecycle.LifecycleOwner
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import java.io.File
 
 /**
- * Lifecycle-safe wrapper to avoid ExoPlayer leaks.
+ * Process-scoped ExoPlayer wrapper. Activity recreation must not release it.
  */
-class PlayerController(context: Context) : DefaultLifecycleObserver {
+class PlayerController(context: Context) {
     private val player: ExoPlayer = ExoPlayer.Builder(context).build()
     private val appFilesPath = context.applicationContext.filesDir.canonicalPath
 
@@ -19,7 +17,7 @@ class PlayerController(context: Context) : DefaultLifecycleObserver {
         val items = localFilePaths.map { path ->
             val file = File(path)
             require(file.exists() && file.isFile) { "Local media file not found: $path" }
-            require(file.canonicalPath.startsWith(appFilesPath)) {
+            require(isInsideAppStorage(file)) {
                 "Playback from non-local cache path is not allowed: $path"
             }
             MediaItem.fromUri(file.toURI().toString())
@@ -32,7 +30,7 @@ class PlayerController(context: Context) : DefaultLifecycleObserver {
     fun setSingleVideo(localFilePath: String) {
         val file = File(localFilePath)
         require(file.exists() && file.isFile) { "Local media file not found: $localFilePath" }
-        require(file.canonicalPath.startsWith(appFilesPath)) {
+        require(isInsideAppStorage(file)) {
             "Playback from non-local cache path is not allowed: $localFilePath"
         }
         val item = MediaItem.fromUri(file.toURI().toString())
@@ -67,12 +65,14 @@ class PlayerController(context: Context) : DefaultLifecycleObserver {
         return player
     }
 
-    override fun onStop(owner: LifecycleOwner) {
-        player.pause()
+    /** Only call when the application-level graph is intentionally torn down. */
+    fun release() {
+        player.release()
     }
 
-    override fun onDestroy(owner: LifecycleOwner) {
-        player.release()
+    private fun isInsideAppStorage(file: File): Boolean {
+        val path = file.canonicalPath
+        return path == appFilesPath || path.startsWith(appFilesPath + File.separator)
     }
 }
 

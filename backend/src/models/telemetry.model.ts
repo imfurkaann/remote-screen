@@ -14,10 +14,10 @@ export type TelemetryDoc = {
 
 const TelemetrySchema = new Schema<TelemetryDoc>(
   {
-    tenantId: { type: String, required: true, index: true },
-    deviceId: { type: String, required: true, index: true },
+    tenantId: { type: String, required: true, trim: true, maxlength: 64, index: true },
+    deviceId: { type: String, required: true, trim: true, maxlength: 64, index: true },
     kind: { type: String, required: true, enum: TELEMETRY_KINDS, index: true },
-    correlationId: { type: String, required: true, index: true },
+    correlationId: { type: String, required: true, trim: true, maxlength: 128, index: true },
     payload: { type: Schema.Types.Mixed, default: {} }
   },
   { timestamps: true }
