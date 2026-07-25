@@ -242,7 +242,7 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
           timezone: 1, screenGroup: 1, operatingHours: 1, scaleMode: 1,
           notes: 1, currentPlaylistId: 1, lastSeenAt: 1, lastHeartbeatAt: 1,
           ipAddress: 1, playerVersion: 1, osVersion: 1, resolution: 1,
-          memoryTotal: 1, memoryUsed: 1, diagnostics: 1
+          memoryTotal: 1, memoryUsed: 1, screenOn: 1, diagnostics: 1
         })
         .sort({ updatedAt: -1, _id: -1 })
         .skip((page - 1) * limit)
@@ -270,6 +270,7 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
         current_playlist_id: device.currentPlaylistId,
         last_seen_at: device.lastSeenAt ? device.lastSeenAt.toISOString() : null,
         last_heartbeat_at: device.lastHeartbeatAt ? device.lastHeartbeatAt.toISOString() : null,
+        screen_on: typeof device.screenOn === "boolean" ? device.screenOn : null,
         ip_address: device.ipAddress ?? null,
         player_version: device.playerVersion ?? null,
         os_version: device.osVersion ?? null,
@@ -384,6 +385,7 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
           current_playlist_id: device.currentPlaylistId,
           last_seen_at: device.lastSeenAt ? device.lastSeenAt.toISOString() : null,
           last_heartbeat_at: device.lastHeartbeatAt ? device.lastHeartbeatAt.toISOString() : null,
+          screen_on: typeof device.screenOn === "boolean" ? device.screenOn : null,
           ip_address: device.ipAddress ?? null,
           player_version: device.playerVersion ?? null,
           os_version: device.osVersion ?? null,
@@ -604,6 +606,17 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
       const query: Record<string, any> = buildMediaFilter(req.auth!, { status: "ready" });
       const search = String(req.query.search ?? "").trim().slice(0, 120);
       const folder = req.query.folder === undefined ? undefined : String(req.query.folder).trim();
+      const kind = String(req.query.kind ?? "all").trim().toLowerCase();
+      if (!new Set(["all", "media", "apps"]).has(kind)) {
+        res.status(400).json({ code: "VALIDATION_ERROR", message: "kind must be all, media, or apps" });
+        return;
+      }
+      if (kind === "apps") {
+        query.mimeType = "text/html";
+        query.storagePath = /^app:\/\//;
+      } else if (kind === "media") {
+        query.mimeType = { $ne: "text/html" };
+      }
       if (search) query.filename = { $regex: `^${escapeRegex(search)}`, $options: "i" };
       if (folder !== undefined) query.folder = folder === "" || folder === "root" ? null : folder;
 

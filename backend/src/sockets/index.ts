@@ -131,6 +131,7 @@ class HeartbeatBuffer {
 export async function createSocketServer(httpServer: HttpServer, deps: SocketDeps): Promise<Server> {
   const heartbeatBuffer = new HeartbeatBuffer();
   const disconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const screenStateByDevice = new Map<string, boolean>();
   heartbeatBuffer.start();
   const staleStatusTimer = setInterval(() => {
     const now = Date.now();
@@ -313,6 +314,11 @@ export async function createSocketServer(httpServer: HttpServer, deps: SocketDep
       const device = await DeviceModel.findOne(query);
       if (device) {
         const connectedAt = new Date();
+        if (typeof device.screenOn === "boolean") {
+          screenStateByDevice.set(deviceId, device.screenOn);
+        } else {
+          screenStateByDevice.delete(deviceId);
+        }
         device.status = "online";
         device.lastSeenAt = connectedAt;
         device.lastHeartbeatAt = connectedAt;
@@ -323,7 +329,8 @@ export async function createSocketServer(httpServer: HttpServer, deps: SocketDep
             device_id: deviceId,
             hardware_id: hardwareId,
             status: "online",
-            last_seen_at: connectedAt.toISOString()
+            last_seen_at: connectedAt.toISOString(),
+            screen_on: typeof device.screenOn === "boolean" ? device.screenOn : null
           },
           { tenantId, pairedOwnerUserId }
         );
@@ -455,10 +462,11 @@ export async function createSocketServer(httpServer: HttpServer, deps: SocketDep
     // -----------------------------------------------------------------------
     socket.on("HEARTBEAT", (payload?: Record<string, unknown>) => {
       const query = { _id: deviceId, tenantId, hardwareId };
+      const heartbeatAt = new Date();
 
       const fields: Record<string, unknown> = {
-        lastSeenAt: new Date(),
-        lastHeartbeatAt: new Date(),
+        lastSeenAt: heartbeatAt,
+        lastHeartbeatAt: heartbeatAt,
         status: "online"
       };
 
@@ -475,6 +483,24 @@ export async function createSocketServer(httpServer: HttpServer, deps: SocketDep
         copyBoundedString("resolution", "resolution", 32);
         copyBoundedString("memoryTotal", "memoryTotal", 32);
         copyBoundedString("memoryUsed", "memoryUsed", 32);
+
+        const screenOn = payload.screenOn;
+        if (typeof screenOn === "boolean") {
+          fields.screenOn = screenOn;
+          if (screenStateByDevice.get(deviceId) !== screenOn) {
+            screenStateByDevice.set(deviceId, screenOn);
+            emitDashboardDeviceStatus(
+              {
+                device_id: deviceId,
+                hardware_id: hardwareId,
+                status: "online",
+                last_seen_at: heartbeatAt.toISOString(),
+                screen_on: screenOn
+              },
+              { tenantId, pairedOwnerUserId }
+            );
+          }
+        }
       }
 
       heartbeatBuffer.upsert(deviceId, query, fields);
@@ -492,6 +518,7 @@ export async function createSocketServer(httpServer: HttpServer, deps: SocketDep
           if (remainingSockets.length > 0) return;
 
           heartbeatBuffer.evict(deviceId);
+          screenStateByDevice.delete(deviceId);
           const updated = await DeviceModel.findOneAndUpdate(
             { _id: deviceId, tenantId, hardwareId, lastHeartbeatAt: { $lte: disconnectedAt } },
             { $set: { status: "offline" } },

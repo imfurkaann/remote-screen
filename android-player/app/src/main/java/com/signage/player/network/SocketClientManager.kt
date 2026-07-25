@@ -37,6 +37,7 @@ object SocketClientManager {
     private var socket: Socket? = null
     private var heartbeatJob: kotlinx.coroutines.Job? = null
     private var appContext: android.content.Context? = null
+    private var screenStateReceiver: android.content.BroadcastReceiver? = null
     private var pendingAckStore: PendingCommandAckStore? = null
     private val inFlightCommands = ConcurrentHashMap.newKeySet<String>()
 
@@ -68,6 +69,7 @@ object SocketClientManager {
         socketBaseUrl: String = "https://10.0.2.2:4100"
     ) {
         appContext = context.applicationContext
+        registerScreenStateReceiver()
         pendingAckStore = PendingCommandAckStore(context)
         connect(deviceId, accessToken, socketBaseUrl)
     }
@@ -222,6 +224,33 @@ object SocketClientManager {
         reconnectAttempt = 0
     }
 
+    private fun registerScreenStateReceiver() {
+        if (screenStateReceiver != null) return
+        val ctx = appContext ?: return
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
+                if (intent?.action == android.content.Intent.ACTION_SCREEN_ON ||
+                    intent?.action == android.content.Intent.ACTION_SCREEN_OFF
+                ) {
+                    emitScreenPowerHeartbeat()
+                }
+            }
+        }
+        val filter = android.content.IntentFilter().apply {
+            addAction(android.content.Intent.ACTION_SCREEN_ON)
+            addAction(android.content.Intent.ACTION_SCREEN_OFF)
+        }
+        ctx.registerReceiver(receiver, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
+        screenStateReceiver = receiver
+    }
+
+    private fun emitScreenPowerHeartbeat() {
+        val ctx = appContext ?: return
+        val connectedSocket = socket?.takeIf { it.connected() } ?: return
+        val powerManager = ctx.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager
+        connectedSocket.emit("HEARTBEAT", JSONObject().put("screenOn", powerManager?.isInteractive == true))
+    }
+
     private fun startHeartbeat() {
         heartbeatJob?.cancel()
         heartbeatJob = socketScope.launch {
@@ -238,6 +267,8 @@ object SocketClientManager {
                             val (total, used) = getMemoryInfo(ctx)
                             put("memoryTotal", total)
                             put("memoryUsed", used)
+                            val powerManager = ctx.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager
+                            put("screenOn", powerManager?.isInteractive == true)
                         } catch (e: Exception) {
                             Log.e(TAG, "Error compiling heartbeat telemetry", e)
                         }

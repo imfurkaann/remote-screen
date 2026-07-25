@@ -5,6 +5,7 @@ export function mergeDeviceStatus<T extends {
   status: string;
   last_seen_at?: string | null;
   last_heartbeat_at?: string | null;
+  screen_on?: boolean | null;
 }>(
   devices: readonly T[],
   event: DeviceStatusEvent
@@ -14,7 +15,8 @@ export function mergeDeviceStatus<T extends {
         ...device,
         status: event.status,
         last_seen_at: event.last_seen_at,
-        ...(event.status === "online" ? { last_heartbeat_at: event.last_seen_at } : {})
+        ...(event.status === "online" ? { last_heartbeat_at: event.last_seen_at } : {}),
+        ...(event.screen_on !== undefined ? { screen_on: event.screen_on } : {})
       }
     : device
   );

@@ -5,17 +5,19 @@ import { commandAckStatus, mergeDeviceStatus } from "./fleet-events.ts";
 
 describe("fleet socket event reducers", () => {
   it("updates only the matching device", () => {
-    const first = { id: "a", status: "offline", last_seen_at: null, last_heartbeat_at: null };
-    const second = { id: "b", status: "offline", last_seen_at: null, last_heartbeat_at: null };
+    const first = { id: "a", status: "offline", last_seen_at: null, last_heartbeat_at: null, screen_on: null };
+    const second = { id: "b", status: "offline", last_seen_at: null, last_heartbeat_at: null, screen_on: null };
     const result = mergeDeviceStatus([first, second], {
       device_id: "b",
       hardware_id: "hw-b",
       status: "online",
-      last_seen_at: "2026-07-21T12:00:00.000Z"
+      last_seen_at: "2026-07-21T12:00:00.000Z",
+      screen_on: true
     });
     assert.equal(result[0], first);
     assert.equal(result[1]?.status, "online");
     assert.equal(result[1]?.last_heartbeat_at, "2026-07-21T12:00:00.000Z");
+    assert.equal(result[1]?.screen_on, true);
   });
 
   it("does not fabricate a heartbeat from an offline event", () => {
@@ -24,6 +26,7 @@ describe("fleet socket event reducers", () => {
         id: "a",
         status: "online",
         last_seen_at: "2026-07-21T12:00:00.000Z",
+        screen_on: true,
         last_heartbeat_at: "2026-07-21T12:00:00.000Z"
       }],
       { device_id: "a", hardware_id: "hw-a", status: "offline", last_seen_at: "2026-07-21T12:01:00.000Z" }

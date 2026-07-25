@@ -3,11 +3,13 @@
 import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import PairScreenModal from "../../../components/PairScreenModal";
+import ScreenPowerBadge from "@/components/ScreenPowerBadge";
 import { useConfirm } from "@/components/ConfirmProvider";
 import { buildDeviceQuery } from "@/lib/device-query";
 import { useFleetSocket } from "@/lib/use-fleet-socket";
 import { mergeDeviceStatus } from "@/lib/fleet-events";
 import { getDevicePresence } from "@/lib/device-presence";
+import { getScreenPowerState } from "@/lib/screen-power";
 
 type DeviceItem = {
   id: string;
@@ -17,6 +19,7 @@ type DeviceItem = {
   status: string;
   last_seen_at?: string | null;
   last_heartbeat_at?: string | null;
+  screen_on?: boolean | null;
   current_playlist_id?: string | null;
   screen_group?: string | null;
 };
@@ -565,15 +568,17 @@ export default function ScreensPage() {
                       })()}
 
                       {/* Status badge */}
-                      <div style={{ flexShrink: 0 }}>
+                      <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", justifyContent: "flex-end" }}>
                         {(() => {
                           const status = getDevicePresence({
                             status: screen.status,
                             lastHeartbeatAt: screen.last_heartbeat_at
                           }, nowMs);
                           const s = STATUS_STYLE[status];
+                          const screenPower = getScreenPowerState(status, screen.screen_on);
                           return (
-                            <span style={{
+                            <>
+                              <span style={{
                               display: "inline-flex", alignItems: "center", gap: "8px",
                               padding: "6px 12px", borderRadius: "999px",
                               fontSize: "12px", fontWeight: 700, textTransform: "uppercase",
@@ -591,8 +596,10 @@ export default function ScreensPage() {
                                   animation: status === "online" ? "pulse 2s infinite" : undefined
                                 }} />
                               )}
-                              {s.label}
-                            </span>
+                                {s.label}
+                              </span>
+                              <ScreenPowerBadge state={screenPower} />
+                            </>
                           );
                         })()}
                       </div>

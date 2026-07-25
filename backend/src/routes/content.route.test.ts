@@ -301,6 +301,38 @@ describe("content lifecycle", () => {
     const operatorPayload = (await operatorResponse.json()) as { total: number };
     assert.equal(operatorPayload.total, 1);
   });
+  it("separates apps from uploaded media for playlist libraries", async () => {
+    const baseUrl = await startServer();
+    await MediaModel.create([
+      {
+        tenantId: "tenant-test", ownerUserId: "user-demo", filename: "Lobby Guide", mimeType: "text/html",
+        sizeBytes: 0, checksumSha256: "c".repeat(64), storagePath: "app://wayfinding?id=test",
+        publicUrl: "/api/v1/apps/render/test", status: "ready", folder: null
+      },
+      {
+        tenantId: "tenant-test", ownerUserId: "user-demo", filename: "lobby.png", mimeType: "image/png",
+        sizeBytes: 10, checksumSha256: "d".repeat(64), storagePath: "uploads/lobby.png",
+        publicUrl: "/uploads/lobby.png", status: "ready", folder: null
+      }
+    ]);
+
+    const headers = { authorization: `Bearer ${makeUserToken("operator")}` };
+    const [appsResponse, mediaResponse, invalidResponse] = await Promise.all([
+      fetch(`${baseUrl}/api/v1/content/media?kind=apps`, { headers }),
+      fetch(`${baseUrl}/api/v1/content/media?kind=media`, { headers }),
+      fetch(`${baseUrl}/api/v1/content/media?kind=unknown`, { headers })
+    ]);
+    assert.equal(appsResponse.status, 200);
+    assert.equal(mediaResponse.status, 200);
+    assert.equal(invalidResponse.status, 400);
+
+    const appsPayload = (await appsResponse.json()) as { media: Array<{ filename: string; storage_path: string }> };
+    const mediaPayload = (await mediaResponse.json()) as { media: Array<{ filename: string }> };
+    assert.deepEqual(appsPayload.media.map((item) => item.filename), ["Lobby Guide"]);
+    assert.equal(appsPayload.media[0]?.storage_path, "app://wayfinding?id=test");
+    assert.deepEqual(mediaPayload.media.map((item) => item.filename), ["lobby.png"]);
+  });
+
   it("detaches removed screens without deleting hardware identity or replaying old commands", async () => {
     const baseUrl = await startServer();
     const device = await DeviceModel.create({

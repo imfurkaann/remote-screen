@@ -43,6 +43,7 @@ export type DeviceStatusPayload = {
   hardware_id: string;
   status: "online" | "degraded" | "offline";
   last_seen_at: string;
+  screen_on?: boolean | null;
 };
 
 export function buildCanonicalDeviceRooms(deviceIds: readonly string[]): string[] {

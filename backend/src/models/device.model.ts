@@ -18,6 +18,7 @@ export type DeviceDoc = {
   currentPlaylistId: string | null;
   lastHeartbeatAt: Date | null;
   lastSeenAt: Date | null;
+  screenOn: boolean | null;
   ipAddress: string | null;
   playerVersion: string | null;
   osVersion: string | null;
@@ -54,6 +55,7 @@ const DeviceSchema = new Schema<DeviceDoc>(
     currentPlaylistId: { type: String, default: null, trim: true, maxlength: 64 },
     lastHeartbeatAt: { type: Date, default: null, index: true },
     lastSeenAt: { type: Date, default: null, index: true },
+    screenOn: { type: Boolean, default: null },
     ipAddress: { type: String, default: null, trim: true, maxlength: 64 },
     playerVersion: { type: String, default: null, trim: true, maxlength: 64 },
     osVersion: { type: String, default: null, trim: true, maxlength: 128 },

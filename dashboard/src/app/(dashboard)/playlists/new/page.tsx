@@ -17,6 +17,7 @@ type MediaFile = {
   checksum_sha256: string;
   media_url?: string | null;
   mime_type?: string | null;
+  storage_path?: string | null;
 };
 
 type PlaylistItem = {
@@ -41,6 +42,20 @@ function getFileType(filename: string): "image" | "video" | "file" {
   if (["jpg", "jpeg", "png", "gif", "webp", "svg", "avif"].includes(ext)) return "image";
   if (["mp4", "mov", "avi", "webm", "mkv"].includes(ext)) return "video";
   return "file";
+}
+
+function isApp(file: MediaFile): boolean {
+  return file.mime_type === "text/html" || String(file.storage_path ?? "").startsWith("app://");
+}
+
+function contentTypeLabel(file: MediaFile): string {
+  if (!isApp(file)) return getFileType(file.filename);
+  const appType = String(file.storage_path ?? "").replace("app://", "").split("?")[0] ?? "";
+  const labels: Record<string, string> = {
+    clock: "Saat Uygulaması", weather: "Hava Durumu", rss: "RSS Uygulaması", notice: "Duyuru Uygulaması",
+    qrcode: "QR Uygulaması", wayfinding: "Otel Yönlendirme", events: "Etkinlik & Toplantı", "hotel-guide": "Otel Rehberi"
+  };
+  return labels[appType] ?? "Uygulama";
 }
 
 function fmtDuration(ms: number) {
@@ -130,7 +145,7 @@ function FileTypeIcon({ filename }: { filename: string }) {
 /* ─── Thumbnail ──────────────────────────────────────────── */
 function Thumb({ file, size = 44 }: { file: MediaFile; size?: number }) {
   const [err, setErr] = useState(false);
-  const type = getFileType(file.filename);
+  const type = isApp(file) ? "app" : getFileType(file.filename);
   const url = previewUrl(file.media_url);
   const showImg = (type === "image" || type === "video") && url && !err;
   return (
@@ -144,7 +159,9 @@ function Thumb({ file, size = 44 }: { file: MediaFile; size?: number }) {
         // eslint-disable-next-line @next/next/no-img-element
         ? <img src={url} alt={file.filename} onError={() => setErr(true)}
             style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
-        : <FileTypeIcon filename={file.filename} />}
+        : type === "app"
+          ? <span style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", background: "linear-gradient(135deg,#0f766e,#0f172a)", color: "#fff", fontSize: Math.max(9, Math.round(size * .22)), fontWeight: 900, letterSpacing: ".08em" }}>APP</span>
+          : <FileTypeIcon filename={file.filename} />}
       {type === "video" && showImg && (
         <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.28)", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <svg width="12" height="12" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z" /></svg>
@@ -515,7 +532,7 @@ function SidebarItem({ file, onAdd }: { file: MediaFile; onAdd: (f: MediaFile) =
       </div>
       <div style={{ flex: 1, minWidth: 0 }} onClick={() => onAdd(file)}>
         <p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: "#0f172a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{trimName(file.filename)}</p>
-        <p style={{ margin: "2px 0 0", fontSize: 11, color: "#94a3b8", textTransform: "capitalize" }}>{getFileType(file.filename)}</p>
+        <p style={{ margin: "2px 0 0", fontSize: 11, color: isApp(file) ? "#0f766e" : "#94a3b8", textTransform: "capitalize" }}>{contentTypeLabel(file)}</p>
       </div>
     </div>
   );
@@ -537,7 +554,7 @@ function PlaylistItemRow({
   onDrop: () => void;
 }) {
   const [hover, setHover] = useState(false);
-  const type = getFileType(item.media.filename);
+  const type = contentTypeLabel(item.media);
   const secs = item.durationMs / 1000;
 
   return (
@@ -619,7 +636,7 @@ export default function NewPlaylistPage() {
   const [mediaPage, setMediaPage] = useState(1);
   const [mediaTotalPages, setMediaTotalPages] = useState(1);
   const [mediaLoading, setMediaLoading] = useState(false);
-  const [sidebarTab, setSidebarTab] = useState<"recent" | "media">("media");
+  const [sidebarTab, setSidebarTab] = useState<"recent" | "media" | "apps">("media");
   const [showModal, setShowModal] = useState(false);
   const [saving, setSaving] = useState(false);
   const creationRequestId = useRef(crypto.randomUUID());
@@ -630,14 +647,18 @@ export default function NewPlaylistPage() {
   /* Load only the visible media page; server-side search keeps large libraries responsive. */
   useEffect(() => {
     setMediaPage(1);
-  }, [mediaSearch]);
+  }, [mediaSearch, sidebarTab]);
 
   useEffect(() => {
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       setMediaLoading(true);
       try {
-        const query = new URLSearchParams({ page: String(mediaPage), limit: "50" });
+        const query = new URLSearchParams({
+          page: String(mediaPage),
+          limit: "50",
+          kind: sidebarTab === "apps" ? "apps" : "media"
+        });
         if (mediaSearch.trim()) query.set("search", mediaSearch.trim());
         const payload = await fetchJson<{ media?: MediaFile[]; totalPages?: number }>(
           `/api/content/media?${query.toString()}`,
@@ -656,7 +677,7 @@ export default function NewPlaylistPage() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [mediaPage, mediaSearch]);
+  }, [mediaPage, mediaSearch, sidebarTab]);
 
   const filteredMedia = allMedia.filter(f => !f.filename.startsWith("Single Media:"));
   const recentMedia = filteredMedia.slice(0, 8);
@@ -706,7 +727,7 @@ export default function NewPlaylistPage() {
   /* save */
   const handleSave = async () => {
     if (!playlistName.trim() || items.length === 0) {
-      setSaveMsg({ text: "Playlist adı ve en az bir medya gerekli.", ok: false });
+      setSaveMsg({ text: "Playlist adı ve en az bir medya veya uygulama gerekli.", ok: false });
       return;
     }
     setSaving(true);
@@ -868,48 +889,46 @@ export default function NewPlaylistPage() {
             {/* Search */}
             <div style={{ padding: "10px 12px 6px", position: "relative" }}>
               <span style={{ position: "absolute", left: 22, top: "50%", transform: "translateY(-50%)", color: "#94a3b8", display: "flex", pointerEvents: "none" }}><IconSearch /></span>
-              <input type="search" placeholder="Search content…" value={mediaSearch} onChange={e => setMediaSearch(e.target.value)}
+              <input type="search" placeholder={sidebarTab === "apps" ? "Uygulamalarda ara…" : "İçeriklerde ara…"} value={mediaSearch} onChange={e => setMediaSearch(e.target.value)}
                 style={{ width: "100%", paddingLeft: 30, paddingRight: 10, height: 33, border: "1px solid #e8edf3", borderRadius: 7, fontSize: 13, background: "#f8fafc", boxSizing: "border-box", outline: "none" }} />
             </div>
 
             {/* Sub-tabs */}
             <div style={{ display: "flex", gap: 0, padding: "0 12px 8px", borderBottom: "1px solid #f1f5f9" }}>
-              {(["recent", "media"] as const).map(t => (
+              {(["recent", "media", "apps"] as const).map(t => (
                 <button key={t} onClick={() => setSidebarTab(t)} type="button" style={{
                   background: sidebarTab === t ? "#f0fdf9" : "none", border: "none", borderRadius: 7,
                   padding: "5px 12px", fontSize: 13, fontWeight: sidebarTab === t ? 700 : 500,
                   color: sidebarTab === t ? "#10b981" : "#64748b", cursor: "pointer",
                 }}>
-                  {t.charAt(0).toUpperCase() + t.slice(1)}
+                  {t === "recent" ? "Son" : t === "media" ? "Medya" : "Apps"}
                 </button>
               ))}
-              {(["Templates", "Apps"] as const).map(t => (
-                <button key={t} type="button" style={{ background: "none", border: "none", borderRadius: 7, padding: "5px 12px", fontSize: 13, color: "#94a3b8", cursor: "pointer" }}>{t}</button>
-              ))}
+              <button type="button" disabled style={{ background: "none", border: "none", borderRadius: 7, padding: "5px 8px", fontSize: 12, color: "#cbd5e1" }}>Şablonlar</button>
             </div>
 
             {/* Library heading */}
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px 4px" }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.5px" }}>Library</span>
-              <button onClick={() => setShowModal(true)} title="Medya yükle" style={{
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.5px" }}>{sidebarTab === "apps" ? "Uygulama Kütüphanesi" : "Medya Kütüphanesi"}</span>
+              {sidebarTab !== "apps" && <button onClick={() => setShowModal(true)} title="Medya yükle" style={{
                 width: 24, height: 24, borderRadius: 6, background: "#f0fdf9", border: "1px solid rgba(16,185,129,0.2)",
                 color: "#10b981", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0,
               }}>
                 <IconPlus />
-              </button>
+              </button>}
             </div>
 
             {/* Media list */}
             <div style={{ flex: 1, overflowY: "auto", padding: "0 2px 12px" }}>
               {displayedMedia.length === 0 ? (
-                <p style={{ textAlign: "center", fontSize: 13, color: "#94a3b8", margin: "32px 0" }}>Medya bulunamadı</p>
+                <p style={{ textAlign: "center", fontSize: 13, color: "#94a3b8", margin: "32px 12px", lineHeight: 1.5 }}>{sidebarTab === "apps" ? "Henüz oluşturulmuş bir uygulama bulunmuyor." : "Medya bulunamadı"}</p>
               ) : (
                 displayedMedia.map(f => (
                   <SidebarItem key={f.id} file={f} onAdd={addMedia} />
                 ))
               )}
             </div>
-            {sidebarTab === "media" && (
+            {sidebarTab !== "recent" && (
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", borderTop: "1px solid #e8edf3" }}>
                 <button type="button" disabled={mediaPage <= 1 || mediaLoading} onClick={() => setMediaPage(page => Math.max(1, page - 1))}>Önceki</button>
                 <span style={{ fontSize: 12, color: "#64748b" }}>{mediaLoading ? "Yükleniyor…" : `${mediaPage} / ${mediaTotalPages}`}</span>

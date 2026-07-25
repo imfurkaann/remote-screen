@@ -4,9 +4,11 @@ import { useEffect, useState, useMemo, useRef } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useConfirm } from "@/components/ConfirmProvider";
+import ScreenPowerBadge from "@/components/ScreenPowerBadge";
 import { useFleetSocket } from "@/lib/use-fleet-socket";
 import { commandAckStatus } from "@/lib/fleet-events";
 import { getDevicePresence, type DevicePresence } from "@/lib/device-presence";
+import { getScreenPowerState } from "@/lib/screen-power";
 
 // Define Types
 type Device = {
@@ -23,6 +25,7 @@ type Device = {
   notes?: string | null;
   last_seen_at?: string | null;
   last_heartbeat_at?: string | null;
+  screen_on?: boolean | null;
   current_playlist_id?: string | null;
   ip_address?: string | null;
   player_version?: string | null;
@@ -417,7 +420,8 @@ export default function ScreenDetailPage() {
             ...current,
             status: event.status,
             last_seen_at: event.last_seen_at,
-            ...(event.status === "online" ? { last_heartbeat_at: event.last_seen_at } : {})
+            ...(event.status === "online" ? { last_heartbeat_at: event.last_seen_at } : {}),
+            ...(event.screen_on !== undefined ? { screen_on: event.screen_on } : {})
           }
         : current
       );
@@ -882,6 +886,7 @@ export default function ScreenDetailPage() {
     lastHeartbeatAt: device?.last_heartbeat_at
   }, nowMs);
   const presenceStyle = PRESENCE_STYLE[presence];
+  const screenPower = getScreenPowerState(presence, device?.screen_on);
 
   // Dynamic metrics details based on device telemetry
   const deviceDetails = useMemo(() => {
@@ -1367,25 +1372,35 @@ export default function ScreenDetailPage() {
                 )}
               </div>
 
-              {/* Status Indicator inside preview */}
+              {/* Live connection and screen power indicators */}
               <div style={{
                 position: "absolute",
                 bottom: "16px",
                 display: "flex",
                 alignItems: "center",
-                gap: "6px",
-                backgroundColor: "rgba(15, 23, 42, 0.8)",
-                padding: "4px 10px",
-                borderRadius: "999px",
-                fontSize: "11px",
-                color: presenceStyle.color,
-                fontWeight: 700
+                justifyContent: "center",
+                gap: "8px",
+                flexWrap: "wrap"
               }}>
-                <span
-                  className={`pulse-dot ${isOnline ? "online" : "offline"}`}
-                  style={{ width: 6, height: 6, display: "inline-block", backgroundColor: presenceStyle.dot, borderRadius: "50%" }}
-                />
-                <span>{presenceStyle.label}</span>
+                <div style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  backgroundColor: "rgba(15, 23, 42, 0.8)",
+                  border: "1px solid rgba(148, 163, 184, 0.18)",
+                  padding: "4px 10px",
+                  borderRadius: "999px",
+                  fontSize: "11px",
+                  color: presenceStyle.color,
+                  fontWeight: 700
+                }}>
+                  <span
+                    className={`pulse-dot ${isOnline ? "online" : "offline"}`}
+                    style={{ width: 6, height: 6, display: "inline-block", backgroundColor: presenceStyle.dot, borderRadius: "50%" }}
+                  />
+                  <span>{presenceStyle.label}</span>
+                </div>
+                <ScreenPowerBadge state={screenPower} compact dark />
               </div>
             </div>
             
@@ -1493,19 +1508,22 @@ export default function ScreenDetailPage() {
                   )}
                 </div>
 
-                {/* Status card */}
-                <div style={{
-                  backgroundColor: presenceStyle.background,
-                  border: presenceStyle.border,
-                  borderRadius: "8px",
-                  padding: "12px",
-                  textAlign: "center",
-                  fontSize: "15px",
-                  fontWeight: 700,
-                  color: presenceStyle.color,
-                  textTransform: "uppercase"
-                }}>
-                  {presenceStyle.label}
+                {/* Connection and physical screen state */}
+                <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: "8px" }}>
+                  <div style={{
+                    backgroundColor: presenceStyle.background,
+                    border: presenceStyle.border,
+                    borderRadius: "8px",
+                    padding: "12px",
+                    textAlign: "center",
+                    fontSize: "15px",
+                    fontWeight: 700,
+                    color: presenceStyle.color,
+                    textTransform: "uppercase"
+                  }}>
+                    {presenceStyle.label}
+                  </div>
+                  <ScreenPowerBadge state={screenPower} wide />
                 </div>
 
                 {/* Brand / Model Info block */}

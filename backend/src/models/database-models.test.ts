@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { DeviceModel } from "./device.model.js";
 import { MediaModel } from "./media.model.js";
 import { PairingCodeModel } from "./pairing-code.model.js";
 import { PlaylistModel } from "./playlist.model.js";
@@ -57,6 +58,15 @@ describe("database model hardening", () => {
       items: Array.from({ length: 501 }, () => item)
     });
     assert.ok(playlist.validateSync()?.errors.items);
+  });
+
+  it("stores nullable Android screen power telemetry", () => {
+    const unknown = new DeviceModel({ hardwareId: "screen-unknown" });
+    const awake = new DeviceModel({ hardwareId: "screen-awake", screenOn: true });
+
+    assert.equal(unknown.screenOn, null);
+    assert.equal(awake.screenOn, true);
+    assert.equal(awake.validateSync(), undefined);
   });
 
   it("keeps password hashes excluded from ordinary user queries", () => {
