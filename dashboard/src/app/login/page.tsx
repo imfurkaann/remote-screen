@@ -1,23 +1,29 @@
 "use client";
 
-import { useSearchParams } from "next/navigation";
-import { useState, useTransition, Suspense } from "react";
+import { useEffect, useState, useTransition } from "react";
 
-function LoginForm() {
-  const searchParams = useSearchParams();
-  const redirectTo = searchParams.get("redirect") || "/screens";
-  const urlError = searchParams.get("error");
-
+export default function LoginPage() {
+  const [redirectTo, setRedirectTo] = useState("/screens");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState(
-    urlError
-      ? urlError === "unauthorized_role"
-        ? "Bu sayfaya erişim yetkiniz bulunmamaktadır."
-        : decodeURIComponent(urlError)
-      : ""
-  );
+  const [error, setError] = useState("");
   const [isPending, startTransition] = useTransition();
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const redirect = params.get("redirect");
+      const urlError = params.get("error");
+      if (redirect) setRedirectTo(redirect);
+      if (urlError) {
+        setError(
+          urlError === "unauthorized_role"
+            ? "Bu sayfaya erişim yetkiniz bulunmamaktadır."
+            : decodeURIComponent(urlError)
+        );
+      }
+    }
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -77,9 +83,7 @@ function LoginForm() {
               type="email"
               className="login-input"
               value={email}
-              onChange={(e) => {
-                setEmail(e.target.value);
-              }}
+              onChange={(e) => setEmail(e.target.value)}
               required
               placeholder="ornek@remotescreen.dev"
               disabled={isPending}
@@ -93,9 +97,7 @@ function LoginForm() {
               type="password"
               className="login-input"
               value={password}
-              onChange={(e) => {
-                setPassword(e.target.value);
-              }}
+              onChange={(e) => setPassword(e.target.value)}
               required
               placeholder="••••••••"
               disabled={isPending}
@@ -117,36 +119,7 @@ function LoginForm() {
             {isPending ? "Giriş yapılıyor..." : "Giriş Yap"}
           </button>
         </form>
-
-
       </div>
     </div>
   );
 }
-
-export default function LoginPage() {
-  return (
-    <Suspense fallback={
-      <div className="login-wrapper">
-        <style dangerouslySetInnerHTML={{ __html: `
-          @keyframes loginSpin {
-            to { transform: rotate(360deg); }
-          }
-        ` }} />
-        <div className="login-card" style={{ display: "flex", justifyContent: "center", alignItems: "center", minHeight: 300 }}>
-          <div className="spinner" style={{
-            width: 32,
-            height: 32,
-            border: "3px solid rgba(255, 255, 255, 0.1)",
-            borderTopColor: "#38bdf8",
-            borderRadius: "50%",
-            animation: "loginSpin 0.8s linear infinite"
-          }} />
-        </div>
-      </div>
-    }>
-      <LoginForm />
-    </Suspense>
-  );
-}
-

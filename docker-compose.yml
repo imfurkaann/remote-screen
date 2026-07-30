@@ -1,0 +1,83 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: remote_screen_backend
+    ports:
+      - "4100:4100"
+    environment:
+      - NODE_ENV=development
+      - BACKEND_PORT=4100
+      - MONGO_URI=mongodb://mongo:27017/remote_screen
+      - REDIS_URL=redis://redis:6379
+      - JWT_ACCESS_SECRET=dev-jwt-access-secret-minimum-32-chars-long
+      - JWT_ISSUER=remote-screen
+      - JWT_AUDIENCE=remote-screen-clients
+      - DEVICE_BOOTSTRAP_KEY=dev-device-bootstrap-key-minimum-32-chars
+      - CORS_ORIGIN=http://localhost:3000,http://localhost:4100
+      - MEDIA_STORAGE_ROOT=./uploads
+    volumes:
+      - uploads_data:/app/backend/uploads
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - remote_screen_net
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    container_name: remote_screen_dashboard
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - BACKEND_BASE_URL=http://backend:4100
+      - NEXT_PUBLIC_BACKEND_SOCKET_URL=http://localhost:4100
+    depends_on:
+      - backend
+    networks:
+      - remote_screen_net
+
+  mongo:
+    image: mongo:7.0
+    container_name: remote_screen_mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - remote_screen_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: remote_screen_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - remote_screen_net
+
+volumes:
+  mongo_data:
+  redis_data:
+  uploads_data:
+
+networks:
+  remote_screen_net:
+    driver: bridge
