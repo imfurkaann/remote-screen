@@ -31,13 +31,16 @@ services:
     build:
       context: .
       dockerfile: dashboard/Dockerfile
+      args:
+        NEXT_PUBLIC_BACKEND_SOCKET_URL: http://162.19.242.35:4100
     container_name: remote_screen_dashboard
     ports:
       - "3000:3000"
     environment:
       - NODE_ENV=development
       - BACKEND_BASE_URL=http://backend:4100
-      - NEXT_PUBLIC_BACKEND_SOCKET_URL=http://localhost:4100
+      - NEXT_PUBLIC_BACKEND_SOCKET_URL=http://162.19.242.35:4100
+      - DASHBOARD_COOKIE_SECURE=false
     depends_on:
       - backend
     networks:

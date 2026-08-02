@@ -16,6 +16,10 @@ COPY dashboard ./dashboard
 
 ENV NEXT_TELEMETRY_DISABLED=1
 
+# NEXT_PUBLIC_* vars are inlined at build time by Next.js — must be available during build
+ARG NEXT_PUBLIC_BACKEND_SOCKET_URL
+ENV NEXT_PUBLIC_BACKEND_SOCKET_URL=$NEXT_PUBLIC_BACKEND_SOCKET_URL
+
 WORKDIR /app/dashboard
 RUN npm run build
 

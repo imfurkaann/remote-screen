@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { useSecureDashboardCookies } from "@/lib/dashboard-cookie";
+
 export async function POST(request: Request) {
   try {
     const contentType = request.headers.get("content-type") ?? "";
@@ -63,14 +65,14 @@ export async function POST(request: Request) {
     response.cookies.set("dashboard_session", "dev-session", {
       httpOnly: true,
       sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
+      secure: useSecureDashboardCookies(),
       path: "/",
       maxAge: 60 * 60 * 8
     });
     response.cookies.set("dashboard_access_token", backendPayload.access_token, {
       httpOnly: true,
       sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
+      secure: useSecureDashboardCookies(),
       path: "/",
       maxAge: 60 * 60 * 8
     });

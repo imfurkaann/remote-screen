@@ -3,6 +3,14 @@ import type { NextRequest } from "next/server";
 
 const PROTECTED_PREFIXES = ["/screens", "/playlists", "/remote-control", "/operations", "/media", "/apps", "/settings", "/super-admin"];
 
+function publicUrl(request: NextRequest, pathname: string): URL {
+  const forwardedHost = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
+  const host = forwardedHost || request.headers.get("host") || request.nextUrl.host;
+  const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  const protocol = forwardedProto || request.nextUrl.protocol.replace(":", "") || "http";
+  return new URL(pathname, `${protocol}://${host}`);
+}
+
 function decodeJwt(token: string) {
   try {
     const parts = token.split(".");
@@ -34,7 +42,7 @@ export function middleware(request: NextRequest) {
   const isExpired = decoded?.exp ? decoded.exp * 1000 < Date.now() : true;
 
   if (!sessionCookie || !accessToken || isExpired) {
-    const loginUrl = new URL("/login", request.url);
+    const loginUrl = publicUrl(request, "/login");
     loginUrl.searchParams.set("redirect", pathname);
     const response = NextResponse.redirect(loginUrl);
     response.cookies.delete("dashboard_session");
@@ -56,15 +64,18 @@ export function middleware(request: NextRequest) {
   ].some((prefix) => pathname.startsWith(prefix));
 
   if (userRole === "viewer" && isViewerRestricted) {
-    return NextResponse.redirect(new URL("/screens?error=unauthorized_role", request.url));
+    const target = publicUrl(request, "/screens?error=unauthorized_role");
+    return NextResponse.redirect(target);
   }
 
   if (userRole === "operator" && pathname.startsWith("/settings")) {
-    return NextResponse.redirect(new URL("/screens?error=unauthorized_role", request.url));
+    const target = publicUrl(request, "/screens?error=unauthorized_role");
+    return NextResponse.redirect(target);
   }
 
   if (userRole !== "super_admin" && pathname.startsWith("/super-admin")) {
-    return NextResponse.redirect(new URL("/screens?error=unauthorized_role", request.url));
+    const target = publicUrl(request, "/screens?error=unauthorized_role");
+    return NextResponse.redirect(target);
   }
 
   return NextResponse.next();

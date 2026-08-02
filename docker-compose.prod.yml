@@ -10,8 +10,8 @@ services:
         required: false
     environment:
       - NODE_ENV=production
-      - MONGO_URI=${MONGO_URI:-mongodb://mongo:27017/remote_screen_prod}
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - MONGO_URI=${MONGO_URI:-mongodb://${MONGO_ROOT_USER:-admin}:${MONGO_ROOT_PASSWORD}@mongo:27017/remote_screen_prod?authSource=admin}
+      - REDIS_URL=${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379}
     volumes:
       - uploads_data:/app/backend/uploads
     depends_on:
@@ -37,6 +37,8 @@ services:
     build:
       context: .
       dockerfile: dashboard/Dockerfile
+      args:
+        NEXT_PUBLIC_BACKEND_SOCKET_URL: ${NEXT_PUBLIC_BACKEND_SOCKET_URL:-https://api.yourdomain.com}
     container_name: remote_screen_prod_dashboard
     restart: unless-stopped
     env_file:
@@ -45,6 +47,7 @@ services:
     environment:
       - NODE_ENV=production
       - BACKEND_BASE_URL=${BACKEND_BASE_URL:-http://backend:4100}
+      - DASHBOARD_COOKIE_SECURE=${DASHBOARD_COOKIE_SECURE:-true}
     depends_on:
       backend:
         condition: service_healthy
@@ -74,6 +77,7 @@ services:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - uploads_data:/usr/share/nginx/html/uploads:ro
       - certbot_etc:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot:ro
     depends_on:
       - backend
       - dashboard
@@ -93,8 +97,10 @@ services:
       - mongo_prod_data:/data/db
     environment:
       - MONGO_INITDB_DATABASE=remote_screen_prod
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USER:-admin}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASSWORD}
     healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      test: ["CMD", "mongosh", "-u", "${MONGO_ROOT_USER:-admin}", "-p", "${MONGO_ROOT_PASSWORD}", "--authenticationDatabase", "admin", "--eval", "db.adminCommand('ping')"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -110,11 +116,11 @@ services:
     image: redis:7-alpine
     container_name: remote_screen_prod_redis
     restart: unless-stopped
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
     volumes:
       - redis_prod_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -131,6 +137,7 @@ volumes:
   redis_prod_data:
   uploads_data:
   certbot_etc:
+  certbot_www:
 
 networks:
   remote_screen_net:
