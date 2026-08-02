@@ -103,7 +103,7 @@ async function syncMediaFolderChange(input: {
 
 function buildMediaFilter(auth: AuthCtx, extra: Record<string, any> = {}) {
   if (auth.role === "super_admin" && auth.tenantId === "system") {
-    return { ...extra };
+    return { tenantId: "system", ...extra };
   }
   if (auth.role === "super_admin") {
     return { tenantId: auth.tenantId, ...extra };
@@ -116,7 +116,7 @@ function buildMediaFilter(auth: AuthCtx, extra: Record<string, any> = {}) {
 
 function buildDeviceFilter(auth: AuthCtx, extra: Record<string, any> = {}) {
   if (auth.role === "super_admin" && auth.tenantId === "system") {
-    return { ...extra };
+    return { tenantId: "system", ...extra };
   }
   if (auth.role === "super_admin") {
     return { tenantId: auth.tenantId, ...extra };
@@ -201,13 +201,6 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
 
   router.use(requireUserAuth(deps.jwtSecret, { issuer: deps.jwtIssuer, audience: deps.jwtAudience }));
   router.use(requireRoles(["tenant_owner", "tenant_admin", "operator"]));
-  router.use((req, res, next) => {
-    if (req.auth?.role === "super_admin" && req.auth.tenantId === "system") {
-      res.status(400).json({ code: "TENANT_CONTEXT_REQUIRED", message: "Select a tenant before accessing tenant content" });
-      return;
-    }
-    next();
-  });
 
   router.get("/devices", async (req, res) => {
     try {
