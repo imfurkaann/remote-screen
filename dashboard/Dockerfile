@@ -20,6 +20,11 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ARG NEXT_PUBLIC_BACKEND_SOCKET_URL
 ENV NEXT_PUBLIC_BACKEND_SOCKET_URL=$NEXT_PUBLIC_BACKEND_SOCKET_URL
 
+# next.config rewrites are resolved during `next build`, so this internal
+# service URL must be available in the builder stage as well.
+ARG BACKEND_BASE_URL=http://backend:4100
+ENV BACKEND_BASE_URL=$BACKEND_BASE_URL
+
 WORKDIR /app/dashboard
 RUN npm run build
 

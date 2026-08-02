@@ -33,6 +33,7 @@ services:
       dockerfile: dashboard/Dockerfile
       args:
         NEXT_PUBLIC_BACKEND_SOCKET_URL: http://162.19.242.35:4100
+        BACKEND_BASE_URL: http://backend:4100
     container_name: remote_screen_dashboard
     ports:
       - "3000:3000"

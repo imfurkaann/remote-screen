@@ -39,6 +39,7 @@ services:
       dockerfile: dashboard/Dockerfile
       args:
         NEXT_PUBLIC_BACKEND_SOCKET_URL: ${NEXT_PUBLIC_BACKEND_SOCKET_URL:-https://api.yourdomain.com}
+        BACKEND_BASE_URL: ${BACKEND_BASE_URL:-http://backend:4100}
     container_name: remote_screen_prod_dashboard
     restart: unless-stopped
     env_file:
