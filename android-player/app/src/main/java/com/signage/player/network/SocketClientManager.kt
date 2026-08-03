@@ -2,6 +2,7 @@ package com.signage.player.network
 
 import com.signage.player.commands.CommandAckPayload
 import com.signage.player.commands.CommandDispatchPayload
+import com.signage.player.config.AppDefaults
 import com.signage.player.sync.SyncContentPayload
 import com.signage.player.sync.SyncContentItem
 import android.util.Log
@@ -66,7 +67,7 @@ object SocketClientManager {
         context: android.content.Context,
         deviceId: String,
         accessToken: String,
-        socketBaseUrl: String = "https://10.0.2.2:4100"
+        socketBaseUrl: String = AppDefaults.BACKEND_BASE_URL
     ) {
         appContext = context.applicationContext
         registerScreenStateReceiver()

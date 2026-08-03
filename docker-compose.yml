@@ -15,7 +15,7 @@ services:
       - JWT_ISSUER=remote-screen
       - JWT_AUDIENCE=remote-screen-clients
       - DEVICE_BOOTSTRAP_KEY=dev-device-bootstrap-key-minimum-32-chars
-      - CORS_ORIGIN=http://localhost:3000,http://localhost:4100
+      - CORS_ORIGIN=http://localhost:3000,http://localhost:4100,http://162.19.242.35:3000,http://162.19.242.35:4100
       - MEDIA_STORAGE_ROOT=./uploads
     volumes:
       - uploads_data:/app/backend/uploads
