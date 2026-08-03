@@ -9,6 +9,7 @@ import { useFleetSocket } from "@/lib/use-fleet-socket";
 import { commandAckStatus } from "@/lib/fleet-events";
 import { getDevicePresence, type DevicePresence } from "@/lib/device-presence";
 import { getScreenPowerState } from "@/lib/screen-power";
+import { createClientId } from "@/lib/client-uuid";
 
 // Define Types
 type Device = {
@@ -557,7 +558,7 @@ export default function ScreenDetailPage() {
     showToast(`Dispatching ${commandType}...`, "success");
     setActiveCommand(null);
 
-    const commandId = crypto.randomUUID();
+    const commandId = createClientId();
     try {
       const response = await fetch("/api/commands/dispatch", {
         method: "POST",

@@ -639,7 +639,6 @@ export default function NewPlaylistPage() {
   const [sidebarTab, setSidebarTab] = useState<"recent" | "media" | "apps">("media");
   const [showModal, setShowModal] = useState(false);
   const [saving, setSaving] = useState(false);
-  const creationRequestId = useRef(crypto.randomUUID());
   const [saveMsg, setSaveMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const dragFrom = useRef<number | null>(null);
   const dragOver = useRef<number | null>(null);

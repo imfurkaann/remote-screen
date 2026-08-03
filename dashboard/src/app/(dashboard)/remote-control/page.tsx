@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { REMOTE_COMMANDS } from "@/lib/mock-data";
 import { buildDeviceQuery } from "@/lib/device-query";
+import { createClientId } from "@/lib/client-uuid";
 
 type DeviceItem = {
   id: string;
@@ -130,7 +131,7 @@ export default function RemoteControlPage() {
       return;
     }
 
-    const commandId = crypto.randomUUID();
+    const commandId = createClientId();
     const response = await fetch("/api/commands/dispatch", {
       method: "POST",
       headers: { "content-type": "application/json" },
