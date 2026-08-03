@@ -7,7 +7,11 @@ export async function POST() {
     return NextResponse.json({ code: "UNAUTHORIZED" }, { status: 401 });
   }
 
-  const publicSocketUrl = process.env.NEXT_PUBLIC_BACKEND_SOCKET_URL;
+  // This value is read by the server route at runtime and returned to the
+  // browser with the short-lived ticket. Prefer the server-only variable so a
+  // container can move to a new public origin without rebuilding Next.js.
+  const publicSocketUrl = process.env.BACKEND_PUBLIC_SOCKET_URL
+    ?? process.env.NEXT_PUBLIC_BACKEND_SOCKET_URL;
   if (process.env.NODE_ENV === "production" && !publicSocketUrl) {
     return NextResponse.json(
       { code: "SOCKET_URL_NOT_CONFIGURED" },

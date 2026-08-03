@@ -1,24 +1,15 @@
 $ErrorActionPreference = 'Stop'
 
 $gradlewPath = Join-Path $PSScriptRoot "..\android-player\gradlew.bat"
-$ktlintConfig = Join-Path $PSScriptRoot "..\android-player\.editorconfig"
-
 if (Test-Path $gradlewPath) {
   Push-Location (Join-Path $PSScriptRoot "..\android-player")
   try {
-    .\gradlew.bat ktlintCheck --no-daemon
-    if ($LASTEXITCODE -eq 0) {
-      Write-Host "Kotlin quality gate passed via ktlintCheck."
-      exit 0
-    }
-
-    Write-Warning "ktlintCheck task unavailable or failed; falling back to assembleDebug validation."
-    .\gradlew.bat :app:assembleDebug --no-daemon
+    .\gradlew.bat :app:lintDebug :app:testDebugUnitTest :app:assembleDebug --no-daemon
     if ($LASTEXITCODE -ne 0) {
       exit $LASTEXITCODE
     }
 
-    Write-Host "Kotlin quality gate passed via assembleDebug fallback."
+    Write-Host "Kotlin quality gate passed: Android Lint, unit tests, and debug APK build succeeded."
   }
   finally {
     Pop-Location
@@ -26,8 +17,4 @@ if (Test-Path $gradlewPath) {
   exit 0
 }
 
-if (-not (Test-Path $ktlintConfig)) {
-  Write-Error "Kotlin quality gate missing: add android-player/.editorconfig and gradle ktlint setup."
-}
-
-Write-Host "Kotlin quality precheck passed: configuration file found."
+Write-Error "Android Gradle wrapper not found: $gradlewPath"

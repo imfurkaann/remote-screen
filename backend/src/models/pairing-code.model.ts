@@ -6,6 +6,9 @@ export type PairingCodeDoc = {
   code: string;
   expiresAt: Date;
   consumedAt: Date | null;
+  deviceCredentialHash: string;
+  claimedAt: Date | null;
+  claimedBy: string | null;
 };
 
 const PairingCodeSchema = new Schema<PairingCodeDoc>(
@@ -14,7 +17,10 @@ const PairingCodeSchema = new Schema<PairingCodeDoc>(
     tenantId: { type: String, required: false, default: null, trim: true, maxlength: 64, index: true },
     code: { type: String, required: true, trim: true, match: /^[0-9]{6}$/ },
     expiresAt: { type: Date, required: true },
-    consumedAt: { type: Date, default: null }
+    consumedAt: { type: Date, default: null },
+    deviceCredentialHash: { type: String, required: true, match: /^[a-f0-9]{64}$/i, select: false },
+    claimedAt: { type: Date, default: null },
+    claimedBy: { type: String, default: null, trim: true, maxlength: 64 }
   },
   { timestamps: true }
 );

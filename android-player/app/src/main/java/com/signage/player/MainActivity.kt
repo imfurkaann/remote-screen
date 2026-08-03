@@ -291,7 +291,9 @@ fun PairingScreen(modifier: Modifier = Modifier) {
     // VerifyingSession falls through to the content block below so content
     // keeps playing while the session is being verified in the background.
     if (pairingState is DevicePairingState.Unpaired) {
-        val code = (pairingState as DevicePairingState.Unpaired).pairingCode
+        val unpairedState = pairingState as DevicePairingState.Unpaired
+        val code = unpairedState.pairingCode
+        val connectionError = unpairedState.connectionError
         val isLoading = code == "------"
         
         val backgroundGradient = Brush.verticalGradient(
@@ -326,8 +328,8 @@ fun PairingScreen(modifier: Modifier = Modifier) {
             )
 
             Text(
-                text = if (isLoading) "Eşleştirme kodu oluşturuluyor..." else "Lütfen bu kodu kontrol panelindeki ekran ekleme alanına girin.",
-                color = Color(0xFF9E95B8),
+                text = connectionError ?: if (isLoading) "Eşleştirme kodu oluşturuluyor..." else "Lütfen bu kodu kontrol panelindeki ekran ekleme alanına girin.",
+                color = if (connectionError != null) Color(0xFFFCA5A5) else Color(0xFF9E95B8),
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Medium,
                 textAlign = TextAlign.Center,

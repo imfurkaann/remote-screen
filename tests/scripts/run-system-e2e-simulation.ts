@@ -596,6 +596,7 @@ try {
       env: {
         ...process.env,
         BACKEND_BASE_URL: baseUrl,
+        BACKEND_PUBLIC_SOCKET_URL: baseUrl,
         NEXT_PUBLIC_BACKEND_SOCKET_URL: baseUrl
       },
       stdio: ["ignore", "ignore", "pipe"]

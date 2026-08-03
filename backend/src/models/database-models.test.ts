@@ -26,6 +26,25 @@ describe("database model hardening", () => {
           options.name === "unique_active_pairing_code_value"
       )
     );
+
+    const missingCredential = new PairingCodeModel({
+      deviceId: "507f1f77bcf86cd799439011",
+      code: "123456",
+      expiresAt: new Date(Date.now() + 60_000),
+      consumedAt: null
+    });
+    assert.ok(missingCredential.validateSync()?.errors.deviceCredentialHash);
+
+    const validCode = new PairingCodeModel({
+      deviceId: "507f1f77bcf86cd799439011",
+      code: "123456",
+      expiresAt: new Date(Date.now() + 60_000),
+      consumedAt: null,
+      deviceCredentialHash: "a".repeat(64)
+    });
+    assert.equal(validCode.claimedAt, null);
+    assert.equal(validCode.claimedBy, null);
+    assert.equal(validCode.validateSync(), undefined);
   });
 
   it("rejects malformed media checksums and oversized playlists", () => {

@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import { Types } from "mongoose";
@@ -178,10 +178,15 @@ export function requireUserOrDeviceAuth(jwtSecret: string, options: JwtValidatio
 }
 
 export function requireBootstrapKey(bootstrapKey: string) {
+  const fingerprint = createHash("sha256").update(bootstrapKey, "utf8").digest("hex").slice(0, 12);
   return (req: Request, res: Response, next: NextFunction): void => {
+    res.setHeader("X-Device-Bootstrap-Fingerprint", fingerprint);
     const key = req.header("x-device-bootstrap-key") ?? req.header("x-bootstrap-key");
     if (!key || !secretMatches(key, bootstrapKey)) {
-      res.status(401).json({ code: "BOOTSTRAP_UNAUTHORIZED", message: "Invalid bootstrap key" });
+      res.status(401).json({
+        code: "BOOTSTRAP_UNAUTHORIZED",
+        message: "Invalid bootstrap key"
+      });
       return;
     }
     next();

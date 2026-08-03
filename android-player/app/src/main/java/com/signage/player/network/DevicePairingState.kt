@@ -46,5 +46,8 @@ sealed class DevicePairingState {
      * @param pairingCode 6-digit code to display. "------" while the first
      *                    code is being fetched from the backend.
      */
-    data class Unpaired(val pairingCode: String) : DevicePairingState()
+    data class Unpaired(
+        val pairingCode: String,
+        val connectionError: String? = null
+    ) : DevicePairingState()
 }

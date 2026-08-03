@@ -17,18 +17,21 @@ val localProps = Properties().apply {
     if (file.exists()) file.inputStream().use { load(it) }
 }
 
-fun localProp(key: String, default: String): String =
-    (localProps.getProperty(key) ?: default).trim()
+fun configuredValue(key: String, default: String): String =
+    (providers.gradleProperty(key).orNull
+        ?: System.getenv(key)
+        ?: localProps.getProperty(key)
+        ?: default).trim()
 
-val releaseBackendUrl = localProp("BACKEND_BASE_URL", "")
-val releaseBootstrapKey = localProp("BOOTSTRAP_KEY", "")
+val releaseBackendUrl = configuredValue("BACKEND_BASE_URL", "")
+val releaseBootstrapKey = configuredValue("BOOTSTRAP_KEY", "")
 val releaseBuildRequested = gradle.startParameter.taskNames.any { it.contains("release", ignoreCase = true) }
 if (releaseBuildRequested) {
     require(releaseBackendUrl.startsWith("https://")) {
-        "Release builds require an HTTPS BACKEND_BASE_URL in android-player/local.properties"
+        "Release builds require an HTTPS BACKEND_BASE_URL (Gradle property, environment, or local.properties)"
     }
     require(releaseBootstrapKey.length >= 32) {
-        "Release builds require a BOOTSTRAP_KEY of at least 32 characters in android-player/local.properties"
+        "Release builds require a BOOTSTRAP_KEY of at least 32 characters (Gradle property, environment, or local.properties)"
     }
 }
 android {
@@ -52,11 +55,11 @@ android {
             manifestPlaceholders["usesCleartextTraffic"] = "true"
             buildConfigField(
                 "String", "BACKEND_BASE_URL",
-                "\"${localProp("BACKEND_BASE_URL", "http://10.0.2.2:4100")}\""
+                "\"${configuredValue("BACKEND_BASE_URL", "http://10.0.2.2:4100")}\""
             )
             buildConfigField(
                 "String", "BOOTSTRAP_KEY",
-                "\"${localProp("BOOTSTRAP_KEY", "local-bootstrap-key")}\""
+                "\"${configuredValue("BOOTSTRAP_KEY", "local-bootstrap-key")}\""
             )
         }
         release {

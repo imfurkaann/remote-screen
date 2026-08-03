@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
+import java.security.MessageDigest
 import kotlin.math.min
 import kotlin.random.Random
 
@@ -35,9 +36,9 @@ import kotlin.random.Random
  *       • Uses **full-jitter exponential back-off** on transient network
  *         errors so that a backend restart does not cause a thundering herd
  *         from thousands of devices simultaneously.
- *  3. Transitions to [DevicePairingState.Unpaired] **only** on explicit HTTP
- *     404 / 409 responses — never on network timeouts or other transient
- *     failures. Content keeps playing through connectivity blips.
+ *  3. Transitions to [DevicePairingState.Unpaired] on explicit HTTP 401 / 404 /
+ *     409 responses; network timeouts and 5xx failures preserve the current state.
+ *     Content keeps playing through connectivity blips.
  *  4. **Offline grace period:** if the backend returns 404/409 but the last
  *     successful verification was within [OFFLINE_GRACE_PERIOD_MS] (7 days),
  *     the device assumes the backend is temporarily inconsistent (e.g. a
@@ -257,18 +258,24 @@ object SessionManager {
                     val needsNewCode = existingCode == null ||
                             now - lastPairingCodeRequestAt >= PAIRING_CODE_REFRESH_MS
 
-                    val displayCode: String = if (needsNewCode) {
+                    var displayCode = existingCode ?: "------"
+                    var connectionError: String? = null
+                    if (needsNewCode) {
                         val reason = if (isResponseUnpaired) "paired=false" else "HTTP $httpCode"
                         Log.d(TAG, "Fetching new pairing code ($reason)")
-                        fetchPairingCode(api, hardwareId, deviceProof)
-                            ?.also { lastPairingCodeRequestAt = now }
-                             ?: existingCode
-                             ?: "------"
-                    } else {
-                        existingCode ?: "------"
+                        val pairingAttempt = fetchPairingCode(api, hardwareId, deviceProof)
+                        pairingAttempt.onSuccess { code ->
+                            displayCode = code
+                            lastPairingCodeRequestAt = now
+                        }.onFailure { error ->
+                            connectionError = pairingFailureMessage(error)
+                        }
                     }
 
-                    _state.value = DevicePairingState.Unpaired(pairingCode = displayCode)
+                    _state.value = DevicePairingState.Unpaired(
+                        pairingCode = displayCode,
+                        connectionError = connectionError
+                    )
                     Log.d(TAG, "Device unpaired — polling for confirmation in ${UNPAIRED_POLL_INTERVAL_MS}ms")
                     waitForRefreshOrTimeout(UNPAIRED_POLL_INTERVAL_MS)
                 }
@@ -276,8 +283,41 @@ object SessionManager {
                 // ⚠️ Transient error (network, timeout, 5xx, …)
                 // Keep the current state — do NOT flash the pairing screen.
                 else -> {
+                    // A reinstall keeps ANDROID_ID but rotates the Keystore-backed
+                    // device proof. Ask for a physical recovery code on HTTP 401;
+                    // the backend still requires an authorized dashboard user to
+                    // confirm it before rotating the stored credential.
+                    if (sessionError is HttpException && sessionError.code() == 401) {
+                        val recoveryAttempt = fetchPairingCode(api, hardwareId, deviceProof)
+                        val recoveryCode = recoveryAttempt.getOrNull()
+                        if (recoveryCode != null) {
+                            store.clearPaired()
+                            retryAttempt = 0
+                            lastPairingCodeRequestAt = System.currentTimeMillis()
+                            _state.value = DevicePairingState.Unpaired(pairingCode = recoveryCode)
+                            Log.w(TAG, "Device credential recovery code issued after HTTP 401")
+                            waitForRefreshOrTimeout(UNPAIRED_POLL_INTERVAL_MS)
+                            continue
+                        }
+
+                        // A wrong bootstrap key rejects both calls. Surface the
+                        // diagnostic even when a stale paired state was cached;
+                        // otherwise the display could remain on an endless
+                        // "verifying" screen with no actionable information.
+                        _state.value = DevicePairingState.Unpaired(
+                            pairingCode = "------",
+                            connectionError = pairingFailureMessage(recoveryAttempt.exceptionOrNull())
+                        )
+                        waitForRefreshOrTimeout(nextBackoffDelay(retryAttempt))
+                        retryAttempt = (retryAttempt + 1).coerceAtMost(8)
+                        continue
+                    }
+
                     val delayMs = nextBackoffDelay(retryAttempt)
                     retryAttempt = (retryAttempt + 1).coerceAtMost(8)
+                    if (currentState is DevicePairingState.Unpaired) {
+                        _state.value = currentState.copy(connectionError = pairingFailureMessage(sessionError))
+                    }
                     Log.w(
                         TAG,
                         "Session refresh failed (transient) — retry in ${delayMs}ms " +
@@ -295,14 +335,32 @@ object SessionManager {
         api: PairingApiService,
         hardwareId: String,
         deviceProof: String
-    ): String? = runCatching {
+    ): Result<String> = runCatching {
         api.requestPairingCode(
             bootstrapKey = AppDefaults.BOOTSTRAP_KEY,
             request = PairingRequest(hardware_id = hardwareId, device_proof = deviceProof, tenant_id = null)
-        )
+        ).code
     }.onFailure { error ->
         Log.e(TAG, "Pairing code request failed: ${error.message}")
-    }.getOrNull()?.code
+    }
+
+    private fun pairingFailureMessage(error: Throwable?): String {
+        if (error is HttpException && error.code() == 401) {
+            val serverFingerprint = error.response()
+                ?.headers()
+                ?.get("X-Device-Bootstrap-Fingerprint")
+                ?: "unknown"
+            val localFingerprint = MessageDigest.getInstance("SHA-256")
+                .digest(AppDefaults.BOOTSTRAP_KEY.toByteArray(Charsets.UTF_8))
+                .joinToString("") { byte -> (byte.toInt() and 0xff).toString(16).padStart(2, '0') }
+                .take(12)
+            return "Sunucu anahtarı eşleşmiyor (cihaz: $localFingerprint, sunucu: $serverFingerprint)."
+        }
+        if (error is HttpException) {
+            return "Eşleştirme servisi HTTP ${error.code()} hatası döndürdü."
+        }
+        return "Sunucuya bağlanılamıyor. Ağ bağlantısını ve sunucu adresini kontrol edin."
+    }
 
     /**
      * Full-jitter exponential back-off.

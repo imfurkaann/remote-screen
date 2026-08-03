@@ -96,15 +96,24 @@ Date: 2026-04-01
 
 ### POST /api/v1/pairing/request-code
 
-- Auth: device token or bootstrap key
-- Request: `{ hardware_id }`
-- Response: `{ pairing_code, expires_at, device_id }`
+- Auth: `x-device-bootstrap-key` or legacy `x-bootstrap-key`
+- Request: `{ hardware_id, device_proof, tenant_id? }`
+- Response: `{ code, expires_at, device_id, credential_recovery }`
+- Reinstall recovery: a changed device proof is kept only on the short-lived code. The stored device credential is rotated only after an authorized same-tenant user confirms the physical code.
 
 ### POST /api/v1/pairing/confirm
 
-- Auth: user JWT
+- Auth: user JWT; roles `tenant_owner`, `tenant_admin`, or `operator`
 - Request: `{ pairing_code }`
-- Response: `{ device_id, linked: true }`
+- Response: `{ device_id, linked: true, credential_recovered }`
+- Concurrency: the code is atomically claimed before device mutation and released after a failed tenant/ownership check.
+
+### POST /api/v1/pairing/device-session
+
+- Auth: `x-device-bootstrap-key` or legacy `x-bootstrap-key`
+- Request: `{ hardware_id, device_proof, tenant_id? }`
+- Response: `{ paired: true, device_id, access_token, expires_in }`
+- A bootstrap mismatch returns HTTP 401 with `X-Device-Bootstrap-Fingerprint`; a device-proof mismatch returns HTTP 401 and can enter the physical recovery-code flow.
 
 ## Playlists
 

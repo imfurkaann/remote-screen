@@ -48,6 +48,7 @@ services:
     environment:
       - NODE_ENV=production
       - BACKEND_BASE_URL=${BACKEND_BASE_URL:-http://backend:4100}
+      - BACKEND_PUBLIC_SOCKET_URL=${BACKEND_PUBLIC_SOCKET_URL:-https://api.yourdomain.com}
       - DASHBOARD_COOKIE_SECURE=${DASHBOARD_COOKIE_SECURE:-true}
     depends_on:
       backend:

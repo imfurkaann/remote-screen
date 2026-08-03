@@ -34,6 +34,8 @@ async function mongoFindings(): Promise<IntegrityFinding[]> {
     duplicateEmails,
     duplicateHardwareIds,
     duplicatePairingCodes,
+    activePairingCodesWithoutCredential,
+    stalePairingCodeClaims,
     orphanUserTenants,
     orphanDeviceTenants,
     orphanDeviceOwners,
@@ -45,6 +47,19 @@ async function mongoFindings(): Promise<IntegrityFinding[]> {
     countDuplicateGroups(UserModel.collection, {}, { email: { $toLower: "$email" } }),
     countDuplicateGroups(DeviceModel.collection, {}, { hardwareId: "$hardwareId" }),
     countDuplicateGroups(PairingCodeModel.collection, { consumedAt: null }, { deviceId: "$deviceId" }),
+    PairingCodeModel.countDocuments({
+      consumedAt: null,
+      expiresAt: { $gt: new Date() },
+      $or: [
+        { deviceCredentialHash: { $exists: false } },
+        { deviceCredentialHash: null },
+        { deviceCredentialHash: { $not: /^[a-f0-9]{64}$/i } }
+      ]
+    }),
+    PairingCodeModel.countDocuments({
+      consumedAt: null,
+      claimedAt: { $lt: new Date(Date.now() - 60_000) }
+    }),
     UserModel.aggregate<{ count: number }>([
       { $lookup: { from: "tenants", localField: "tenantId", foreignField: "_id", as: "tenant" } },
       { $match: { tenant: { $size: 0 } } },
@@ -91,6 +106,8 @@ async function mongoFindings(): Promise<IntegrityFinding[]> {
     { check: "mongo.duplicate_user_email", count: duplicateEmails, severity: "critical" },
     { check: "mongo.duplicate_device_hardware_id", count: duplicateHardwareIds, severity: "critical" },
     { check: "mongo.multiple_active_pairing_codes", count: duplicatePairingCodes, severity: "critical" },
+    { check: "mongo.active_pairing_code_without_credential", count: activePairingCodesWithoutCredential, severity: "critical" },
+    { check: "mongo.stale_pairing_code_claim", count: stalePairingCodeClaims, severity: "warning" },
     { check: "mongo.orphan_user_tenant", count: orphanUserTenants, severity: "critical" },
     { check: "mongo.orphan_device_tenant", count: orphanDeviceTenants, severity: "critical" },
     { check: "mongo.orphan_device_owner", count: orphanDeviceOwners, severity: "critical" },

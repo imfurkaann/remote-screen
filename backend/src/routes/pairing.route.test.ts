@@ -1,6 +1,7 @@
 import { createServer, type Server } from "node:http";
 import { after, before, afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
 import { MongoMemoryServer } from "mongodb-memory-server";
@@ -103,6 +104,13 @@ describe("pairing abuse protections", () => {
     });
 
     assert.equal(response.status, 401);
+    const expectedFingerprint = createHash("sha256")
+      .update(env.deviceBootstrapKey, "utf8")
+      .digest("hex")
+      .slice(0, 12);
+    assert.equal(response.headers.get("x-device-bootstrap-fingerprint"), expectedFingerprint);
+    const payload = (await response.json()) as { code: string };
+    assert.equal(payload.code, "BOOTSTRAP_UNAUTHORIZED");
   });
 
   it("blocks confirm without user token", async () => {
@@ -257,26 +265,36 @@ describe("pairing abuse protections", () => {
     const payload = (await response.json()) as { ticket: string };
     assert.ok(payload.ticket);
   });
-  it("does not allow an unpaired device credential to be replaced", async () => {
+  it("keeps a replacement device proof pending until a user confirms the physical code", async () => {
     const baseUrl = await startServer();
     const headers = {
       "content-type": "application/json",
       "x-device-bootstrap-key": env.deviceBootstrapKey
     };
+    const firstProof = "first-device-proof-0123456789abcdef";
+    const replacementProof = "other-device-proof-0123456789abcdef";
 
     const first = await fetch(`${baseUrl}/api/v1/pairing/request-code`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ hardware_id: "hw-proof-lock-1", device_proof: "first-device-proof-0123456789abcdef" })
+      body: JSON.stringify({ hardware_id: "hw-proof-lock-1", device_proof: firstProof })
     });
     assert.equal(first.status, 201);
 
     const replacement = await fetch(`${baseUrl}/api/v1/pairing/request-code`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ hardware_id: "hw-proof-lock-1", device_proof: "other-device-proof-0123456789abcdef" })
+      body: JSON.stringify({ hardware_id: "hw-proof-lock-1", device_proof: replacementProof })
     });
-    assert.equal(replacement.status, 401);
+    assert.equal(replacement.status, 201);
+    const replacementPayload = (await replacement.json()) as { credential_recovery: boolean };
+    assert.equal(replacementPayload.credential_recovery, true);
+
+    const device = await DeviceModel.findOne({ hardwareId: "hw-proof-lock-1" })
+      .select("+deviceCredentialHash")
+      .lean();
+    const firstHash = createHash("sha256").update(firstProof, "utf8").digest("hex");
+    assert.equal(device?.deviceCredentialHash, firstHash);
   });
 
   it("requires authenticated unpair before a paired device can request a new code", async () => {
@@ -315,5 +333,120 @@ describe("pairing abuse protections", () => {
       body: JSON.stringify({ hardware_id: "hw-paired-lock-1", device_proof: deviceProof })
     });
     assert.equal(reenroll.status, 409);
+  });
+  it("recovers a paired device after app reinstall and rejects the old proof", async () => {
+    const baseUrl = await startServer();
+    const firstProof = "installed-device-proof-0123456789abcdef";
+    const replacementProof = "reinstalled-device-proof-0123456789abcdef";
+    const deviceHeaders = {
+      "content-type": "application/json",
+      "x-device-bootstrap-key": env.deviceBootstrapKey
+    };
+    const userToken = jwt.sign(
+      { sub: "operator-recovery", tenant_id: "tenant-recovery", role: "operator" },
+      env.jwtAccessSecret,
+      { issuer: env.jwtIssuer, audience: env.jwtAudience, expiresIn: "5m" }
+    );
+
+    const initialCodeResponse = await fetch(`${baseUrl}/api/v1/pairing/request-code`, {
+      method: "POST",
+      headers: deviceHeaders,
+      body: JSON.stringify({ hardware_id: "hw-reinstall-recovery", device_proof: firstProof })
+    });
+    const initialCode = ((await initialCodeResponse.json()) as { code: string }).code;
+    const initialConfirm = await fetch(`${baseUrl}/api/v1/pairing/confirm`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${userToken}` },
+      body: JSON.stringify({ pairing_code: initialCode })
+    });
+    assert.equal(initialConfirm.status, 200);
+
+    const recoveryCodeResponse = await fetch(`${baseUrl}/api/v1/pairing/request-code`, {
+      method: "POST",
+      headers: deviceHeaders,
+      body: JSON.stringify({ hardware_id: "hw-reinstall-recovery", device_proof: replacementProof })
+    });
+    assert.equal(recoveryCodeResponse.status, 201);
+    const recoveryPayload = (await recoveryCodeResponse.json()) as {
+      code: string;
+      credential_recovery: boolean;
+    };
+    assert.equal(recoveryPayload.credential_recovery, true);
+
+    const recoveryConfirm = await fetch(`${baseUrl}/api/v1/pairing/confirm`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${userToken}` },
+      body: JSON.stringify({ pairing_code: recoveryPayload.code })
+    });
+    assert.equal(recoveryConfirm.status, 200);
+    const confirmed = (await recoveryConfirm.json()) as { credential_recovered: boolean };
+    assert.equal(confirmed.credential_recovered, true);
+
+    const newSession = await fetch(`${baseUrl}/api/v1/pairing/device-session`, {
+      method: "POST",
+      headers: deviceHeaders,
+      body: JSON.stringify({ hardware_id: "hw-reinstall-recovery", device_proof: replacementProof })
+    });
+    assert.equal(newSession.status, 200);
+
+    const oldSession = await fetch(`${baseUrl}/api/v1/pairing/device-session`, {
+      method: "POST",
+      headers: deviceHeaders,
+      body: JSON.stringify({ hardware_id: "hw-reinstall-recovery", device_proof: firstProof })
+    });
+    assert.equal(oldSession.status, 401);
+  });
+
+  it("does not consume a recovery code when another tenant tries to claim it", async () => {
+    const baseUrl = await startServer();
+    const firstProof = "tenant-owner-proof-0123456789abcdef";
+    const recoveryProof = "tenant-recovery-proof-0123456789abcdef";
+    const deviceHeaders = {
+      "content-type": "application/json",
+      "x-device-bootstrap-key": env.deviceBootstrapKey
+    };
+    const ownerToken = jwt.sign(
+      { sub: "operator-owner", tenant_id: "tenant-owner", role: "operator" },
+      env.jwtAccessSecret,
+      { issuer: env.jwtIssuer, audience: env.jwtAudience, expiresIn: "5m" }
+    );
+    const otherToken = jwt.sign(
+      { sub: "operator-other", tenant_id: "tenant-other", role: "operator" },
+      env.jwtAccessSecret,
+      { issuer: env.jwtIssuer, audience: env.jwtAudience, expiresIn: "5m" }
+    );
+
+    const firstCodeResponse = await fetch(`${baseUrl}/api/v1/pairing/request-code`, {
+      method: "POST",
+      headers: deviceHeaders,
+      body: JSON.stringify({ hardware_id: "hw-tenant-recovery", device_proof: firstProof })
+    });
+    const firstCode = ((await firstCodeResponse.json()) as { code: string }).code;
+    await fetch(`${baseUrl}/api/v1/pairing/confirm`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${ownerToken}` },
+      body: JSON.stringify({ pairing_code: firstCode })
+    });
+
+    const recoveryCodeResponse = await fetch(`${baseUrl}/api/v1/pairing/request-code`, {
+      method: "POST",
+      headers: deviceHeaders,
+      body: JSON.stringify({ hardware_id: "hw-tenant-recovery", device_proof: recoveryProof })
+    });
+    const recoveryCode = ((await recoveryCodeResponse.json()) as { code: string }).code;
+
+    const foreignConfirm = await fetch(`${baseUrl}/api/v1/pairing/confirm`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${otherToken}` },
+      body: JSON.stringify({ pairing_code: recoveryCode })
+    });
+    assert.equal(foreignConfirm.status, 409);
+
+    const ownerConfirm = await fetch(`${baseUrl}/api/v1/pairing/confirm`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${ownerToken}` },
+      body: JSON.stringify({ pairing_code: recoveryCode })
+    });
+    assert.equal(ownerConfirm.status, 200);
   });
 });
