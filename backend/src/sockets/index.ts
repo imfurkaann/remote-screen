@@ -277,9 +277,13 @@ export async function createSocketServer(httpServer: HttpServer, deps: SocketDep
         isTenantActive(decoded.tenant_id)
       ]);
 
-      if (!device || !activeTenant) {
-        console.warn(`[device-socket] auth rejected trace=${traceId} reason=DEVICE_NOT_PAIRED_OR_TENANT_INACTIVE`);
+      if (!device) {
+        console.warn(`[device-socket] auth rejected trace=${traceId} reason=DEVICE_RECORD_MISMATCH`);
         return next(new Error("Authentication error: Device is not paired"));
+      }
+      if (!activeTenant) {
+        console.warn(`[device-socket] auth rejected trace=${traceId} reason=TENANT_INACTIVE`);
+        return next(new Error("Authentication error: Organization is inactive"));
       }
 
       socket.data = {

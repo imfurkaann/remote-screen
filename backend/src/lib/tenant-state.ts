@@ -3,8 +3,14 @@ import { TenantModel } from "../models/tenant.model.js";
 const CACHE_TTL_MS = 30_000;
 const MAX_CACHE_ENTRIES = 10_000;
 const cache = new Map<string, { active: boolean; expiresAt: number }>();
+export const SYSTEM_TENANT_ID = "system";
 
 export async function isTenantActive(tenantId: string): Promise<boolean> {
+  // `system` is the intentional global workspace used by super-admin accounts.
+  // It is not a customer Tenant document, but devices paired from that workspace
+  // still need to authenticate and receive content through the device socket.
+  if (tenantId === SYSTEM_TENANT_ID) return true;
+
   const now = Date.now();
   const cached = cache.get(tenantId);
   if (cached && cached.expiresAt > now) return cached.active;
