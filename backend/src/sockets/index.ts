@@ -249,9 +249,11 @@ export async function createSocketServer(httpServer: HttpServer, deps: SocketDep
   });
 
   deviceNs.use(async (socket, next) => {
+    const traceId = String(socket.handshake.auth?.trace_id ?? "").trim().slice(0, 64) || "none";
     try {
       const token = socket.handshake.auth?.token;
       if (!token || typeof token !== "string") {
+        console.warn(`[device-socket] auth rejected trace=${traceId} reason=TOKEN_MISSING`);
         return next(new Error("Authentication error: Device token is required"));
       }
 
@@ -261,6 +263,7 @@ export async function createSocketServer(httpServer: HttpServer, deps: SocketDep
       }) as { sub: string; tenant_id: string; role: string; hardware_id: string };
 
       if (decoded.role !== "device" || !decoded.sub || !decoded.tenant_id || !decoded.hardware_id) {
+        console.warn(`[device-socket] auth rejected trace=${traceId} reason=INVALID_CLAIMS`);
         return next(new Error("Authentication error: Invalid device claims"));
       }
 
@@ -275,6 +278,7 @@ export async function createSocketServer(httpServer: HttpServer, deps: SocketDep
       ]);
 
       if (!device || !activeTenant) {
+        console.warn(`[device-socket] auth rejected trace=${traceId} reason=DEVICE_NOT_PAIRED_OR_TENANT_INACTIVE`);
         return next(new Error("Authentication error: Device is not paired"));
       }
 
@@ -282,10 +286,13 @@ export async function createSocketServer(httpServer: HttpServer, deps: SocketDep
         deviceId: String(device._id),
         hardwareId: device.hardwareId,
         tenantId: String(device.tenantId),
-        pairedOwnerUserId: device.pairedOwnerUserId ? String(device.pairedOwnerUserId) : null
+        pairedOwnerUserId: device.pairedOwnerUserId ? String(device.pairedOwnerUserId) : null,
+        traceId
       };
       next();
-    } catch {
+    } catch (error) {
+      const errorName = error instanceof Error ? error.name : "UNKNOWN";
+      console.warn(`[device-socket] auth rejected trace=${traceId} reason=${errorName}`);
       next(new Error("Authentication error: Invalid device token"));
     }
   });
@@ -297,6 +304,8 @@ export async function createSocketServer(httpServer: HttpServer, deps: SocketDep
     const pairedOwnerUserId = socket.data.pairedOwnerUserId
       ? String(socket.data.pairedOwnerUserId)
       : null;
+    const traceId = String(socket.data.traceId ?? "none");
+    console.info(`[device-socket] connected trace=${traceId} device=${deviceId} hardware=${hardwareId}`);
 
     const pendingDisconnect = disconnectTimers.get(deviceId);
     if (pendingDisconnect) {

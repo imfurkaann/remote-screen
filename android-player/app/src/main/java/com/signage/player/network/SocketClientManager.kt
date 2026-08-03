@@ -19,6 +19,7 @@ import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URISyntaxException
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.min
 import kotlin.random.Random
@@ -88,13 +89,16 @@ object SocketClientManager {
         socket?.disconnect()
         socket?.off()
 
+        val socketTraceId = UUID.randomUUID().toString()
         val options = IO.Options.builder()
-            .setAuth(mapOf("token" to accessToken))
+            .setAuth(mapOf("token" to accessToken, "trace_id" to socketTraceId))
             .setReconnection(true)
             .setReconnectionAttempts(Int.MAX_VALUE)
             .setReconnectionDelay(BASE_DELAY_MS)
             .setReconnectionDelayMax(MAX_DELAY_MS)
             .build()
+
+        ConnectionDiagnostics.socketConnecting(socketTraceId)
 
         val newSocket = try {
             IO.socket("$socketBaseUrl/device", options)
@@ -105,6 +109,7 @@ object SocketClientManager {
 
         newSocket.on(Socket.EVENT_CONNECT) {
             Log.d(TAG, "Connected socket for device_id=$deviceId")
+            ConnectionDiagnostics.socketConnected(socketTraceId)
             onConnected()
             startHeartbeat()
             flushPendingAcks(newSocket)
@@ -113,6 +118,10 @@ object SocketClientManager {
         newSocket.on(Socket.EVENT_CONNECT_ERROR) { args ->
             val message = args.firstOrNull()?.toString().orEmpty()
             Log.e(TAG, "Socket connect error: $message")
+            ConnectionDiagnostics.socketFailed(
+                socketTraceId,
+                message.ifBlank { "Bilinmeyen socket bağlantı hatası" }
+            )
             if (message.contains("Authentication", ignoreCase = true) ||
                 message.contains("unauthorized", ignoreCase = true)
             ) {
@@ -121,7 +130,9 @@ object SocketClientManager {
         }
 
         newSocket.on(Socket.EVENT_DISCONNECT) { args ->
-            Log.w(TAG, "Socket disconnected: ${args.firstOrNull()}")
+            val reason = args.firstOrNull()?.toString().orEmpty().ifBlank { "Bilinmeyen ayrılma nedeni" }
+            Log.w(TAG, "Socket disconnected: $reason")
+            ConnectionDiagnostics.socketDisconnected(socketTraceId, reason)
             heartbeatJob?.cancel()
             heartbeatJob = null
         }

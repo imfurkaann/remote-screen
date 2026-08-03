@@ -58,7 +58,9 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import com.signage.player.boot.PlayerForegroundService
 import com.signage.player.boot.StartupCoordinator
 import com.signage.player.network.DevicePairingState
+import com.signage.player.network.ConnectionDiagnostics
 import com.signage.player.network.SessionManager
+import com.signage.player.network.SocketClientManager
 import com.signage.player.ui.PlayerUiStateStore
 import com.signage.player.ui.theme.SignageplayerTheme
 import java.io.File
@@ -68,6 +70,7 @@ import android.view.PixelCopy
 import android.view.Window
 import android.view.WindowManager
 import java.io.FileOutputStream
+import java.security.MessageDigest
 import kotlin.coroutines.resume
 import kotlinx.coroutines.suspendCancellableCoroutine
 import androidx.core.view.WindowCompat
@@ -159,6 +162,9 @@ class MainActivity : ComponentActivity() {
         // becomes visible — covers the case where RAM pressure killed the
         // service while the Activity was paused (e.g. another app in focus).
         PlayerForegroundService.start(this)
+        // Wake the existing session loop immediately when an operator reopens
+        // the player instead of waiting for the reconnect back-off timer.
+        SessionManager.requestImmediateRefresh()
     }
 
     override fun onNewIntent(intent: android.content.Intent) {
@@ -236,10 +242,17 @@ fun PairingScreen(modifier: Modifier = Modifier) {
     val uiState by PlayerUiStateStore.state.collectAsState()
     val playerController = remember { StartupCoordinator.getPlayerController() }
     val pairingState by SessionManager.state.collectAsState()
+    val connectionDiagnostic by ConnectionDiagnostics.state.collectAsState()
 
     val hardwareId = remember { com.signage.player.storage.HardwareIdStore(context).getOrCreateHardwareId() }
     val ipAddress = remember { getLocalIpAddress() }
     val backendUrl = remember { StartupCoordinator.getBackendBaseUrl() }
+    val bootstrapFingerprint = remember {
+        MessageDigest.getInstance("SHA-256")
+            .digest(com.signage.player.config.AppDefaults.BOOTSTRAP_KEY.toByteArray(Charsets.UTF_8))
+            .joinToString("") { byte -> (byte.toInt() and 0xff).toString(16).padStart(2, '0') }
+            .take(12)
+    }
 
     DisposableEffect(activity) {
         activity?.setOnResetRequestedListener { showResetDialog = true }
@@ -364,7 +377,61 @@ fun PairingScreen(modifier: Modifier = Modifier) {
                 )
             }
 
-            Spacer(modifier = Modifier.height(48.dp))
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth(0.82f)
+                    .background(Color.White.copy(alpha = 0.04f), RoundedCornerShape(16.dp))
+                    .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(16.dp))
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Bağlantı Tanılama",
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = connectionDiagnostic.phase,
+                    color = if (connectionDiagnostic.httpStatus?.let { it in 200..299 } == true) Color(0xFF86EFAC) else Color(0xFFFDE68A),
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center
+                )
+                Text(
+                    text = "Sürüm ${BuildConfig.VERSION_NAME} • Cihaz $hardwareId • Anahtar $bootstrapFingerprint",
+                    color = Color(0xFF9E95B8),
+                    fontSize = 11.sp,
+                    textAlign = TextAlign.Center
+                )
+                Text(
+                    text = "API $backendUrl${connectionDiagnostic.endpoint.orEmpty()}",
+                    color = Color(0xFF9E95B8),
+                    fontSize = 11.sp,
+                    textAlign = TextAlign.Center
+                )
+                connectionDiagnostic.detail?.let { detail ->
+                    Text(
+                        text = detail,
+                        color = Color(0xFFFCA5A5),
+                        fontSize = 11.sp,
+                        textAlign = TextAlign.Center
+                    )
+                }
+                connectionDiagnostic.correlationId?.let { correlationId ->
+                    Text(
+                        text = "Takip: $correlationId",
+                        color = Color(0xFF7DD3FC),
+                        fontSize = 10.sp,
+                        textAlign = TextAlign.Center
+                    )
+                }
+                TextButton(onClick = { SessionManager.requestImmediateRefresh() }) {
+                    Text("Şimdi Tekrar Dene")
+                }
+            }
 
             if (uiState.showConnectionInfo) {
                 Column(
@@ -555,8 +622,16 @@ fun PairingScreen(modifier: Modifier = Modifier) {
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         // Glowing status indicator
-                        val indicatorColor = if (uiState.errorMessage != null) Color(0xFFF59E0B) else Color(0xFF10B981)
-                        val indicatorText = if (uiState.errorMessage != null) "Sistem Uyarı / Eksik İçerik" else "Sistem Bağlı / Çevrimiçi"
+                        val indicatorColor = when {
+                            uiState.errorMessage != null -> Color(0xFFF59E0B)
+                            connectionDiagnostic.socketConnected -> Color(0xFF10B981)
+                            else -> Color(0xFFF59E0B)
+                        }
+                        val indicatorText = when {
+                            uiState.errorMessage != null -> "Sistem Uyarı / Eksik İçerik"
+                            connectionDiagnostic.socketConnected -> "Sistem Bağlı / Çevrimiçi"
+                            else -> "Eşleşti / Canlı Bağlantı Bekleniyor"
+                        }
                         
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -640,6 +715,32 @@ fun PairingScreen(modifier: Modifier = Modifier) {
                             ) {
                                 Text(text = "Sunucu:", color = Color(0xFF5A526E), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                                 Text(text = backendUrl, color = Color(0xFF9E95B8), fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                            }
+
+                            Text(
+                                text = connectionDiagnostic.phase,
+                                color = if (connectionDiagnostic.socketConnected) Color(0xFF86EFAC) else Color(0xFFFDE68A),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Sürüm ${BuildConfig.VERSION_NAME} • Anahtar $bootstrapFingerprint",
+                                color = Color(0xFF9E95B8),
+                                fontSize = 11.sp
+                            )
+                            connectionDiagnostic.detail?.let { detail ->
+                                Text(text = detail, color = Color(0xFFFCA5A5), fontSize = 11.sp)
+                            }
+                            connectionDiagnostic.correlationId?.let { correlationId ->
+                                Text(text = "Takip: $correlationId", color = Color(0xFF7DD3FC), fontSize = 10.sp)
+                            }
+                            TextButton(
+                                onClick = {
+                                    SessionManager.requestImmediateRefresh()
+                                    SocketClientManager.reconnectNow()
+                                }
+                            ) {
+                                Text("Bağlantıyı Tekrar Dene")
                             }
                         }
                     }

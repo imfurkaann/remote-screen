@@ -9,6 +9,7 @@ import retrofit2.converter.moshi.MoshiConverterFactory
 object RetrofitFactory {
     private val client: OkHttpClient by lazy {
         OkHttpClient.Builder()
+            .addInterceptor(ConnectionTraceInterceptor())
             .addInterceptor(SafeTimeAndHttpInterceptor())
             .build()
     }
