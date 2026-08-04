@@ -513,15 +513,17 @@ fun PairingScreen(modifier: Modifier = Modifier) {
                                 // native bridge and cannot read local files/content providers.
                                 settings.javaScriptEnabled = true
                                 settings.domStorageEnabled = true
+                                settings.databaseEnabled = true
                                 settings.allowFileAccess = false
                                 settings.allowContentAccess = false
                                 settings.javaScriptCanOpenWindowsAutomatically = false
                                 settings.setSupportMultipleWindows(false)
-                                settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                                settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                                 settings.safeBrowsingEnabled = true
                                 settings.useWideViewPort = true
                                 settings.loadWithOverviewMode = false
                                 settings.mediaPlaybackRequiresUserGesture = false
+                                setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
                                 setBackgroundColor(android.graphics.Color.TRANSPARENT)
                                 webViewClient = object : android.webkit.WebViewClient() {
                                     // Y1: recover from WebView GPU process crash without

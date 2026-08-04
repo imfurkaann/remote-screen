@@ -546,30 +546,30 @@ export function renderClockHtml(title: string, rawConfig: Record<string, unknown
     .ambient { position:absolute; border-radius:50%; background:var(--accent); opacity:var(--glow-opacity); filter:blur(12vmin); pointer-events:none; z-index:-1; }
     .ambient.one { width:58vmin; height:58vmin; left:-18vmin; top:-25vmin; }
     .ambient.two { width:44vmin; height:44vmin; right:-14vmin; bottom:-24vmin; opacity:calc(var(--glow-opacity) * .7); }
-    .stage { width:100%; height:100%; min-height:100vh; padding:clamp(34px,6vmin,92px); display:grid; align-items:center; }
+    .stage { width:100%; height:100%; min-height:100vh; padding:48px; padding:clamp(34px,6vmin,92px); display:grid; align-items:center; }
     .digital { min-width:0; font-variant-numeric:tabular-nums; white-space:nowrap; }
     .time-row { display:flex; align-items:baseline; justify-content:center; }
-    .time-main { font-size:clamp(82px,15.8vw,300px); line-height:.82; letter-spacing:-.072em; font-weight:720; }
+    .time-main { font-size:160px; font-size:clamp(82px,15.8vw,300px); line-height:.82; letter-spacing:-.072em; font-weight:720; }
     .colon { color:var(--accent); padding:0 .045em; }
-    .seconds { margin-left:.55em; color:var(--accent); font-size:clamp(24px,3.2vw,62px); font-weight:680; letter-spacing:-.03em; }
-    .period { margin-left:.65em; color:var(--muted); font-size:clamp(14px,1.5vw,30px); font-weight:760; }
+    .seconds { margin-left:.55em; color:var(--accent); font-size:42px; font-size:clamp(24px,3.2vw,62px); font-weight:680; letter-spacing:-.03em; }
+    .period { margin-left:.65em; color:var(--muted); font-size:22px; font-size:clamp(14px,1.5vw,30px); font-weight:760; }
     .meta { color:var(--text); }
-    .date { font-size:clamp(18px,2.2vw,42px); line-height:1.18; font-weight:650; letter-spacing:-.025em; text-transform:capitalize; }
-    .timezone { margin-top:.8em; color:var(--accent); font-size:clamp(12px,1.05vw,21px); font-weight:780; letter-spacing:.14em; text-transform:uppercase; }
-    .meta-mark { display:block; width:clamp(32px,3vw,58px); height:clamp(4px,.38vw,7px); margin-bottom:auto; border-radius:999px; background:var(--accent); }
-    .analog { position:relative; width:min(62vmin,610px); aspect-ratio:1; margin:auto; border:1px solid var(--line); border-radius:50%; box-shadow:inset 0 0 0 clamp(7px,1vmin,13px) rgba(255,255,255,.025),0 5vmin 12vmin rgba(0,0,0,.18); }
+    .date { font-size:28px; font-size:clamp(18px,2.2vw,42px); line-height:1.18; font-weight:650; letter-spacing:-.025em; text-transform:capitalize; }
+    .timezone { margin-top:.8em; color:var(--accent); font-size:16px; font-size:clamp(12px,1.05vw,21px); font-weight:780; letter-spacing:.14em; text-transform:uppercase; }
+    .meta-mark { display:block; width:40px; width:clamp(32px,3vw,58px); height:6px; height:clamp(4px,.38vw,7px); margin-bottom:auto; border-radius:999px; background:var(--accent); }
+    .analog { position:relative; width:450px; height:450px; width:min(62vmin,610px); height:min(62vmin,610px); aspect-ratio:1; margin:auto; border:1px solid var(--line); border-radius:50%; box-shadow:inset 0 0 0 10px rgba(255,255,255,.025),0 5vmin 12vmin rgba(0,0,0,.18); }
     .analog::after { content:""; position:absolute; inset:17%; border:1px solid var(--line); border-radius:50%; opacity:.36; }
     .tick { --size:1px; position:absolute; inset:0; transform:rotate(calc(var(--i) * 6deg)); }
     .tick::after { content:""; position:absolute; left:50%; top:4%; width:var(--size); height:2.2%; border-radius:2px; background:currentColor; opacity:.22; transform:translateX(-50%); }
-    .tick.major { --size:clamp(2px,.2vmin,3px); }
+    .tick.major { --size:2px; --size:clamp(2px,.2vmin,3px); }
     .tick.major::after { height:5.5%; opacity:.78; }
-    .number { position:absolute; z-index:1; color:var(--muted); font-size:clamp(15px,2.1vmin,28px); font-weight:700; }
+    .number { position:absolute; z-index:1; color:var(--muted); font-size:20px; font-size:clamp(15px,2.1vmin,28px); font-weight:700; }
     .n12 { left:50%; top:10%; transform:translateX(-50%); } .n3 { right:11%; top:50%; transform:translateY(-50%); } .n6 { left:50%; bottom:9%; transform:translateX(-50%); } .n9 { left:11%; top:50%; transform:translateY(-50%); }
     .hand { position:absolute; z-index:3; left:50%; bottom:50%; border-radius:999px; background:currentColor; transform-origin:50% 100%; transform:translateX(-50%) rotate(0deg); }
-    .hour-hand { width:clamp(5px,.65vmin,9px); height:25%; }
-    .minute-hand { width:clamp(3px,.42vmin,6px); height:35%; }
+    .hour-hand { width:7px; width:clamp(5px,.65vmin,9px); height:25%; }
+    .minute-hand { width:4px; width:clamp(3px,.42vmin,6px); height:35%; }
     .second-hand { width:1px; height:39%; background:var(--accent); }
-    .pin { position:absolute; z-index:5; left:50%; top:50%; width:clamp(12px,1.7vmin,22px); aspect-ratio:1; border-radius:50%; background:var(--accent); box-shadow:0 0 0 clamp(4px,.6vmin,8px) color-mix(in srgb,var(--accent) 22%,transparent); transform:translate(-50%,-50%); }
+    .pin { position:absolute; z-index:5; left:50%; top:50%; width:16px; height:16px; width:clamp(12px,1.7vmin,22px); height:clamp(12px,1.7vmin,22px); aspect-ratio:1; border-radius:50%; background:var(--accent); box-shadow:0 0 0 5px rgba(253,230,138,.3); transform:translate(-50%,-50%); }
     .stage[data-layout="digital"] { grid-template-rows:1fr auto; gap:clamp(24px,5vmin,70px); text-align:center; }
     .stage[data-layout="digital"] .analog, .stage[data-layout="split"] .analog { display:none; }
     .stage[data-layout="digital"] .meta-mark { display:none; }
@@ -624,21 +624,25 @@ export function renderClockHtml(title: string, rawConfig: Record<string, unknown
     }
     function part(parts, type) { return parts.find((item) => item.type === type)?.value || ""; }
     function update() {
-      const now = new Date();
-      const displayParts = formatter({ hour:"2-digit", minute:"2-digit", second:"2-digit", hour12:config.format === "12h", ...(config.format === "24h" ? { hourCycle:"h23" } : {}) }).formatToParts(now);
-      hourEl.textContent = part(displayParts,"hour").padStart(2,"0");
-      minuteEl.textContent = part(displayParts,"minute").padStart(2,"0");
-      secondEl.textContent = part(displayParts,"second").padStart(2,"0");
-      periodEl.textContent = part(displayParts,"dayPeriod");
-      if (config.showDate) dateEl.textContent = formatter({ weekday:"long", day:"numeric", month:"long", year:"numeric" }).format(now);
-      if (config.showTimezone) timezoneEl.textContent = config.timezone === "local" ? (config.locale === "tr" ? "Yerel saat" : "Local time") : config.timezone.split("/").pop().replaceAll("_"," ");
+      try {
+        const now = new Date();
+        const displayParts = formatter({ hour:"2-digit", minute:"2-digit", second:"2-digit", hour12:config.format === "12h", ...(config.format === "24h" ? { hourCycle:"h23" } : {}) }).formatToParts(now);
+        if (hourEl) hourEl.textContent = part(displayParts,"hour").padStart(2,"0");
+        if (minuteEl) minuteEl.textContent = part(displayParts,"minute").padStart(2,"0");
+        if (secondEl) secondEl.textContent = part(displayParts,"second").padStart(2,"0");
+        if (periodEl) periodEl.textContent = part(displayParts,"dayPeriod");
+        if (config.showDate && dateEl) dateEl.textContent = formatter({ weekday:"long", day:"numeric", month:"long", year:"numeric" }).format(now);
+        if (config.showTimezone && timezoneEl) timezoneEl.textContent = config.timezone === "local" ? (config.locale === "tr" ? "Yerel saat" : "Local time") : String(config.timezone.split("/").pop() || "").replace(/_/g," ");
 
-      const numericParts = new Intl.DateTimeFormat("en-GB", { timeZone:resolvedTimeZone, hour:"2-digit", minute:"2-digit", second:"2-digit", hourCycle:"h23" }).formatToParts(now);
-      const numberPart = (type) => Number(part(numericParts,type) || 0);
-      const hours = numberPart("hour"); const minutes = numberPart("minute"); const seconds = numberPart("second") + now.getMilliseconds() / 1000;
-      hourHand.style.transform = "translateX(-50%) rotate(" + ((hours % 12) * 30 + minutes * .5) + "deg)";
-      minuteHand.style.transform = "translateX(-50%) rotate(" + (minutes * 6 + seconds * .1) + "deg)";
-      secondHand.style.transform = "translateX(-50%) rotate(" + (seconds * 6) + "deg)";
+        const numericParts = new Intl.DateTimeFormat("en-GB", { timeZone:resolvedTimeZone, hour:"2-digit", minute:"2-digit", second:"2-digit", hourCycle:"h23" }).formatToParts(now);
+        const numberPart = (type) => Number(part(numericParts,type) || 0);
+        const hours = numberPart("hour"); const minutes = numberPart("minute"); const seconds = numberPart("second") + now.getMilliseconds() / 1000;
+        if (hourHand) hourHand.style.transform = "translateX(-50%) rotate(" + ((hours % 12) * 30 + minutes * .5) + "deg)";
+        if (minuteHand) minuteHand.style.transform = "translateX(-50%) rotate(" + (minutes * 6 + seconds * .1) + "deg)";
+        if (secondHand) secondHand.style.transform = "translateX(-50%) rotate(" + (seconds * 6) + "deg)";
+      } catch (err) {
+        console.error("Clock update error:", err);
+      }
     }
     update();
     setInterval(update, config.layout === "analog" && config.showSeconds ? 100 : 1000);

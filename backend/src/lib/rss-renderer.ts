@@ -235,14 +235,14 @@ export function renderRssHtml(title: string, rawConfig: Record<string, unknown> 
         statusText.textContent=(state==="cached"?copy.cached:copy.updated)+" "+stamp;
       }
       function renderTicker(){
-        content.replaceChildren();content.className="shell ticker-layout";
+        content.textContent="";content.className="shell ticker-layout";
         var top=el("div","ticker-top");top.append(el("span","",config.sourceLabel),el("span","",copy.live));content.append(top,el("div","ticker-message",copy.headline));
         var bar=el("div","ticker-bar"),label=el("div","ticker-label",config.sourceLabel),windowNode=el("div","ticker-window"),track=el("div","ticker-track");
         for(var repeat=0;repeat<2;repeat+=1){items.forEach(function(item){track.append(el("div","ticker-item",item.title))})}
         windowNode.append(track);bar.append(label,windowNode);content.append(bar);
       }
       function renderCard(){
-        clearTimeout(rotateTimer);content.replaceChildren();content.className="shell card-layout";
+        clearTimeout(rotateTimer);content.textContent="";content.className="shell card-layout";
         var item=items[currentIndex%items.length],head=el("div","card-head"),foot=el("div","card-foot"),story=el("article","story");
         head.append(el("span","eyebrow",config.sourceLabel),el("span","counter",String(currentIndex%items.length+1).padStart(2,"0")+" / "+String(items.length).padStart(2,"0")));
         story.append(el("div","story-title",item.title));
@@ -252,7 +252,7 @@ export function renderRssHtml(title: string, rawConfig: Record<string, unknown> 
         rotateTimer=setTimeout(function(){currentIndex=(currentIndex+1)%items.length;renderCard()},rotationMs);
       }
       function renderSplit(){
-        clearTimeout(rotateTimer);content.replaceChildren();content.className="shell split-layout";
+        clearTimeout(rotateTimer);content.textContent="";content.className="shell split-layout";
         var item=items[currentIndex%items.length],lead=el("section","lead"),top=el("div"),story=el("div"),rail=el("aside","rail");
         top.append(el("span","eyebrow",config.sourceLabel));story.append(el("div","lead-title",item.title));
         if(config.showDescription&&item.description)story.append(el("p","lead-desc",item.description));
