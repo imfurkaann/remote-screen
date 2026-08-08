@@ -256,9 +256,10 @@ object StartupCoordinator {
 
         SocketClientManager.registerSyncHandler { payload ->
             try {
-                syncManager.applySyncPayload(payload)
-                playbackCoordinator.gracefulReload(PlaybackCoordinator.GRACE_PERIOD_MS)
-                playbackCoordinator.persistSnapshot()
+                if (syncManager.applySyncPayload(payload)) {
+                    playbackCoordinator.gracefulReload(PlaybackCoordinator.GRACE_PERIOD_MS)
+                    playbackCoordinator.persistSnapshot()
+                }
             } catch (error: Exception) {
                 telemetryReporter.reportError(
                     "sync_handler",

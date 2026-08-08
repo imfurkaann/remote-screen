@@ -127,7 +127,7 @@ class ContentSyncManager(
      * then atomically swaps staging → active. Idempotent: duplicate payloads
      * (same playlistId + same or older version) are silently skipped.
      */
-    suspend fun applySyncPayload(payload: SyncContentPayload) = syncMutex.withLock {
+    suspend fun applySyncPayload(payload: SyncContentPayload): Boolean = syncMutex.withLock {
         recoverInterruptedActivationUnlocked()
         // --- Idempotency guard ---
         // The backend currently emits SYNC_CONTENT twice per device (once by
@@ -148,7 +148,7 @@ class ContentSyncManager(
                 "Skipping SYNC_CONTENT: checksum matches already-applied playlist " +
                     "(checksum=${incomingChecksum.take(12)}… playlist=${payload.playlistId})"
             )
-            return@withLock
+            return@withLock false
         }
 
         if (payload.playlistId == lastAppliedPlaylistId &&
@@ -161,7 +161,7 @@ class ContentSyncManager(
                 "Skipping duplicate SYNC_CONTENT: playlist=${payload.playlistId} " +
                     "version=$incomingVersion (already applied version=${lastAppliedVersion.get()})"
             )
-            return@withLock
+            return@withLock false
         }
 
         Log.d(
@@ -175,6 +175,23 @@ class ContentSyncManager(
         val stagingDir = File(contentRoot, "staging-${payload.playlistVersion}")
         val backupDir = File(contentRoot, "backup")
         val quarantineDir = File(contentRoot, "quarantine")
+
+        if (payload.playlistId.isBlank() && payload.items.isEmpty()) {
+            playlistRepository.replacePlaylist(emptyList())
+            if (activeDir.exists()) activeDir.deleteRecursively()
+            if (backupDir.exists()) backupDir.deleteRecursively()
+            contentRoot.listFiles { file -> file.name.startsWith("staging-") }
+                ?.forEach { file -> file.deleteRecursively() }
+            lastAppliedPlaylistId = ""
+            lastAppliedVersion.set(0)
+            lastAppliedChecksum = ""
+            syncState.edit()
+                .putString("playlist_id", "")
+                .putInt("playlist_version", 0)
+                .putString("playlist_checksum", "")
+                .commit()
+            return@withLock true
+        }
 
         // --- Disk space pre-check ---
         val freeBytes = appContext.filesDir.freeSpace
@@ -190,7 +207,7 @@ class ContentSyncManager(
                     "playlist_id" to payload.playlistId
                 )
             )
-            return@withLock
+            return@withLock false
         }
 
         if (stagingDir.exists()) stagingDir.deleteRecursively()
@@ -201,7 +218,7 @@ class ContentSyncManager(
             if (item.mimeType == "text/html") {
                 PlaylistEntity(
                     mediaId = item.mediaId,
-                    filePath = resolveMediaUrl(item.mediaUrl),
+                    filePath = versionedWebUrl(item.mediaUrl, item.checksumSha256),
                     position = item.position,
                     checksumSha256 = item.checksumSha256,
                     durationMs = item.durationMs
@@ -306,12 +323,13 @@ class ContentSyncManager(
                 // Room already points at the new active files. A metadata/quota
                 // cleanup failure must never roll the filesystem back underneath it.
                 if (backupDir.exists()) backupDir.deleteRecursively()
-                return@withLock
+                return@withLock true
             }
             if (activeDir.exists()) activeDir.deleteRecursively()
             if (backupDir.exists()) backupDir.renameTo(activeDir)
             throw error
         }
+        true
     }
 
 
@@ -568,6 +586,14 @@ class ContentSyncManager(
         val trimmed = rawUrl.trim()
         if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed
         return if (trimmed.startsWith("/")) "$mediaBaseUrl$trimmed" else "$mediaBaseUrl/$trimmed"
+    }
+
+    private fun versionedWebUrl(rawUrl: String, checksumSha256: String): String {
+        val resolved = resolveMediaUrl(rawUrl)
+        val revision = checksumSha256.trim().take(16)
+        if (revision.isEmpty()) return resolved
+        val separator = if (resolved.contains('?')) '&' else '?'
+        return "$resolved${separator}rs_rev=$revision"
     }
 
     private fun computeSha256(file: File): String {

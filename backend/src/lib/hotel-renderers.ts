@@ -65,7 +65,7 @@ export function renderEventsHtml(title: string, raw: Record<string, unknown>): s
   </style></head><body><main class="stage"><header><div><div class="brand">${escapeHtml(config.hotelName)}</div><h1 class="heading">${escapeHtml(config.heading)}</h1></div><time class="date" id="date"></time></header><section class="events">${rows}</section><footer class="footer">${escapeHtml(config.footer)}</footer></main><script>
   const words=${JSON.stringify(words)};const locale="${config.locale === "tr" ? "tr-TR" : "en-GB"}";
   function minutes(value){const parts=value.split(":").map(Number);return parts[0]*60+parts[1]}
-  function update(){const now=new Date();const current=now.getHours()*60+now.getMinutes();document.getElementById("date").textContent=new Intl.DateTimeFormat(locale,{weekday:"long",day:"numeric",month:"long"}).format(now);document.querySelectorAll(".event").forEach(row=>{const state=current>=minutes(row.dataset.start)&&current<minutes(row.dataset.end)?"live":current<minutes(row.dataset.start)?"next":"done";row.dataset.state=state;row.querySelector("[data-status]").textContent=words[state]})}update();setInterval(update,30000);
+  function update(){const now=new Date();const current=now.getHours()*60+now.getMinutes();document.getElementById("date").textContent=new Intl.DateTimeFormat(locale,{weekday:"long",day:"numeric",month:"long"}).format(now);document.querySelectorAll(".event").forEach(row=>{const state=current>=minutes(row.dataset.start)&&current<minutes(row.dataset.end)?"live":current<minutes(row.dataset.start)?"next":"done";row.dataset.state=state;row.querySelector("[data-status]").textContent=words[state]})}update();window.__remoteScreenTick=update;setInterval(update,30000);
   </script></body></html>`;
 }
 

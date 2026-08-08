@@ -11,9 +11,13 @@ import { parseRssXml, renderRssHtml, type ParsedRssFeed } from "../lib/rss-rende
 import { renderWeatherHtml } from "../lib/weather-renderer.js";
 import { renderWayfindingHtml } from "../lib/wayfinding-renderer.js";
 import { renderEventsHtml, renderHotelGuideHtml } from "../lib/hotel-renderers.js";
+import { normalizePlaylistName, playlistContentChecksum } from "../lib/playlist-policy.js";
 import { requireRoles, requireUserAuth } from "../middlewares/auth.js";
+import { DeviceModel } from "../models/device.model.js";
 import { MediaModel } from "../models/media.model.js";
+import { PlaylistModel, type PlaylistItemDoc } from "../models/playlist.model.js";
 import { contentRepository } from "../repositories/content.repository.js";
+import { emitSyncContentToDevices, type SyncContentPayload } from "../sockets/registry.js";
 
 const logger = new Logger("AppsRoute");
 const SUPPORTED_APP_TYPES = new Set(["clock", "weather", "rss", "notice", "qrcode", "wayfinding", "events", "hotel-guide"]);
@@ -181,6 +185,102 @@ function safeCssColor(value: unknown, fallback: string): string {
     ? candidate
     : fallback;
 }
+
+function appRevision(appId: string, name: string, config: unknown): string {
+  return createHash("sha256")
+    .update(JSON.stringify({ appId, name, config }))
+    .digest("hex");
+}
+
+async function refreshPlaylistsForApp(input: {
+  tenantId: string;
+  appId: string;
+  filename: string;
+  mediaUrl: string;
+  checksumSha256: string;
+  mimeType: string;
+}): Promise<{ playlistsUpdated: number; devicesNotified: number }> {
+  const playlists = await PlaylistModel.find({
+    tenantId: input.tenantId,
+    "items.mediaId": input.appId
+  }).lean();
+
+  let playlistsUpdated = 0;
+  let devicesNotified = 0;
+  for (const playlist of playlists) {
+    const items: PlaylistItemDoc[] = playlist.items.map((item) => item.mediaId === input.appId
+      ? {
+          ...item,
+          filename: input.filename,
+          mediaUrl: input.mediaUrl,
+          checksumSha256: input.checksumSha256,
+          mimeType: input.mimeType
+        }
+      : item);
+    const contentChecksumSha256 = playlistContentChecksum(items);
+    const nextVersion = playlist.version + 1;
+    const assignedDevices = await DeviceModel.find({
+      tenantId: input.tenantId,
+      currentPlaylistId: String(playlist._id)
+    }).select({ _id: 1, hardwareId: 1 }).lean();
+    const remainsPublished = playlist.publishedAt !== null || assignedDevices.length > 0;
+    const publishedAt = remainsPublished ? new Date() : null;
+    const publishedVersion = remainsPublished ? nextVersion : null;
+    const updatedPlaylist = await PlaylistModel.findOneAndUpdate(
+      { _id: playlist._id, tenantId: input.tenantId, version: playlist.version },
+      {
+        $set: {
+          items,
+          contentChecksumSha256,
+          publishedAt,
+          publishedVersion
+        },
+        $inc: { version: 1 }
+      },
+      { new: true }
+    ).lean();
+
+    if (!updatedPlaylist) {
+      throw new Error(`Playlist ${String(playlist._id)} changed while refreshing app ${input.appId}`);
+    }
+    playlistsUpdated += 1;
+
+    await contentRepository.upsertPlaylist({
+      tenantId: input.tenantId,
+      externalId: String(updatedPlaylist._id),
+      name: updatedPlaylist.name,
+      nameKey: updatedPlaylist.nameKey ?? normalizePlaylistName(updatedPlaylist.name)?.nameKey ?? updatedPlaylist.name,
+      creationKey: updatedPlaylist.creationKey,
+      version: updatedPlaylist.version,
+      contentChecksumSha256: updatedPlaylist.contentChecksumSha256,
+      itemsJson: updatedPlaylist.items,
+      publishedAt: updatedPlaylist.publishedAt,
+      publishedVersion: updatedPlaylist.publishedVersion,
+      ownerUserId: updatedPlaylist.ownerUserId
+    });
+
+    if (assignedDevices.length > 0) {
+      const payload: SyncContentPayload = {
+        playlist_id: String(updatedPlaylist._id),
+        playlist_version: updatedPlaylist.version,
+        checksum_sha256: updatedPlaylist.contentChecksumSha256,
+        items: updatedPlaylist.items.map((item) => ({
+          media_id: item.mediaId,
+          filename: item.filename,
+          media_url: item.mediaUrl,
+          checksum_sha256: item.checksumSha256,
+          mime_type: item.mimeType,
+          duration_ms: item.durationMs,
+          position: item.position
+        }))
+      };
+      emitSyncContentToDevices(assignedDevices.map((device) => String(device._id)), payload);
+      devicesNotified += assignedDevices.length;
+    }
+  }
+
+  return { playlistsUpdated, devicesNotified };
+}
 type AppsRouterDeps = {
   jwtSecret: string;
   jwtIssuer: string;
@@ -248,6 +348,14 @@ export function buildAppsRouter(deps: AppsRouterDeps): Router {
       }
 
       res.setHeader("Content-Type", "text/html; charset=utf-8");
+      const requestedRevision = String(req.query.rs_rev ?? "").trim();
+      const currentRevision = media.checksumSha256.slice(0, 16);
+      if (requestedRevision && requestedRevision === currentRevision) {
+        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      } else {
+        res.setHeader("Cache-Control", "no-cache, must-revalidate, stale-if-error=604800");
+        res.setHeader("Pragma", "no-cache");
+      }
       res.setHeader("X-Content-Type-Options", "nosniff");
       res.setHeader("Referrer-Policy", "no-referrer");
       res.setHeader(
@@ -311,7 +419,7 @@ export function buildAppsRouter(deps: AppsRouterDeps): Router {
       });
 
       const appId = String(media._id);
-      const checksumSha256 = createHash("sha256").update(appId).digest("hex");
+      const checksumSha256 = appRevision(appId, name, config);
       const publicUrl = `/api/v1/apps/render/${appId}`;
       const storagePath = `app://${appType}?id=${appId}`;
 
@@ -361,12 +469,14 @@ export function buildAppsRouter(deps: AppsRouterDeps): Router {
         ? { _id: appId, tenantId }
         : { _id: appId, tenantId, ownerUserId: req.auth?.userId };
 
+      const checksumSha256 = appRevision(appId, name, config);
       const updated = await MediaModel.findOneAndUpdate(
         filter,
         {
           $set: {
             filename: name,
-            appConfig: config
+            appConfig: config,
+            checksumSha256
           }
         },
         { new: true }
@@ -394,7 +504,21 @@ export function buildAppsRouter(deps: AppsRouterDeps): Router {
         logger.error("Failed to sync app update to postgres shadow write", err instanceof Error ? err : new Error(String(err)));
       }
 
-      res.json({ success: true, app: updated });
+      const refreshResult = await refreshPlaylistsForApp({
+        tenantId,
+        appId,
+        filename: updated.filename,
+        mediaUrl: updated.publicUrl,
+        checksumSha256: updated.checksumSha256,
+        mimeType: updated.mimeType
+      });
+
+      res.json({
+        success: true,
+        app: updated,
+        playlists_updated: refreshResult.playlistsUpdated,
+        devices_notified: refreshResult.devicesNotified
+      });
     } catch (err) {
       logger.error("Failed to update app instance", err instanceof Error ? err : new Error(String(err)));
       res.status(500).json({ code: "APP_UPDATE_FAILED", message: "Failed to update app instance" });
@@ -605,38 +729,46 @@ export function renderClockHtml(title: string, rawConfig: Record<string, unknown
     </section>
   </main>
   <script>
-    const config = ${configJson};
-    const hourEl = document.getElementById("hour");
-    const minuteEl = document.getElementById("minute");
-    const secondEl = document.getElementById("second");
-    const periodEl = document.getElementById("period");
-    const dateEl = document.getElementById("date");
-    const timezoneEl = document.getElementById("timezone");
-    const hourHand = document.getElementById("hour-hand");
-    const minuteHand = document.getElementById("minute-hand");
-    const secondHand = document.getElementById("second-hand");
-    const locale = config.locale === "tr" ? "tr-TR" : "en-GB";
-    let resolvedTimeZone = config.timezone === "local" ? undefined : config.timezone;
+    var config = ${configJson};
+    var hourEl = document.getElementById("hour");
+    var minuteEl = document.getElementById("minute");
+    var secondEl = document.getElementById("second");
+    var periodEl = document.getElementById("period");
+    var dateEl = document.getElementById("date");
+    var timezoneEl = document.getElementById("timezone");
+    var hourHand = document.getElementById("hour-hand");
+    var minuteHand = document.getElementById("minute-hand");
+    var secondHand = document.getElementById("second-hand");
+    var locale = config.locale === "tr" ? "tr-TR" : "en-GB";
+    var resolvedTimeZone = config.timezone === "local" ? undefined : config.timezone;
 
     function formatter(options) {
-      try { return new Intl.DateTimeFormat(locale, { ...options, timeZone: resolvedTimeZone }); }
-      catch { resolvedTimeZone = undefined; return new Intl.DateTimeFormat(locale, options); }
+      var resolvedOptions = {};
+      for (var key in options) { if (Object.prototype.hasOwnProperty.call(options, key)) resolvedOptions[key] = options[key]; }
+      if (resolvedTimeZone) resolvedOptions.timeZone = resolvedTimeZone;
+      try { return new Intl.DateTimeFormat(locale, resolvedOptions); }
+      catch (error) { resolvedTimeZone = undefined; return new Intl.DateTimeFormat(locale, options); }
     }
-    function part(parts, type) { return parts.find((item) => item.type === type)?.value || ""; }
+    function part(parts, type) { for (var index = 0; index < parts.length; index += 1) { if (parts[index].type === type) return parts[index].value || ""; } return ""; }
+    function twoDigits(value) { value = String(value || ""); return value.length < 2 ? "0" + value : value; }
     function update() {
       try {
-        const now = new Date();
-        const displayParts = formatter({ hour:"2-digit", minute:"2-digit", second:"2-digit", hour12:config.format === "12h", ...(config.format === "24h" ? { hourCycle:"h23" } : {}) }).formatToParts(now);
-        if (hourEl) hourEl.textContent = part(displayParts,"hour").padStart(2,"0");
-        if (minuteEl) minuteEl.textContent = part(displayParts,"minute").padStart(2,"0");
-        if (secondEl) secondEl.textContent = part(displayParts,"second").padStart(2,"0");
+        var now = new Date();
+        var displayOptions = { hour:"2-digit", minute:"2-digit", second:"2-digit", hour12:config.format === "12h" };
+        if (config.format === "24h") displayOptions.hourCycle = "h23";
+        var displayParts = formatter(displayOptions).formatToParts(now);
+        if (hourEl) hourEl.textContent = twoDigits(part(displayParts,"hour"));
+        if (minuteEl) minuteEl.textContent = twoDigits(part(displayParts,"minute"));
+        if (secondEl) secondEl.textContent = twoDigits(part(displayParts,"second"));
         if (periodEl) periodEl.textContent = part(displayParts,"dayPeriod");
         if (config.showDate && dateEl) dateEl.textContent = formatter({ weekday:"long", day:"numeric", month:"long", year:"numeric" }).format(now);
         if (config.showTimezone && timezoneEl) timezoneEl.textContent = config.timezone === "local" ? (config.locale === "tr" ? "Yerel saat" : "Local time") : String(config.timezone.split("/").pop() || "").replace(/_/g," ");
 
-        const numericParts = new Intl.DateTimeFormat("en-GB", { timeZone:resolvedTimeZone, hour:"2-digit", minute:"2-digit", second:"2-digit", hourCycle:"h23" }).formatToParts(now);
-        const numberPart = (type) => Number(part(numericParts,type) || 0);
-        const hours = numberPart("hour"); const minutes = numberPart("minute"); const seconds = numberPart("second") + now.getMilliseconds() / 1000;
+        var numericOptions = { hour:"2-digit", minute:"2-digit", second:"2-digit", hourCycle:"h23" };
+        if (resolvedTimeZone) numericOptions.timeZone = resolvedTimeZone;
+        var numericParts = new Intl.DateTimeFormat("en-GB", numericOptions).formatToParts(now);
+        function numberPart(type) { return Number(part(numericParts,type) || 0); }
+        var hours = numberPart("hour"); var minutes = numberPart("minute"); var seconds = numberPart("second") + now.getMilliseconds() / 1000;
         if (hourHand) hourHand.style.transform = "translateX(-50%) rotate(" + ((hours % 12) * 30 + minutes * .5) + "deg)";
         if (minuteHand) minuteHand.style.transform = "translateX(-50%) rotate(" + (minutes * 6 + seconds * .1) + "deg)";
         if (secondHand) secondHand.style.transform = "translateX(-50%) rotate(" + (seconds * 6) + "deg)";
@@ -645,7 +777,8 @@ export function renderClockHtml(title: string, rawConfig: Record<string, unknown
       }
     }
     update();
-    setInterval(update, config.layout === "analog" && config.showSeconds ? 100 : 1000);
+    window.__remoteScreenTick = update;
+    setInterval(update, 1000);
   </script>
 </body>
 </html>`;

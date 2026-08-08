@@ -230,7 +230,7 @@ export function renderWeatherHtml(title: string, rawConfig: Record<string, unkno
       async function refresh(){
         if(busy)return;
         busy=true;
-        var controller=new AbortController();
+        var controller=typeof AbortController==="function"?new AbortController():{signal:undefined,abort:function(){}};
         var timeout=setTimeout(function(){controller.abort()},12000);
         try{
           var geoUrl="https://geocoding-api.open-meteo.com/v1/search?name="+encodeURIComponent(config.city)+"&count=1&language="+config.locale+"&format=json";
@@ -264,6 +264,7 @@ export function renderWeatherHtml(title: string, rawConfig: Record<string, unkno
       if(cached&&cached.weather)render(cached,"cached");
       refresh();
       setInterval(refresh,900000);
+      window.__remoteScreenTick=function(){if(!busy&&Date.now()-lastSuccess>900000)refresh()};
       window.addEventListener("online",refresh);
       document.addEventListener("visibilitychange",function(){if(!document.hidden&&Date.now()-lastSuccess>900000)refresh()});
     })();

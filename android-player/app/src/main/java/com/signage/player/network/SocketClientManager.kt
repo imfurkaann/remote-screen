@@ -377,11 +377,6 @@ object SocketClientManager {
     }
 
     private fun mapSyncPayload(json: JSONObject): SyncContentPayload? {
-        val playlistId = json.optString("playlist_id").trim()
-        if (playlistId.isBlank()) {
-            return null
-        }
-
         val items = mutableListOf<SyncContentItem>()
         val array = json.optJSONArray("items") ?: JSONArray()
         for (index in 0 until array.length()) {
@@ -396,6 +391,9 @@ object SocketClientManager {
                 position = item.optInt("position", index)
             )
         }
+
+        val playlistId = if (json.isNull("playlist_id")) "" else json.optString("playlist_id").trim()
+        if (playlistId.isBlank() && items.isNotEmpty()) return null
 
         return SyncContentPayload(
             playlistId = playlistId,

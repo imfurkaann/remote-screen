@@ -23,6 +23,8 @@ describe("clock renderer", () => {
     assert.match(html, /data-layout="analog"/);
     assert.match(html, /class="analog"/);
     assert.match(html, /@media \(max-aspect-ratio:1\/1\)/);
+    assert.match(html, /window\.__remoteScreenTick = update/);
+    assert.doesNotMatch(html, /\?\.|\.\.\.options|\.padStart\(/);
     assert.doesNotMatch(html, /https?:\/\//);
   });
 

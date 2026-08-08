@@ -9,6 +9,7 @@ test("event board is bounded, responsive and self-contained", () => {
   const html = renderEventsHtml("Events", { hotelName: "<script>x</script>" });
   assert.doesNotMatch(html, /<script>x/);
   assert.match(html, /setInterval\(update,30000\)/);
+  assert.match(html, /window\.__remoteScreenTick=update/);
   assert.doesNotMatch(html, /https?:\/\//);
 });
 

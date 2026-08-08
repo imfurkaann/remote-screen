@@ -139,11 +139,17 @@ class CommandExecutor(
                             if (isWifi) {
                                 val wifiManager = appContext.applicationContext
                                     .getSystemService(android.net.wifi.WifiManager::class.java)
-                                val info = capabilities.transportInfo as? android.net.wifi.WifiInfo
+                                val info = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                                    capabilities.transportInfo as? android.net.wifi.WifiInfo
+                                } else {
+                                    @Suppress("DEPRECATION")
+                                    wifiManager.connectionInfo
+                                }
                                 if (info != null) {
                                     val rssi = info.rssi
                                     diagnostics["wifi_rssi"] = rssi
-                                    diagnostics["wifi_signal_level"] = wifiManager.calculateSignalLevel(rssi)
+                                    @Suppress("DEPRECATION")
+                                    diagnostics["wifi_signal_level"] = android.net.wifi.WifiManager.calculateSignalLevel(rssi, 5)
                                 }
                             }
                         } else {

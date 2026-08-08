@@ -1,6 +1,7 @@
 package com.signage.player
 
 import android.annotation.SuppressLint
+import android.os.Build
 import android.os.Bundle
 import android.net.Uri
 import android.widget.ImageView
@@ -62,6 +63,7 @@ import com.signage.player.network.ConnectionDiagnostics
 import com.signage.player.network.SessionManager
 import com.signage.player.network.SocketClientManager
 import com.signage.player.ui.PlayerUiStateStore
+import com.signage.player.ui.SignageWebView
 import com.signage.player.ui.theme.SignageplayerTheme
 import java.io.File
 import android.graphics.Bitmap
@@ -117,8 +119,16 @@ class MainActivity : ComponentActivity() {
         StartupCoordinator.enqueueStartup(this, runtimeDeviceId, socketBaseUrl)
         // Keep static image/web signage awake; ExoPlayer wake locks only cover video.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        setShowWhenLocked(true)
-        setTurnScreenOn(true)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        } else {
+            @Suppress("DEPRECATION")
+            window.addFlags(
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+            )
+        }
 
         // O1: Clean up stale screenshot files from previous sessions.
         // Screenshots accumulate in cacheDir when SCREENSHOT commands are frequent.
@@ -504,7 +514,7 @@ fun PairingScreen(modifier: Modifier = Modifier) {
                     AndroidView(
                         modifier = Modifier.fillMaxSize(),
                         factory = { androidContext ->
-                            android.webkit.WebView(androidContext).apply {
+                            SignageWebView(androidContext).apply {
                                 layoutParams = android.view.ViewGroup.LayoutParams(
                                     android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                                     android.view.ViewGroup.LayoutParams.MATCH_PARENT
@@ -523,7 +533,6 @@ fun PairingScreen(modifier: Modifier = Modifier) {
                                 settings.useWideViewPort = true
                                 settings.loadWithOverviewMode = false
                                 settings.mediaPlaybackRequiresUserGesture = false
-                                setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
                                 setBackgroundColor(android.graphics.Color.TRANSPARENT)
                                 webViewClient = object : android.webkit.WebViewClient() {
                                     // Y1: recover from WebView GPU process crash without

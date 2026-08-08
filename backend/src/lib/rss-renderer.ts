@@ -218,7 +218,7 @@ export function renderRssHtml(title: string, rawConfig: Record<string, unknown> 
       var content=document.getElementById("content"),status=document.getElementById("status"),statusText=document.getElementById("status-text"),loading=document.getElementById("loading"),loadingTitle=document.getElementById("loading-title"),loadingNote=document.getElementById("loading-note");
       loadingTitle.textContent=copy.loading;loadingNote.textContent=copy.wait;statusText.textContent=copy.loading;
       var cacheKey="remote-screen:rss:v3:"+config.rssUrl;
-      var items=[],currentIndex=0,busy=false,rotateTimer=0,retryTimer=0,lastSuccess=0;
+      var items=[],currentIndex=0,busy=false,rotateTimer=0,retryTimer=0,lastSuccess=0,lastRotation=0;
       var rotationMs=${cardSeconds * 1000};
       function el(tag,className,text){var node=document.createElement(tag);if(className)node.className=className;if(text!==undefined)node.textContent=text;return node}
       function formatTime(value){
@@ -242,7 +242,7 @@ export function renderRssHtml(title: string, rawConfig: Record<string, unknown> 
         windowNode.append(track);bar.append(label,windowNode);content.append(bar);
       }
       function renderCard(){
-        clearTimeout(rotateTimer);content.textContent="";content.className="shell card-layout";
+        clearTimeout(rotateTimer);lastRotation=Date.now();content.textContent="";content.className="shell card-layout";
         var item=items[currentIndex%items.length],head=el("div","card-head"),foot=el("div","card-foot"),story=el("article","story");
         head.append(el("span","eyebrow",config.sourceLabel),el("span","counter",String(currentIndex%items.length+1).padStart(2,"0")+" / "+String(items.length).padStart(2,"0")));
         story.append(el("div","story-title",item.title));
@@ -252,7 +252,7 @@ export function renderRssHtml(title: string, rawConfig: Record<string, unknown> 
         rotateTimer=setTimeout(function(){currentIndex=(currentIndex+1)%items.length;renderCard()},rotationMs);
       }
       function renderSplit(){
-        clearTimeout(rotateTimer);content.textContent="";content.className="shell split-layout";
+        clearTimeout(rotateTimer);lastRotation=Date.now();content.textContent="";content.className="shell split-layout";
         var item=items[currentIndex%items.length],lead=el("section","lead"),top=el("div"),story=el("div"),rail=el("aside","rail");
         top.append(el("span","eyebrow",config.sourceLabel));story.append(el("div","lead-title",item.title));
         if(config.showDescription&&item.description)story.append(el("p","lead-desc",item.description));
@@ -272,7 +272,8 @@ export function renderRssHtml(title: string, rawConfig: Record<string, unknown> 
       function writeCache(value){try{localStorage.setItem(cacheKey,JSON.stringify(value))}catch(error){}}
       async function refresh(){
         if(busy)return;busy=true;
-        var controller=new AbortController(),timeout=setTimeout(function(){controller.abort()},10000);
+        var controller=typeof AbortController==="function"?new AbortController():{signal:undefined,abort:function(){}};
+        var timeout=setTimeout(function(){controller.abort()},10000);
         try{
           var response=await fetch("/api/v1/apps/rss-proxy?url="+encodeURIComponent(config.rssUrl),{signal:controller.signal,cache:"no-store"});
           if(!response.ok)throw new Error("HTTP "+response.status);
@@ -288,6 +289,10 @@ export function renderRssHtml(title: string, rawConfig: Record<string, unknown> 
       var cached=readCache();if(cached&&Array.isArray(cached.items)&&cached.items.length){try{render(cached,"cached")}catch(error){}}
       refresh();
       setInterval(refresh,600000+Math.floor(Math.random()*120000));
+      window.__remoteScreenTick=function(){
+        if((config.layout==="cards"||config.layout==="split")&&items.length&&Date.now()-lastRotation>=rotationMs){currentIndex=(currentIndex+1)%items.length;if(config.layout==="cards")renderCard();else renderSplit()}
+        if(!busy&&Date.now()-lastSuccess>720000)refresh();
+      };
       window.addEventListener("online",refresh);
       document.addEventListener("visibilitychange",function(){if(!document.hidden&&Date.now()-lastSuccess>600000)refresh()});
     })();

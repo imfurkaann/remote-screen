@@ -17,6 +17,8 @@ test("weather renderer uses current Open-Meteo fields and resilient refresh", ()
   assert.match(html, /localStorage\.setItem/);
   assert.match(html, /AbortController/);
   assert.match(html, /window\.addEventListener\("online",refresh\)/);
+  assert.match(html, /window\.__remoteScreenTick/);
+  assert.match(html, /typeof AbortController==="function"/);
   assert.doesNotMatch(html, /current_weather=true/);
 });
 

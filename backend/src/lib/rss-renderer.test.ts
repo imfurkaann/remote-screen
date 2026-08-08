@@ -36,6 +36,8 @@ test("RSS renderer is resilient and never injects feed data as HTML", () => {
   assert.match(html, /AbortController/);
   assert.match(html, /textContent/);
   assert.match(html, /window\.addEventListener\("online",refresh\)/);
+  assert.match(html, /window\.__remoteScreenTick/);
+  assert.match(html, /typeof AbortController==="function"/);
   assert.doesNotMatch(html, /innerHTML/);
 });
 

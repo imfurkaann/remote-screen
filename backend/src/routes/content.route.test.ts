@@ -482,6 +482,112 @@ describe("content lifecycle", () => {
     assert.equal(firstPayload?.items?.[0]?.checksum_sha256.length, 64);
   });
 
+  it("refreshes assigned playlists and notifies screens when an app is updated", async () => {
+    const baseUrl = await startServer();
+    const token = makeUserToken("tenant_owner");
+    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
+
+    const createAppResponse = await fetch(`${baseUrl}/api/v1/apps/create-app`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        name: "Lobby Clock",
+        appType: "clock",
+        config: { timezone: "Europe/Istanbul", showSeconds: true }
+      })
+    });
+    assert.equal(createAppResponse.status, 201);
+    const createAppPayload = (await createAppResponse.json()) as {
+      app: { _id: string; checksumSha256: string };
+    };
+
+    const createPlaylistResponse = await fetch(`${baseUrl}/api/v1/content/playlists`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        name: "Single Media: Lobby Clock",
+        items: [{ media_id: createAppPayload.app._id, duration_ms: 10_000, position: 0 }]
+      })
+    });
+    assert.equal(createPlaylistResponse.status, 201);
+    const createPlaylistPayload = (await createPlaylistResponse.json()) as {
+      playlist: { id: string; version: number };
+    };
+
+    const device = await DeviceModel.create({
+      tenantId: "tenant-test",
+      hardwareId: "hw-app-refresh-1",
+      status: "online",
+      pairedOwnerUserId: "user-demo",
+      currentPlaylistId: createPlaylistPayload.playlist.id,
+      lastHeartbeatAt: new Date(),
+      lastSeenAt: new Date()
+    });
+    const emitted: Array<{ event: string; payload: unknown }> = [];
+    setSocketServer({
+      of() {
+        return {
+          to() {
+            return {
+              emit(event: string, payload: unknown) {
+                emitted.push({ event, payload });
+              }
+            };
+          }
+        };
+      }
+    } as never);
+
+    const updateResponse = await fetch(
+      `${baseUrl}/api/v1/apps/update-app/${createAppPayload.app._id}`,
+      {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          name: "Lobby Clock",
+          config: { timezone: "Europe/Istanbul", showSeconds: false, theme: "paper" }
+        })
+      }
+    );
+    assert.equal(updateResponse.status, 200);
+    const updatePayload = (await updateResponse.json()) as {
+      app: { checksumSha256: string };
+      playlists_updated: number;
+      devices_notified: number;
+    };
+    assert.notEqual(updatePayload.app.checksumSha256, createAppPayload.app.checksumSha256);
+    assert.equal(updatePayload.playlists_updated, 1);
+    assert.equal(updatePayload.devices_notified, 1);
+
+    const refreshedPlaylist = await PlaylistModel.findById(createPlaylistPayload.playlist.id).lean();
+    assert.equal(refreshedPlaylist?.version, createPlaylistPayload.playlist.version + 1);
+    assert.equal(refreshedPlaylist?.publishedVersion, refreshedPlaylist?.version);
+    assert.equal(refreshedPlaylist?.items[0]?.checksumSha256, updatePayload.app.checksumSha256);
+    assert.equal(refreshedPlaylist?.contentChecksumSha256.length, 64);
+
+    const syncEvents = emitted.filter((entry) => entry.event === "SYNC_CONTENT");
+    assert.equal(syncEvents.length, 1);
+    const syncPayload = syncEvents[0]?.payload as {
+      playlist_version: number;
+      checksum_sha256: string;
+      items: Array<{ checksum_sha256: string }>;
+    };
+    assert.equal(syncPayload.playlist_version, refreshedPlaylist?.version);
+    assert.equal(syncPayload.checksum_sha256, refreshedPlaylist?.contentChecksumSha256);
+    assert.equal(syncPayload.items[0]?.checksum_sha256, updatePayload.app.checksumSha256);
+    assert.equal((await DeviceModel.findById(device._id).lean())?.currentPlaylistId, createPlaylistPayload.playlist.id);
+
+    const renderResponse = await fetch(
+      `${baseUrl}/api/v1/apps/render/${createAppPayload.app._id}?rs_rev=${updatePayload.app.checksumSha256.slice(0, 16)}`
+    );
+    assert.equal(renderResponse.status, 200);
+    assert.match(renderResponse.headers.get("cache-control") ?? "", /immutable/);
+    assert.match(await renderResponse.text(), /window\.__remoteScreenTick = update/);
+
+    const unversionedRender = await fetch(`${baseUrl}/api/v1/apps/render/${createAppPayload.app._id}`);
+    assert.match(unversionedRender.headers.get("cache-control") ?? "", /must-revalidate/);
+  });
+
   it("deletes a playlist and clears it from assigned devices", async () => {
     const baseUrl = await startServer();
     const token = makeUserToken("tenant_owner");
