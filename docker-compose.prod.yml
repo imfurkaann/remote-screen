@@ -10,6 +10,9 @@ services:
         required: false
     environment:
       - NODE_ENV=production
+      - BACKEND_PORT=4100
+      - CORS_ORIGIN=${SERVER_SCHEME:-http}://${SERVER_HOST:-localhost}
+      - MEDIA_PUBLIC_BASE_URL=${SERVER_SCHEME:-http}://${SERVER_HOST:-localhost}/uploads
       - MONGO_URI=${MONGO_URI:-mongodb://${MONGO_ROOT_USER:-admin}:${MONGO_ROOT_PASSWORD}@mongo:27017/remote_screen_prod?authSource=admin}
       - REDIS_URL=${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379}
     volumes:
@@ -38,8 +41,7 @@ services:
       context: .
       dockerfile: dashboard/Dockerfile
       args:
-        NEXT_PUBLIC_BACKEND_SOCKET_URL: ${NEXT_PUBLIC_BACKEND_SOCKET_URL:-https://api.yourdomain.com}
-        BACKEND_BASE_URL: ${BACKEND_BASE_URL:-http://backend:4100}
+        BACKEND_BASE_URL: http://backend:4100
     container_name: remote_screen_prod_dashboard
     restart: unless-stopped
     env_file:
@@ -47,9 +49,9 @@ services:
         required: false
     environment:
       - NODE_ENV=production
-      - BACKEND_BASE_URL=${BACKEND_BASE_URL:-http://backend:4100}
-      - BACKEND_PUBLIC_SOCKET_URL=${BACKEND_PUBLIC_SOCKET_URL:-https://api.yourdomain.com}
-      - DASHBOARD_COOKIE_SECURE=${DASHBOARD_COOKIE_SECURE:-true}
+      - BACKEND_BASE_URL=http://backend:4100
+      - BACKEND_PUBLIC_SOCKET_URL=${SERVER_SCHEME:-http}://${SERVER_HOST:-localhost}
+      - SERVER_SCHEME=${SERVER_SCHEME:-http}
     depends_on:
       backend:
         condition: service_healthy

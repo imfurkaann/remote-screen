@@ -46,6 +46,18 @@ export type DeviceStatusPayload = {
   screen_on?: boolean | null;
 };
 
+export type PlaybackStatusPayload = {
+  device_id: string;
+  media_id: string | null;
+  playback_started_at: string | null;
+};
+
+export type PreviewUpdatedPayload = {
+  device_id: string;
+  preview_url: string;
+  captured_at: string;
+};
+
 export function buildCanonicalDeviceRooms(deviceIds: readonly string[]): string[] {
   return [...new Set(deviceIds.filter(Boolean).map((deviceId) => `device:${deviceId}`))];
 }
@@ -90,6 +102,26 @@ export function emitDashboardDeviceStatus(
   const rooms = [`dashboard:tenant:${target.tenantId}:owner`];
   if (target.pairedOwnerUserId) rooms.push(`dashboard:user:${target.pairedOwnerUserId}`);
   ioInstance.of("/dashboard").to(rooms).emit("DEVICE_STATUS", payload);
+}
+
+export function emitDashboardPlaybackStatus(
+  payload: PlaybackStatusPayload,
+  target: { tenantId: string; pairedOwnerUserId: string | null }
+): void {
+  if (!ioInstance) return;
+  const rooms = [`dashboard:tenant:${target.tenantId}:owner`];
+  if (target.pairedOwnerUserId) rooms.push(`dashboard:user:${target.pairedOwnerUserId}`);
+  ioInstance.of("/dashboard").to(rooms).emit("PLAYBACK_STATUS", payload);
+}
+
+export function emitDashboardPreviewUpdated(
+  payload: PreviewUpdatedPayload,
+  target: { tenantId: string; pairedOwnerUserId: string | null }
+): void {
+  if (!ioInstance) return;
+  const rooms = [`dashboard:tenant:${target.tenantId}:owner`];
+  if (target.pairedOwnerUserId) rooms.push(`dashboard:user:${target.pairedOwnerUserId}`);
+  ioInstance.of("/dashboard").to(rooms).emit("PREVIEW_UPDATED", payload);
 }
 
 export function disconnectDeviceSockets(deviceId: string): void {

@@ -48,11 +48,13 @@ class PlaybackCoordinator(
     private val playlistRepository: PlaylistRepository,
     private val playerController: PlayerController = PlayerController(context),
     private val playbackStateStore: PlaybackStateStore = PlaybackStateStore(context),
+    private val onPlaybackChanged: (mediaId: String?, startedAtEpochMs: Long?) -> Unit = { _, _ -> },
     private val onError: (source: String, message: String, details: Map<String, Any?>) -> Unit = { _, _, _ -> }
 ) {
     private val tag = "PlaybackCoordinator"
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var playbackJob: Job? = null
+    private var announcedMediaId: String? = null
 
     // Guards against concurrent calls to restoreAndPlayFromCache / gracefulReload
     // so two SYNC_CONTENT events arriving back-to-back don't start two loops.
@@ -158,6 +160,7 @@ class PlaybackCoordinator(
     suspend fun restoreAndPlayFromCache() {
         reloadMutex.withLock {
             playbackJob?.cancelAndJoin()
+            announcedMediaId = null
             playbackJob = scope.launch { playbackLoop() }
         }
     }
@@ -186,6 +189,7 @@ class PlaybackCoordinator(
             }
             // Cancel whatever is left (handles timeout case) then relaunch.
             playbackJob?.cancelAndJoin()
+            announcedMediaId = null
             playbackJob = scope.launch { playbackLoop() }
         }
     }
@@ -211,6 +215,10 @@ class PlaybackCoordinator(
 
             if (playlist.isEmpty()) {
                 withContext(Dispatchers.Main) { PlayerUiStateStore.setCurrentMedia(null, false, null) }
+                if (announcedMediaId != null) {
+                    announcedMediaId = null
+                    onPlaybackChanged(null, null)
+                }
                 return
             }
 
@@ -292,6 +300,11 @@ class PlaybackCoordinator(
                     if (isImg || isWeb) {
                         playerController.pause()
                     }
+                }
+
+                if (announcedMediaId != item.mediaId) {
+                    announcedMediaId = item.mediaId
+                    onPlaybackChanged(item.mediaId, System.currentTimeMillis())
                 }
 
                 if (isImg || isWeb) {

@@ -15,7 +15,8 @@ services:
       - JWT_ISSUER=remote-screen
       - JWT_AUDIENCE=remote-screen-clients
       - DEVICE_BOOTSTRAP_KEY=dev-device-bootstrap-key-minimum-32-chars
-      - CORS_ORIGIN=http://localhost:3000,http://localhost:4100,http://169.58.124.2:3000,http://169.58.124.2:4100
+      - CORS_ORIGIN=${SERVER_SCHEME:-http}://${SERVER_HOST:-localhost}:3000,${SERVER_SCHEME:-http}://${SERVER_HOST:-localhost}:4100,http://localhost:3000,http://localhost:4100
+      - MEDIA_PUBLIC_BASE_URL=${SERVER_SCHEME:-http}://${SERVER_HOST:-localhost}:4100/uploads
       - MEDIA_STORAGE_ROOT=./uploads
     volumes:
       - uploads_data:/app/backend/uploads
@@ -32,7 +33,6 @@ services:
       context: .
       dockerfile: dashboard/Dockerfile
       args:
-        NEXT_PUBLIC_BACKEND_SOCKET_URL: http://169.58.124.2:4100
         BACKEND_BASE_URL: http://backend:4100
     container_name: remote_screen_dashboard
     ports:
@@ -40,9 +40,8 @@ services:
     environment:
       - NODE_ENV=development
       - BACKEND_BASE_URL=http://backend:4100
-      - BACKEND_PUBLIC_SOCKET_URL=http://169.58.124.2:4100
-      - NEXT_PUBLIC_BACKEND_SOCKET_URL=http://169.58.124.2:4100
-      - DASHBOARD_COOKIE_SECURE=false
+      - BACKEND_PUBLIC_SOCKET_URL=${SERVER_SCHEME:-http}://${SERVER_HOST:-localhost}:4100
+      - SERVER_SCHEME=${SERVER_SCHEME:-http}
     depends_on:
       - backend
     networks:

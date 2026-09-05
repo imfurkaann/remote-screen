@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 import { after, afterEach, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { rm } from "node:fs/promises";
+import { access, rm } from "node:fs/promises";
 import path from "node:path";
 import jwt from "jsonwebtoken";
 import mongoose, { Types } from "mongoose";
@@ -82,6 +82,10 @@ afterEach(async () => {
     recursive: true,
     force: true
   });
+  await rm(path.resolve(process.cwd(), "uploads", "screenshots", "tenant-test"), {
+    recursive: true,
+    force: true
+  });
 });
 
 async function startServer(): Promise<string> {
@@ -100,10 +104,13 @@ async function startServer(): Promise<string> {
   return `http://127.0.0.1:${address.port}`;
 }
 
-function makeUserToken(role: "tenant_admin" | "tenant_owner" | "operator" = "tenant_admin"): string {
+function makeUserToken(
+  role: "tenant_admin" | "tenant_owner" | "operator" = "tenant_admin",
+  userId = "user-demo"
+): string {
   return jwt.sign(
     {
-      sub: "user-demo",
+      sub: userId,
       tenant_id: "tenant-test",
       role
     },
@@ -681,5 +688,66 @@ describe("content lifecycle", () => {
     const lastEvent = syncEvents[syncEvents.length - 1];
     const payload = lastEvent?.payload as { playlist_id: string | null };
     assert.equal(payload?.playlist_id, null);
+  });
+
+  it("stores one private, authenticated preview per device", async () => {
+    const baseUrl = await startServer();
+    const token = makeUserToken();
+    const device = await DeviceModel.create({
+      tenantId: "tenant-test",
+      hardwareId: "hw-private-preview",
+      status: "online",
+      pairedOwnerUserId: "user-demo"
+    });
+
+    const uploadPreview = async (marker: number) => {
+      const form = new FormData();
+      form.set(
+        "file",
+        new Blob([Uint8Array.from([0xff, 0xd8, 0xff, marker, 0xff, 0xd9])], { type: "image/jpeg" }),
+        "preview.jpg"
+      );
+      return fetch(`${baseUrl}/api/v1/commands/devices/${String(device._id)}/screenshot`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+        body: form
+      });
+    };
+
+    const firstResponse = await uploadPreview(1);
+    assert.equal(firstResponse.status, 201);
+    const first = (await firstResponse.json()) as { screenshot_url: string };
+
+    const directResponse = await fetch(`${baseUrl}${first.screenshot_url}`);
+    assert.equal(directResponse.status, 404);
+
+    const authenticatedResponse = await fetch(
+      `${baseUrl}/api/v1/commands/devices/${String(device._id)}/preview`,
+      { headers: { authorization: `Bearer ${token}` } }
+    );
+    assert.equal(authenticatedResponse.status, 200);
+    assert.equal(authenticatedResponse.headers.get("cache-control"), "private, no-store");
+
+    const unauthenticatedResponse = await fetch(
+      `${baseUrl}/api/v1/commands/devices/${String(device._id)}/preview`
+    );
+    assert.equal(unauthenticatedResponse.status, 401);
+
+    const otherUserResponse = await fetch(
+      `${baseUrl}/api/v1/commands/devices/${String(device._id)}/preview`,
+      { headers: { authorization: `Bearer ${makeUserToken("tenant_admin", "user-other")}` } }
+    );
+    assert.equal(otherUserResponse.status, 404);
+
+    const secondResponse = await uploadPreview(2);
+    assert.equal(secondResponse.status, 201);
+    const second = (await secondResponse.json()) as { screenshot_url: string };
+    assert.notEqual(second.screenshot_url, first.screenshot_url);
+
+    const firstAbsolutePath = path.resolve(process.cwd(), first.screenshot_url.replace(/^\//, ""));
+    await assert.rejects(access(firstAbsolutePath));
+    const storedDevice = await DeviceModel.findById(device._id).lean();
+    assert.equal(storedDevice?.previewUrl, second.screenshot_url);
+    assert.ok(storedDevice?.previewCapturedAt instanceof Date);
   });
 });

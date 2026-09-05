@@ -185,7 +185,12 @@ object StartupCoordinator {
 
         val hardwareId = HardwareIdStore(context).getOrCreateHardwareId()
         val socketDeviceId = runtimeDeviceId ?: hardwareId
-        val resolvedSocketBaseUrl = socketBaseUrl ?: AppDefaults.BACKEND_BASE_URL
+        val prefs = context.getSharedPreferences("signage_player_config", Context.MODE_PRIVATE)
+        if (!socketBaseUrl.isNullOrBlank()) {
+            prefs.edit().putString("backend_base_url", socketBaseUrl).apply()
+        }
+        val savedUrl = prefs.getString("backend_base_url", null)
+        val resolvedSocketBaseUrl = socketBaseUrl ?: savedUrl ?: AppDefaults.BACKEND_BASE_URL
         backendBaseUrl = resolvedSocketBaseUrl
 
         // Start the session manager early — before any UI is built — so the
@@ -224,7 +229,10 @@ object StartupCoordinator {
         val playbackCoordinator = PlaybackCoordinator(
             context = context,
             playlistRepository = playlistRepository,
-            playerController = playerController
+            playerController = playerController,
+            onPlaybackChanged = { mediaId, startedAtEpochMs ->
+                SocketClientManager.updatePlaybackState(mediaId, startedAtEpochMs)
+            }
         ) { source, message, details ->
             telemetryReporter.reportError(source, message, details)
         }

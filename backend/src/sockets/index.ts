@@ -4,7 +4,7 @@ import { createAdapter } from "@socket.io/redis-adapter";
 import { createClient, type RedisClientType } from "redis";
 import jwt from "jsonwebtoken";
 import { Types } from "mongoose";
-import { emitDashboardCommandAck, emitDashboardDeviceStatus } from "./registry.js";
+import { emitDashboardCommandAck, emitDashboardDeviceStatus, emitDashboardPlaybackStatus } from "./registry.js";
 import {
   dispatchPendingCommandsForDevice,
   processDeviceAck,
@@ -132,6 +132,7 @@ export async function createSocketServer(httpServer: HttpServer, deps: SocketDep
   const heartbeatBuffer = new HeartbeatBuffer();
   const disconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const screenStateByDevice = new Map<string, boolean>();
+  const playbackStateByDevice = new Map<string, string>();
   heartbeatBuffer.start();
   const staleStatusTimer = setInterval(() => {
     const now = Date.now();
@@ -497,6 +498,46 @@ export async function createSocketServer(httpServer: HttpServer, deps: SocketDep
         copyBoundedString("memoryTotal", "memoryTotal", 32);
         copyBoundedString("memoryUsed", "memoryUsed", 32);
 
+        if (Object.prototype.hasOwnProperty.call(payload, "currentMediaId")) {
+          const currentMediaIdRaw = payload.currentMediaId;
+          const currentMediaId = typeof currentMediaIdRaw === "string" && currentMediaIdRaw.trim()
+            ? currentMediaIdRaw.trim().slice(0, 64)
+            : null;
+          const playbackStartedAtRaw = payload.playbackStartedAt;
+          const boundedPlaybackStartedAt = typeof playbackStartedAtRaw === "string"
+            ? playbackStartedAtRaw.trim().slice(0, 64)
+            : "";
+          const parsedPlaybackStartedAt = boundedPlaybackStartedAt
+            ? new Date(boundedPlaybackStartedAt)
+            : null;
+          const parsedTimestamp = parsedPlaybackStartedAt?.getTime();
+          // A device with a badly configured clock must not make every newly
+          // captured preview look older than the reported playback state.
+          const playbackStartedAt = currentMediaId
+            ? Number.isFinite(parsedTimestamp) && Number(parsedTimestamp) <= heartbeatAt.getTime() + 60_000
+              ? parsedPlaybackStartedAt
+              : heartbeatAt
+            : null;
+
+          const playbackKey = `${currentMediaId ?? ""}|${boundedPlaybackStartedAt}`;
+          if (playbackStateByDevice.get(deviceId) !== playbackKey) {
+            playbackStateByDevice.set(deviceId, playbackKey);
+            // Playback transitions are infrequent and must be immediately
+            // queryable when an operator opens the detail page.
+            void DeviceModel.updateOne(query, {
+              $set: { currentMediaId, playbackStartedAt }
+            }).catch((error) => console.error("[sockets] playback state persistence failed", error));
+            emitDashboardPlaybackStatus(
+              {
+                device_id: deviceId,
+                media_id: currentMediaId,
+                playback_started_at: playbackStartedAt?.toISOString() ?? null
+              },
+              { tenantId, pairedOwnerUserId }
+            );
+          }
+        }
+
         const screenOn = payload.screenOn;
         if (typeof screenOn === "boolean") {
           fields.screenOn = screenOn;
@@ -532,6 +573,7 @@ export async function createSocketServer(httpServer: HttpServer, deps: SocketDep
 
           heartbeatBuffer.evict(deviceId);
           screenStateByDevice.delete(deviceId);
+          playbackStateByDevice.delete(deviceId);
           const updated = await DeviceModel.findOneAndUpdate(
             { _id: deviceId, tenantId, hardwareId, lastHeartbeatAt: { $lte: disconnectedAt } },
             { $set: { status: "offline" } },

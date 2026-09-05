@@ -136,7 +136,10 @@ class MainActivity : ComponentActivity() {
         try {
             val maxAgeMs = 60 * 60 * 1_000L // 1 hour
             val now = System.currentTimeMillis()
-            cacheDir.listFiles { f -> f.name.startsWith("screenshot_") && f.name.endsWith(".png") }
+            cacheDir.listFiles { f ->
+                f.name.startsWith("screenshot_") &&
+                    (f.name.endsWith(".png") || f.name.endsWith(".jpg"))
+            }
                 ?.filter { f -> now - f.lastModified() > maxAgeMs }
                 ?.forEach { f -> f.delete() }
         } catch (_: Exception) { /* non-critical — ignore */ }
@@ -144,13 +147,18 @@ class MainActivity : ComponentActivity() {
         // Register screenshot provider
         StartupCoordinator.registerScreenshotProvider(this) {
             val bitmap = captureWindow(window) ?: return@registerScreenshotProvider null
-            val file = File(cacheDir, "screenshot_${System.currentTimeMillis()}.png")
+            val file = File(cacheDir, "screenshot_${System.currentTimeMillis()}.jpg")
             try {
                 FileOutputStream(file).use { out ->
-                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+                    if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 75, out)) {
+                        throw java.io.IOException("Unable to encode screenshot")
+                    }
                 }
+                bitmap.recycle()
                 file
             } catch (e: Exception) {
+                bitmap.recycle()
+                file.delete()
                 null
             }
         }
@@ -210,14 +218,19 @@ class MainActivity : ComponentActivity() {
                 if (continuation.isActive) continuation.resume(null)
                 return@suspendCancellableCoroutine
             }
-            val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+            val maxDimension = 1280f
+            val scale = minOf(1f, maxDimension / maxOf(view.width, view.height).toFloat())
+            val targetWidth = maxOf(1, (view.width * scale).toInt())
+            val targetHeight = maxOf(1, (view.height * scale).toInt())
+            val bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
             PixelCopy.request(
                 window,
                 bitmap,
                 { copyResult ->
                     if (copyResult == PixelCopy.SUCCESS) {
-                        if (continuation.isActive) continuation.resume(bitmap)
+                        if (continuation.isActive) continuation.resume(bitmap) else bitmap.recycle()
                     } else {
+                        bitmap.recycle()
                         if (continuation.isActive) continuation.resume(null)
                     }
                 },

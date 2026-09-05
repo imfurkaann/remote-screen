@@ -28,6 +28,10 @@ type Device = {
   last_heartbeat_at?: string | null;
   screen_on?: boolean | null;
   current_playlist_id?: string | null;
+  current_media_id?: string | null;
+  playback_started_at?: string | null;
+  preview_url?: string | null;
+  preview_captured_at?: string | null;
   ip_address?: string | null;
   player_version?: string | null;
   os_version?: string | null;
@@ -269,6 +273,8 @@ export default function ScreenDetailPage() {
   const [isPolling, setIsPolling] = useState(false);
   const [volumeLevel, setVolumeLevel] = useState<number>(50);
   const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
+  const [screenshotCapturedAt, setScreenshotCapturedAt] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   // Settings Form State
@@ -311,11 +317,75 @@ export default function ScreenDetailPage() {
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollStartRef = useRef<number>(0);
   const pollTargetRef = useRef<{ deviceId: string; commandId: string } | null>(null);
+  const autoPreviewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoPreviewTimeoutsRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const lastAutoPreviewKeyRef = useRef<string | null>(null);
+  const autoPreviewCommandsRef = useRef(new Map<string, string>());
+
+  const scheduleAutomaticPreview = (mediaId: string | null | undefined, playbackStartedAt: string | null | undefined) => {
+    if (!mediaId || !playbackStartedAt || document.visibilityState !== "visible") return;
+    const previewKey = `${mediaId}|${playbackStartedAt}`;
+    if (lastAutoPreviewKeyRef.current === previewKey) return;
+
+    lastAutoPreviewKeyRef.current = previewKey;
+    setScreenshotUrl(null);
+    setScreenshotCapturedAt(null);
+    setPreviewError(false);
+    if (autoPreviewTimerRef.current) clearTimeout(autoPreviewTimerRef.current);
+
+    // Let image, WebView and the first decoded video frame settle before capture.
+    autoPreviewTimerRef.current = setTimeout(async () => {
+      autoPreviewTimerRef.current = null;
+      const commandId = createClientId();
+      autoPreviewCommandsRef.current.set(commandId, previewKey);
+      try {
+        const response = await fetch("/api/commands/dispatch", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            device_id: deviceId,
+            command_id: commandId,
+            command_type: "SCREENSHOT",
+            payload: { reason: "playback_changed", media_id: mediaId },
+            timeout_ms: 15000,
+            max_attempts: 1
+          })
+        });
+        if (!response.ok) {
+          autoPreviewCommandsRef.current.delete(commandId);
+          if (lastAutoPreviewKeyRef.current === previewKey) {
+            lastAutoPreviewKeyRef.current = null;
+            setPreviewError(true);
+          }
+        } else {
+          const timeout = setTimeout(() => {
+            if (autoPreviewCommandsRef.current.delete(commandId)) {
+              if (lastAutoPreviewKeyRef.current === previewKey) {
+                lastAutoPreviewKeyRef.current = null;
+                setPreviewError(true);
+              }
+            }
+            autoPreviewTimeoutsRef.current.delete(commandId);
+          }, 25_000);
+          autoPreviewTimeoutsRef.current.set(commandId, timeout);
+        }
+      } catch {
+        autoPreviewCommandsRef.current.delete(commandId);
+        if (lastAutoPreviewKeyRef.current === previewKey) {
+          lastAutoPreviewKeyRef.current = null;
+          setPreviewError(true);
+        }
+      }
+    }, 2_000);
+  };
 
   // Cleanup polling on unmount
   useEffect(() => {
     return () => {
       if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+      if (autoPreviewTimerRef.current) clearTimeout(autoPreviewTimerRef.current);
+      for (const timeout of autoPreviewTimeoutsRef.current.values()) clearTimeout(timeout);
+      autoPreviewTimeoutsRef.current.clear();
     };
   }, []);
 
@@ -339,6 +409,27 @@ export default function ScreenDetailPage() {
       const foundDevice = deviceData.device;
       if (!foundDevice) throw new Error("Device response was incomplete");
       setDevice(foundDevice);
+      const devicePreviewTime = foundDevice.preview_captured_at ? Date.parse(foundDevice.preview_captured_at) : Number.NaN;
+      const devicePlaybackTime = foundDevice.playback_started_at ? Date.parse(foundDevice.playback_started_at) : Number.NaN;
+      const hasFreshDevicePreview = Boolean(
+        foundDevice.current_media_id &&
+        foundDevice.preview_url &&
+        Number.isFinite(devicePreviewTime) &&
+        Number.isFinite(devicePlaybackTime) &&
+        devicePreviewTime >= devicePlaybackTime
+      );
+      if (hasFreshDevicePreview) {
+        setScreenshotUrl(foundDevice.preview_url ?? null);
+        setScreenshotCapturedAt(foundDevice.preview_captured_at ?? null);
+        setPreviewError(false);
+        lastAutoPreviewKeyRef.current = `${foundDevice.current_media_id}|${foundDevice.playback_started_at}`;
+      } else {
+        setScreenshotUrl(null);
+        setScreenshotCapturedAt(null);
+      }
+      if (foundDevice.status === "online" && !hasFreshDevicePreview) {
+        scheduleAutomaticPreview(foundDevice.current_media_id, foundDevice.playback_started_at);
+      }
       setOrientation(foundDevice.orientation ?? 0);
       
       // Seed settings inputs if initial load OR if they haven't been modified since last fetch
@@ -397,8 +488,13 @@ export default function ScreenDetailPage() {
         const screenshotCmd = fetchedCommands.find(
           (c) => c.command_type === "SCREENSHOT" && c.status === "completed" && c.screenshot_url
         );
-        if (screenshotCmd?.screenshot_url) {
+        const screenshotTime = screenshotCmd?.completed_at ? Date.parse(screenshotCmd.completed_at) : Number.NaN;
+        const playbackTime = foundDevice.playback_started_at ? Date.parse(foundDevice.playback_started_at) : Number.NaN;
+        const belongsToCurrentPlayback = !Number.isFinite(playbackTime) ||
+          (Number.isFinite(screenshotTime) && screenshotTime >= playbackTime);
+        if (!hasFreshDevicePreview && foundDevice.current_media_id && screenshotCmd?.screenshot_url && belongsToCurrentPlayback) {
           setScreenshotUrl(screenshotCmd.screenshot_url);
+          setScreenshotCapturedAt(screenshotCmd.completed_at ?? new Date().toISOString());
         }
       }
 
@@ -430,6 +526,8 @@ export default function ScreenDetailPage() {
     onCommandAck: (event) => {
       if (event.device_id !== deviceId) return;
       const status = commandAckStatus(event);
+      const automaticPreviewKey = autoPreviewCommandsRef.current.get(event.command_id);
+      const isAutomaticPreview = automaticPreviewKey !== undefined;
       setCommandsList((current) => current.map((command) =>
         command.command_id === event.command_id
           ? {
@@ -451,10 +549,26 @@ export default function ScreenDetailPage() {
       );
 
       if (status === "completed" || status === "failed") {
+        if (isAutomaticPreview) {
+          autoPreviewCommandsRef.current.delete(event.command_id);
+          const timeout = autoPreviewTimeoutsRef.current.get(event.command_id);
+          if (timeout) clearTimeout(timeout);
+          autoPreviewTimeoutsRef.current.delete(event.command_id);
+          if (status === "failed") {
+            if (lastAutoPreviewKeyRef.current === automaticPreviewKey) {
+              lastAutoPreviewKeyRef.current = null;
+              setPreviewError(true);
+            }
+          }
+        }
+        if (event.screenshot_url) {
+          setScreenshotUrl(event.screenshot_url);
+          setScreenshotCapturedAt(new Date().toISOString());
+        }
+        if (isAutomaticPreview) return;
         if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
         pollTargetRef.current = null;
         setIsPolling(false);
-        if (event.screenshot_url) setScreenshotUrl(event.screenshot_url);
         showToast(
           status === "completed"
             ? "Command completed successfully."
@@ -463,6 +577,24 @@ export default function ScreenDetailPage() {
         );
         void loadDataRef.current(false);
       }
+    },
+    onPlaybackStatus: (event) => {
+      if (event.device_id !== deviceId) return;
+      setDevice((current) => current
+        ? {
+            ...current,
+            current_media_id: event.media_id,
+            playback_started_at: event.playback_started_at
+          }
+        : current
+      );
+      scheduleAutomaticPreview(event.media_id, event.playback_started_at);
+    },
+    onPreviewUpdated: (event) => {
+      if (event.device_id !== deviceId) return;
+      setScreenshotUrl(event.preview_url);
+      setScreenshotCapturedAt(event.captured_at);
+      setPreviewError(false);
     }
   });
 
@@ -489,6 +621,12 @@ export default function ScreenDetailPage() {
     if (!device?.current_playlist_id) return null;
     return playlists.find((p) => p.id === device.current_playlist_id) || null;
   }, [device, playlists]);
+
+  const currentMediaItem = useMemo(() => {
+    if (!activePlaylist?.items?.length) return null;
+    if (!device?.current_media_id) return activePlaylist.items[0] ?? null;
+    return activePlaylist.items.find((item) => item.media_id === device.current_media_id) ?? null;
+  }, [activePlaylist, device?.current_media_id]);
 
   // Command status fetch
   const fetchSingleCommandStatus = async (targetDeviceId: string, commandId: string): Promise<CommandLog | null> => {
@@ -1210,7 +1348,7 @@ export default function ScreenDetailPage() {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
                 </svg>
                 <span style={{ fontSize: "15px", fontWeight: 600, color: "#0f172a" }}>
-                  {activePlaylist ? activePlaylist.name : "No content assigned to this screen"}
+                  {currentMediaItem?.filename ?? activePlaylist?.name ?? "No content assigned to this screen"}
                 </span>
               </div>
             </div>
@@ -1292,7 +1430,7 @@ export default function ScreenDetailPage() {
               }}>
                 {screenshotUrl ? (
                   <img
-                    src={screenshotUrl}
+                    src={`/api/content/devices/${encodeURIComponent(deviceId)}/preview?v=${encodeURIComponent(screenshotCapturedAt ?? "latest")}`}
                     alt="Latest device screenshot preview"
                     style={{
                       width: "100%",
@@ -1305,9 +1443,9 @@ export default function ScreenDetailPage() {
                       transition: "transform 0.4s cubic-bezier(0.4, 0, 0.2, 1)"
                     }}
                   />
-                ) : activePlaylist && activePlaylist.items && activePlaylist.items.length > 0 ? (
+                ) : currentMediaItem ? (
                   (() => {
-                    const firstItem = activePlaylist.items[0];
+                    const firstItem = currentMediaItem;
                     const isImg = firstItem ? firstItem.mime_type.startsWith("image/") : false;
                     const mediaSrc = firstItem ? firstItem.media_url : "";
                     
@@ -1371,6 +1509,28 @@ export default function ScreenDetailPage() {
                     </div>
                   </div>
                 )}
+              </div>
+
+              <div style={{
+                position: "absolute",
+                top: "16px",
+                left: "16px",
+                zIndex: 3,
+                backgroundColor: screenshotUrl ? "rgba(5, 150, 105, 0.9)" : "rgba(15, 23, 42, 0.82)",
+                color: "#ffffff",
+                padding: "5px 9px",
+                borderRadius: "999px",
+                fontSize: "10px",
+                fontWeight: 700,
+                letterSpacing: "0.3px"
+              }}>
+                {screenshotCapturedAt
+                  ? `VERIFIED ${new Date(screenshotCapturedAt).toLocaleTimeString()}`
+                  : previewError
+                    ? "PREVIEW UNAVAILABLE"
+                  : device.current_media_id
+                    ? "UPDATING PREVIEW"
+                    : "AWAITING PLAYBACK"}
               </div>
 
               {/* Live connection and screen power indicators */}

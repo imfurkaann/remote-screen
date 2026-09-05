@@ -23,7 +23,9 @@ async function run(): Promise<void> {
   const playlistDeleteRes = await PlaylistModel.deleteMany({});
   console.log(`[clear-content] MongoDB: Deleted ${playlistDeleteRes.deletedCount} playlist documents.`);
   
-  const deviceUpdateRes = await DeviceModel.updateMany({}, { $set: { currentPlaylistId: null } });
+  const deviceUpdateRes = await DeviceModel.updateMany({}, {
+    $set: { currentPlaylistId: null, currentMediaId: null, playbackStartedAt: null }
+  });
   console.log(`[clear-content] MongoDB: Reset current playlist on ${deviceUpdateRes.modifiedCount} devices.`);
 
   // 3. Clear PostgreSQL if enabled

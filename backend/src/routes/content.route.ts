@@ -233,7 +233,9 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
         .select({
           hardwareId: 1, name: 1, location: 1, status: 1, orientation: 1,
           timezone: 1, screenGroup: 1, operatingHours: 1, scaleMode: 1,
-          notes: 1, currentPlaylistId: 1, lastSeenAt: 1, lastHeartbeatAt: 1,
+          notes: 1, currentPlaylistId: 1, currentMediaId: 1, playbackStartedAt: 1,
+          previewUrl: 1, previewCapturedAt: 1,
+          lastSeenAt: 1, lastHeartbeatAt: 1,
           ipAddress: 1, playerVersion: 1, osVersion: 1, resolution: 1,
           memoryTotal: 1, memoryUsed: 1, screenOn: 1, diagnostics: 1
         })
@@ -261,6 +263,10 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
         scale_mode: device.scaleMode ?? "fit",
         notes: device.notes ?? "",
         current_playlist_id: device.currentPlaylistId,
+        current_media_id: device.currentMediaId ?? null,
+        playback_started_at: device.playbackStartedAt?.toISOString() ?? null,
+        preview_url: device.previewUrl ?? null,
+        preview_captured_at: device.previewCapturedAt?.toISOString() ?? null,
         last_seen_at: device.lastSeenAt ? device.lastSeenAt.toISOString() : null,
         last_heartbeat_at: device.lastHeartbeatAt ? device.lastHeartbeatAt.toISOString() : null,
         screen_on: typeof device.screenOn === "boolean" ? device.screenOn : null,
@@ -376,6 +382,10 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
           scale_mode: device.scaleMode ?? "fit",
           notes: device.notes ?? "",
           current_playlist_id: device.currentPlaylistId,
+          current_media_id: device.currentMediaId ?? null,
+          playback_started_at: device.playbackStartedAt?.toISOString() ?? null,
+          preview_url: device.previewUrl ?? null,
+          preview_captured_at: device.previewCapturedAt?.toISOString() ?? null,
           last_seen_at: device.lastSeenAt ? device.lastSeenAt.toISOString() : null,
           last_heartbeat_at: device.lastHeartbeatAt ? device.lastHeartbeatAt.toISOString() : null,
           screen_on: typeof device.screenOn === "boolean" ? device.screenOn : null,
@@ -550,6 +560,8 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
             tenantId: null,
             pairedOwnerUserId: null,
             currentPlaylistId: null,
+            currentMediaId: null,
+            playbackStartedAt: null,
             deviceCredentialHash: null,
             status: "offline",
             lastHeartbeatAt: null,
@@ -845,7 +857,9 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
           .lean();
         await Promise.all([
           PlaylistModel.deleteMany(buildMediaFilter(req.auth!, { _id: { $in: autoPlaylistIds } })),
-          DeviceModel.updateMany(deviceQuery, { $set: { currentPlaylistId: null } })
+          DeviceModel.updateMany(deviceQuery, {
+            $set: { currentPlaylistId: null, currentMediaId: null, playbackStartedAt: null }
+          })
         ]);
       }
 
@@ -1357,7 +1371,7 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
 
       await DeviceModel.updateMany(
         buildDeviceFilter(req.auth!, { _id: { $in: devices.map((device) => device._id) } }),
-        { $set: { currentPlaylistId: playlistId } }
+        { $set: { currentPlaylistId: playlistId, currentMediaId: null, playbackStartedAt: null } }
       );
 
       await Promise.all([
@@ -1438,7 +1452,7 @@ export function buildContentRouter(deps: ContentRouteDeps): Router {
       if (devices.length > 0) {
         await DeviceModel.updateMany(
           deviceQuery,
-          { $set: { currentPlaylistId: null } }
+          { $set: { currentPlaylistId: null, currentMediaId: null, playbackStartedAt: null } }
         );
 
         // Prepare empty sync payload

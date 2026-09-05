@@ -456,6 +456,8 @@ export function buildPairingRouter(deps: PairingRouteDeps): Router {
         device.tenantId = null;
         device.pairedOwnerUserId = null;
         device.currentPlaylistId = null;
+        device.currentMediaId = null;
+        device.playbackStartedAt = null;
         device.status = "offline";
         await device.save();
         disconnectDeviceSockets(String(device._id));

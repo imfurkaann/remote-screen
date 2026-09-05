@@ -32,6 +32,8 @@ object SocketClientManager {
     private val socketScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     @Volatile var currentDeviceId: String = ""
         private set
+    @Volatile private var currentMediaId: String? = null
+    @Volatile private var playbackStartedAt: String? = null
 
     private var reconnectAttempt: Int = 0
     private var syncHandler: (suspend (SyncContentPayload) -> Unit)? = null
@@ -49,6 +51,18 @@ object SocketClientManager {
 
     fun registerCommandHandler(handler: suspend (CommandDispatchPayload) -> Unit) {
         commandHandler = handler
+    }
+
+    /** Keeps the most recent playback state for reconnects and emits a prompt update. */
+    fun updatePlaybackState(mediaId: String?, startedAtEpochMs: Long?) {
+        currentMediaId = mediaId?.takeIf { it.isNotBlank() }?.take(64)
+        playbackStartedAt = startedAtEpochMs?.let { java.time.Instant.ofEpochMilli(it).toString() }
+
+        val connectedSocket = socket?.takeIf { it.connected() } ?: return
+        connectedSocket.emit("HEARTBEAT", JSONObject().apply {
+            put("currentMediaId", currentMediaId ?: JSONObject.NULL)
+            put("playbackStartedAt", playbackStartedAt ?: JSONObject.NULL)
+        })
     }
 
     /**
@@ -268,6 +282,8 @@ object SocketClientManager {
         heartbeatJob = socketScope.launch {
             while (isActive) {
                 val payload = JSONObject().apply {
+                    put("currentMediaId", currentMediaId ?: JSONObject.NULL)
+                    put("playbackStartedAt", playbackStartedAt ?: JSONObject.NULL)
                     val ctx = appContext
                     if (ctx != null) {
                         try {

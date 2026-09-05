@@ -3,7 +3,7 @@ import { Router } from "express";
 import multer from "multer";
 import { Types } from "mongoose";
 import path from "node:path";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 
 import { requireRoles, requireUserAuth, requireUserOrDeviceAuth } from "../middlewares/auth.js";
 import { COMMAND_TYPES, CommandModel, type CommandType } from "../models/command.model.js";
@@ -14,6 +14,7 @@ import { postgresCircuitBreaker } from "../lib/circuit-breaker.js";
 import { metrics } from "../lib/metrics.js";
 import { commandRepository, type ShadowCommandRow } from "../repositories/command.repository.js";
 import { queueCommand } from "../services/command.service.js";
+import { emitDashboardPreviewUpdated } from "../sockets/registry.js";
 
 const logger = new Logger('CommandRoute');
 const SCREENSHOT_MIME_TO_EXTENSION: Record<string, string> = {
@@ -133,7 +134,7 @@ export function buildCommandRouter(deps: CommandRouteDeps): Router {
       const tenantId = auth?.tenantId;
       const deviceId = String(req.params.deviceId ?? "").trim();
 
-      if (!tenantId || !Types.ObjectId.isValid(deviceId)) {
+      if (!tenantId || !/^[a-zA-Z0-9_-]{1,64}$/.test(tenantId) || !Types.ObjectId.isValid(deviceId)) {
         res.status(400).json({ code: "VALIDATION_ERROR", message: "deviceId is required" });
         return;
       }
@@ -143,17 +144,26 @@ export function buildCommandRouter(deps: CommandRouteDeps): Router {
         return;
       }
 
-      let isAllowed = false;
+      let targetDevice: { tenantId?: string | null; pairedOwnerUserId?: string | null; previewUrl?: string | null } | null = null;
       if (auth.role === "device") {
-        isAllowed = auth.userId === deviceId && auth.hardwareId !== undefined;
+        if (auth.userId === deviceId && auth.hardwareId !== undefined) {
+          targetDevice = await DeviceModel.findOne({
+            _id: deviceId,
+            tenantId,
+            hardwareId: auth.hardwareId
+          }).select({ tenantId: 1, pairedOwnerUserId: 1, previewUrl: 1 }).lean();
+        }
       } else {
         const ownershipFilter: Record<string, unknown> = { _id: deviceId };
         if (!(auth.role === "super_admin" && tenantId === "system")) ownershipFilter.tenantId = tenantId;
         if (["tenant_admin", "operator"].includes(auth.role)) ownershipFilter.pairedOwnerUserId = auth.userId;
-        isAllowed = await DeviceModel.exists(ownershipFilter) !== null;
+        targetDevice = await DeviceModel.findOne(ownershipFilter)
+          .select({ tenantId: 1, pairedOwnerUserId: 1, previewUrl: 1 })
+          .lean();
       }
 
-      if (!isAllowed) {
+      const storageTenantId = targetDevice?.tenantId;
+      if (!targetDevice || !storageTenantId || !/^[a-zA-Z0-9_-]{1,64}$/.test(storageTenantId)) {
         res.status(403).json({ code: "FORBIDDEN", message: "Insufficient permissions to upload device screenshot" });
         return;
       }
@@ -164,15 +174,55 @@ export function buildCommandRouter(deps: CommandRouteDeps): Router {
       }
 
       const extension = SCREENSHOT_MIME_TO_EXTENSION[req.file.mimetype];
+      // A random name prevents preview enumeration. The previous file is deleted
+      // after the database pointer moves, bounding storage to one image per device.
       const fileName = `${randomUUID()}${extension}`;
-      const relativePath = path.join("uploads", "screenshots", tenantId, fileName);
+      const relativePath = path.join("uploads", "screenshots", storageTenantId, fileName);
       const absolutePath = path.resolve(process.cwd(), relativePath);
       await mkdir(path.dirname(absolutePath), { recursive: true });
-      await writeFile(absolutePath, req.file.buffer);
-
+      const temporaryPath = `${absolutePath}.${randomUUID()}.tmp`;
+      try {
+        await writeFile(temporaryPath, req.file.buffer, { flag: "wx" });
+        await rename(temporaryPath, absolutePath);
+      } catch (error) {
+        await rm(temporaryPath, { force: true });
+        throw error;
+      }
       const screenshotUrl = `/${relativePath.replace(/\\/g, "/")}`;
+      const capturedAt = new Date();
+      const previousDevice = await DeviceModel.findOneAndUpdate(
+        { _id: deviceId, tenantId: storageTenantId },
+        { $set: { previewUrl: screenshotUrl, previewCapturedAt: capturedAt } },
+        { new: false }
+      ).select({ previewUrl: 1 }).lean();
+      if (!previousDevice) {
+        await rm(absolutePath, { force: true });
+        res.status(409).json({ code: "DEVICE_CHANGED", message: "Device changed during screenshot upload" });
+        return;
+      }
 
-      res.status(201).json({ screenshot_url: screenshotUrl });
+      const previousPreviewUrl = previousDevice.previewUrl ?? null;
+      if (previousPreviewUrl?.startsWith(`/uploads/screenshots/${storageTenantId}/`)) {
+        const previousName = path.posix.basename(previousPreviewUrl);
+        if (previousName !== fileName) {
+          await rm(path.resolve(process.cwd(), "uploads", "screenshots", storageTenantId, previousName), {
+            force: true
+          }).catch((error) => {
+            logger.warn(
+              "Unable to remove superseded device preview",
+              { deviceId, previousName },
+              error instanceof Error ? error : new Error(String(error))
+            );
+          });
+        }
+      }
+
+      emitDashboardPreviewUpdated(
+        { device_id: deviceId, preview_url: screenshotUrl, captured_at: capturedAt.toISOString() },
+        { tenantId: storageTenantId, pairedOwnerUserId: targetDevice.pairedOwnerUserId ?? null }
+      );
+
+      res.status(201).json({ screenshot_url: screenshotUrl, captured_at: capturedAt.toISOString() });
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
       logger.error("Screenshot upload failed", err, { deviceId: req.params.deviceId });
@@ -183,6 +233,52 @@ export function buildCommandRouter(deps: CommandRouteDeps): Router {
 
   router.use(requireUserAuth(deps.jwtSecret, { issuer: deps.jwtIssuer, audience: deps.jwtAudience }));
   router.use(requireRoles(["tenant_owner", "tenant_admin", "operator"]));
+
+  router.get("/devices/:deviceId/preview", async (req, res) => {
+    try {
+      const tenantId = req.auth?.tenantId;
+      const deviceId = String(req.params.deviceId ?? "").trim();
+      if (!tenantId || !/^[a-zA-Z0-9_-]{1,64}$/.test(tenantId) || !Types.ObjectId.isValid(deviceId)) {
+        res.status(400).json({ code: "VALIDATION_ERROR", message: "deviceId is invalid" });
+        return;
+      }
+
+      const query: Record<string, unknown> = { _id: deviceId, tenantId };
+      if (req.auth?.role !== "tenant_owner") query.pairedOwnerUserId = req.auth?.userId;
+      const device = await DeviceModel.findOne(query).select({ previewUrl: 1 }).lean();
+      if (!device?.previewUrl) {
+        res.status(404).json({ code: "PREVIEW_NOT_FOUND", message: "Preview not found" });
+        return;
+      }
+
+      const expectedPrefix = `/uploads/screenshots/${tenantId}/`;
+      if (!device.previewUrl.startsWith(expectedPrefix)) {
+        res.status(404).json({ code: "PREVIEW_NOT_FOUND", message: "Preview not found" });
+        return;
+      }
+      const fileName = path.posix.basename(device.previewUrl);
+      if (!/^[a-f0-9-]{36}\.(?:png|jpg|webp)$/.test(fileName)) {
+        res.status(404).json({ code: "PREVIEW_NOT_FOUND", message: "Preview not found" });
+        return;
+      }
+
+      const absolutePath = path.resolve(process.cwd(), "uploads", "screenshots", tenantId, fileName);
+      res.setHeader("Cache-Control", "private, no-store");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+      res.sendFile(absolutePath, { dotfiles: "deny" }, (error) => {
+        if (error && !res.headersSent) {
+          res.status(404).json({ code: "PREVIEW_NOT_FOUND", message: "Preview not found" });
+        }
+      });
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      logger.error("Device preview fetch failed", err, { deviceId: req.params.deviceId });
+      if (!res.headersSent) {
+        res.status(500).json({ code: "PREVIEW_FETCH_FAILED", message: "Failed to fetch preview" });
+      }
+    }
+  });
 
   router.post("/devices/:deviceId/commands", async (req, res) => {
     try {

@@ -16,6 +16,10 @@ export type DeviceDoc = {
   notes: string;
   pairedOwnerUserId: string | null;
   currentPlaylistId: string | null;
+  currentMediaId: string | null;
+  playbackStartedAt: Date | null;
+  previewUrl: string | null;
+  previewCapturedAt: Date | null;
   lastHeartbeatAt: Date | null;
   lastSeenAt: Date | null;
   screenOn: boolean | null;
@@ -53,6 +57,10 @@ const DeviceSchema = new Schema<DeviceDoc>(
     notes: { type: String, default: "", maxlength: 4000 },
     pairedOwnerUserId: { type: String, default: null, trim: true, maxlength: 64 },
     currentPlaylistId: { type: String, default: null, trim: true, maxlength: 64 },
+    currentMediaId: { type: String, default: null, trim: true, maxlength: 64 },
+    playbackStartedAt: { type: Date, default: null },
+    previewUrl: { type: String, default: null, trim: true, maxlength: 4096 },
+    previewCapturedAt: { type: Date, default: null },
     lastHeartbeatAt: { type: Date, default: null, index: true },
     lastSeenAt: { type: Date, default: null, index: true },
     screenOn: { type: Boolean, default: null },
@@ -75,4 +83,3 @@ DeviceSchema.index({ tenantId: 1, screenGroup: 1, updatedAt: -1 });
 DeviceSchema.index({ tenantId: 1, status: 1, lastHeartbeatAt: 1 });
 
 export const DeviceModel = model<DeviceDoc>("Device", DeviceSchema);
-

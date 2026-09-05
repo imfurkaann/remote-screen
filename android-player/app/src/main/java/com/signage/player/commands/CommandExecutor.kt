@@ -213,7 +213,7 @@ class CommandExecutor(
                         if (token.isNullOrBlank()) {
                             uploadError = "No authenticated device session for screenshot upload"
                         } else {
-                            val requestFile = screenshotFile.asRequestBody("image/png".toMediaTypeOrNull())
+                            val requestFile = screenshotFile.asRequestBody("image/jpeg".toMediaTypeOrNull())
                             val multipartBody = okhttp3.MultipartBody.Part.createFormData(
                                 "file", screenshotFile.name, requestFile
                             )
@@ -227,6 +227,7 @@ class CommandExecutor(
                         uploadError = error.message ?: uploadError
                         onError("screenshot_upload", uploadError, emptyMap())
                     }
+                    screenshotFile.delete()
 
                     if (finalUrl.isNullOrBlank()) {
                         CommandAckPayload(
@@ -236,7 +237,6 @@ class CommandExecutor(
                             errorMessage = uploadError
                         )
                     } else {
-                        screenshotFile.delete()
                         CommandAckPayload(
                             deviceId = deviceId,
                             commandId = command.commandId,

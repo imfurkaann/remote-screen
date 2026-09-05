@@ -16,9 +16,7 @@ COPY dashboard ./dashboard
 
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# NEXT_PUBLIC_* vars are inlined at build time by Next.js — must be available during build
-ARG NEXT_PUBLIC_BACKEND_SOCKET_URL
-ENV NEXT_PUBLIC_BACKEND_SOCKET_URL=$NEXT_PUBLIC_BACKEND_SOCKET_URL
+# Public socket URLs are supplied at runtime through /api/socket-ticket.
 
 # next.config rewrites are resolved during `next build`, so this internal
 # service URL must be available in the builder stage as well.

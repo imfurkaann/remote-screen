@@ -57,6 +57,11 @@ export function buildApp(env: Env) {
   app.use(attachCorrelationId);
   app.use(normalizeErrorResponses);
   app.use(requestLogging);
+  // Device previews can contain sensitive on-screen information and are only
+  // served through the authenticated command route.
+  app.use("/uploads/screenshots", (_req, res) => {
+    res.status(404).json({ code: "NOT_FOUND", message: "Not found" });
+  });
   app.use("/uploads", express.static(path.resolve(env.mediaStorageRoot || path.resolve(process.cwd(), "uploads")), {
     dotfiles: "deny",
     fallthrough: false,

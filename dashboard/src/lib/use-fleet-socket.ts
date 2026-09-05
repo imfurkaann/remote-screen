@@ -19,9 +19,23 @@ export type CommandAckEvent = {
   error_message?: string;
 };
 
+export type PlaybackStatusEvent = {
+  device_id: string;
+  media_id: string | null;
+  playback_started_at: string | null;
+};
+
+export type PreviewUpdatedEvent = {
+  device_id: string;
+  preview_url: string;
+  captured_at: string;
+};
+
 type FleetSocketHandlers = {
   onDeviceStatus?: (event: DeviceStatusEvent) => void;
   onCommandAck?: (event: CommandAckEvent) => void;
+  onPlaybackStatus?: (event: PlaybackStatusEvent) => void;
+  onPreviewUpdated?: (event: PreviewUpdatedEvent) => void;
   onConnectionChange?: (connected: boolean) => void;
 };
 
@@ -103,6 +117,12 @@ export function useFleetSocket(handlers: FleetSocketHandlers): void {
         });
         socket.on("COMMAND_ACK", (event: CommandAckEvent) => {
           if (event?.command_id) handlersRef.current.onCommandAck?.(event);
+        });
+        socket.on("PLAYBACK_STATUS", (event: PlaybackStatusEvent) => {
+          if (event?.device_id) handlersRef.current.onPlaybackStatus?.(event);
+        });
+        socket.on("PREVIEW_UPDATED", (event: PreviewUpdatedEvent) => {
+          if (event?.device_id && event.preview_url) handlersRef.current.onPreviewUpdated?.(event);
         });
       } catch {
         handlersRef.current.onConnectionChange?.(false);

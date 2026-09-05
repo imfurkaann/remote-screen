@@ -583,7 +583,12 @@ class ContentSyncManager(
     }
 
     private fun resolveMediaUrl(rawUrl: String): String {
-        val trimmed = rawUrl.trim()
+        var trimmed = rawUrl.trim()
+        if (trimmed.startsWith("http://localhost:4100")) {
+            trimmed = trimmed.replace("http://localhost:4100", mediaBaseUrl)
+        } else if (trimmed.startsWith("http://127.0.0.1:4100")) {
+            trimmed = trimmed.replace("http://127.0.0.1:4100", mediaBaseUrl)
+        }
         if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed
         return if (trimmed.startsWith("/")) "$mediaBaseUrl$trimmed" else "$mediaBaseUrl/$trimmed"
     }
