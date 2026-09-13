@@ -41,6 +41,8 @@ Thumbs.db
 android-player-*.png
 test_results_*.log
 ui.xml
+test-results/
+playwright-report/
 
 # Runtime data must live in object storage or a mounted volume
 backend/uploads/

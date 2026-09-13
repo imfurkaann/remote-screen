@@ -77,10 +77,10 @@ export function normalizeWeatherConfig(input: Record<string, unknown>): WeatherC
         : oldTheme === "sunset" || oldTheme === "warm"
           ? "sunset"
           : "sky";
-  const rawCity = typeof input.city === "string" ? input.city.trim().slice(0, 120) : "";
+  const rawCity = typeof input.city === "string" ? input.city.slice(0, 120) : DEFAULT_WEATHER_CONFIG.city;
 
   return {
-    city: rawCity || DEFAULT_WEATHER_CONFIG.city,
+    city: rawCity,
     units: input.units === "imperial" ? "imperial" : "metric",
     locale: input.locale === "en" ? "en" : "tr",
     layout: input.layout === "minimal" ? "minimal" : "overview",

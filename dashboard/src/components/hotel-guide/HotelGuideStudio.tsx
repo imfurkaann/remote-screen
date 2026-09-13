@@ -23,14 +23,15 @@ export const DEFAULT_HOTEL_GUIDE_CONFIG: HotelGuideConfig = {
     { id: "concierge", name: "Concierge", description: "Transfer ve şehir önerileri", hours: "08:00 – 23:00", contact: "Dahili 0", icon: "concierge" }
   ], showContact: true, footer: "Acil ihtiyaçlarınız için resepsiyona günün her saati ulaşabilirsiniz."
 };
-const text = (value: unknown, fallback: string, max: number) => typeof value === "string" && value.trim() ? value.trim().slice(0, max) : fallback;
+const text = (value: unknown, fallback: string, max: number) => typeof value === "string" ? value.slice(0, max) : fallback;
+const safeId = (value: unknown, fallback: string) => (typeof value === "string" && value ? value : fallback).slice(0, 64).replace(/[^a-zA-Z0-9_-]/g, "-");
 const color = (value: unknown, fallback: string) => /^#[0-9a-f]{6}$/i.test(String(value ?? "")) ? String(value) : fallback;
 export function normalizeHotelGuideConfig(input: Record<string, unknown>): HotelGuideConfig {
   const theme: HotelGuideConfig["theme"] = input.theme === "cream" || input.theme === "forest" ? input.theme : "navy";
   const services = Array.isArray(input.services) ? input.services.slice(0, 8).flatMap((raw, index) => {
-    if (!raw || typeof raw !== "object") return []; const item = raw as Record<string, unknown>; const name = text(item.name, "", 80); if (!name) return [];
+    if (!raw || typeof raw !== "object") return []; const item = raw as Record<string, unknown>; const name = text(item.name, "", 80);
     const icon = typeof item.icon === "string" && item.icon in ICONS ? item.icon as HotelService["icon"] : "other";
-    return [{ id: text(item.id, `service-${index + 1}`, 64).replace(/[^a-zA-Z0-9_-]/g, "-"), name, description: typeof item.description === "string" ? item.description.trim().slice(0, 140) : "", hours: typeof item.hours === "string" ? item.hours.trim().slice(0, 50) : "", contact: typeof item.contact === "string" ? item.contact.trim().slice(0, 50) : "", icon } as HotelService];
+    return [{ id: safeId(item.id, `service-${index + 1}`), name, description: typeof item.description === "string" ? item.description.slice(0, 140) : "", hours: typeof item.hours === "string" ? item.hours.slice(0, 50) : "", contact: typeof item.contact === "string" ? item.contact.slice(0, 50) : "", icon } as HotelService];
   }) : DEFAULT_HOTEL_GUIDE_CONFIG.services;
   return {
     hotelName: text(input.hotelName, DEFAULT_HOTEL_GUIDE_CONFIG.hotelName, 80), heading: text(input.heading, DEFAULT_HOTEL_GUIDE_CONFIG.heading, 100),

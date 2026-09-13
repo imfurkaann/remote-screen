@@ -11,20 +11,35 @@ import { QrPreview, QrSettings, DEFAULT_QR_CONFIG, normalizeQrConfig } from "@/c
 import { WayfindingPreview, WayfindingSettings, DEFAULT_WAYFINDING_CONFIG, normalizeWayfindingConfig } from "@/components/wayfinding/WayfindingStudio";
 import { EventsPreview, EventsSettings, DEFAULT_EVENTS_CONFIG, normalizeEventsConfig } from "@/components/events/EventsStudio";
 import { HotelGuidePreview, HotelGuideSettings, DEFAULT_HOTEL_GUIDE_CONFIG, normalizeHotelGuideConfig } from "@/components/hotel-guide/HotelGuideStudio";
+import { RestaurantMenuPreview, RestaurantMenuSettings, DEFAULT_RESTAURANT_MENU_CONFIG, normalizeRestaurantMenuConfig } from "@/components/restaurant-menu/RestaurantMenuStudio";
 
-type AppType = "clock" | "weather" | "rss" | "notice" | "qrcode" | "wayfinding" | "events" | "hotel-guide";
+type AppType = "clock" | "weather" | "rss" | "notice" | "qrcode" | "wayfinding" | "events" | "hotel-guide" | "restaurant-menu";
+const APP_TYPES: AppType[] = ["clock", "weather", "rss", "notice", "qrcode", "wayfinding", "events", "hotel-guide", "restaurant-menu"];
+const APP_META: Record<AppType, { icon: string; defaultName: string }> = {
+  clock: { icon: "🕒", defaultName: "Yeni Modern Saat" },
+  weather: { icon: "🌤️", defaultName: "Yeni Hava Durumu" },
+  rss: { icon: "📰", defaultName: "Yeni RSS Akışı" },
+  notice: { icon: "📢", defaultName: "Yeni Duyuru" },
+  qrcode: { icon: "▦", defaultName: "Yeni QR Kod" },
+  wayfinding: { icon: "⌖", defaultName: "Lobi Yönlendirme" },
+  events: { icon: "▤", defaultName: "Bugünün Etkinlikleri" },
+  "hotel-guide": { icon: "i", defaultName: "Otel Rehberi" },
+  "restaurant-menu": { icon: "≡", defaultName: "Yeni Restoran Menüsü" }
+};
 
 function AppConfigureForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
   const editId = searchParams.get("id");
-  const createType = searchParams.get("type") as AppType | null;
+  const requestedType = searchParams.get("type");
+  const createType = APP_TYPES.includes(requestedType as AppType) ? requestedType as AppType : null;
   const [loadedType, setLoadedType] = useState<AppType | null>(null);
 
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [instanceName, setInstanceName] = useState("");
+  const [previewOrientation, setPreviewOrientation] = useState<"landscape" | "portrait">("landscape");
 
   // App type determination
   const appType: AppType = useMemo(() => {
@@ -41,31 +56,25 @@ function AppConfigureForm() {
   useEffect(() => {
     if (!editId) {
       // Set default configurations for new instances
-      setInstanceName(`New ${appType.charAt(0).toUpperCase() + appType.slice(1)} Instance`);
+      setInstanceName(APP_META[appType].defaultName);
       if (appType === "clock") {
-        setInstanceName("Yeni Modern Saat");
         setConfig(DEFAULT_CLOCK_CONFIG);
       } else if (appType === "weather") {
-        setInstanceName("Yeni Hava Durumu");
         setConfig(DEFAULT_WEATHER_CONFIG);
       } else if (appType === "rss") {
-        setInstanceName("Yeni RSS Akışı");
         setConfig(DEFAULT_RSS_CONFIG);
       } else if (appType === "notice") {
-        setInstanceName("Yeni Duyuru");
         setConfig(DEFAULT_NOTICE_CONFIG);
       } else if (appType === "qrcode") {
-        setInstanceName("Yeni QR Kod");
         setConfig(DEFAULT_QR_CONFIG);
       } else if (appType === "wayfinding") {
-        setInstanceName("Lobi Yönlendirme");
         setConfig(DEFAULT_WAYFINDING_CONFIG);
       } else if (appType === "events") {
-        setInstanceName("Bugünün Etkinlikleri");
         setConfig(DEFAULT_EVENTS_CONFIG);
       } else if (appType === "hotel-guide") {
-        setInstanceName("Otel Rehberi");
         setConfig(DEFAULT_HOTEL_GUIDE_CONFIG);
+      } else if (appType === "restaurant-menu") {
+        setConfig(DEFAULT_RESTAURANT_MENU_CONFIG);
       }
       return;
     }
@@ -81,7 +90,7 @@ function AppConfigureForm() {
             setInstanceName(item.filename);
             const itemConfig = item.app_config || item.appConfig || {};
             const storageType = String(item.storage_path || "").replace("app://", "").split("?")[0] ?? "";
-            const itemType: AppType = ["clock", "weather", "rss", "notice", "qrcode", "wayfinding", "events", "hotel-guide"].includes(storageType)
+            const itemType: AppType = APP_TYPES.includes(storageType as AppType)
               ? storageType as AppType
               : appType;
             setLoadedType(itemType);
@@ -101,6 +110,8 @@ function AppConfigureForm() {
                           ? normalizeEventsConfig(itemConfig)
                           : itemType === "hotel-guide"
                             ? normalizeHotelGuideConfig(itemConfig)
+                            : itemType === "restaurant-menu"
+                              ? normalizeRestaurantMenuConfig(itemConfig)
                             : itemConfig);
           }
         }
@@ -118,7 +129,7 @@ function AppConfigureForm() {
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!instanceName.trim()) {
-      alert("Please enter an instance name.");
+      alert("Lütfen uygulama adını girin.");
       return;
     }
 
@@ -140,11 +151,11 @@ function AppConfigureForm() {
         router.push("/apps");
       } else {
         const errorData = await res.json().catch(() => ({}));
-        alert(errorData.message || "Failed to save configuration.");
+        alert(errorData.message || "Yapılandırma kaydedilemedi.");
       }
     } catch (err) {
       console.error("Save error:", err);
-      alert("An unexpected error occurred while saving.");
+      alert("Kaydetme sırasında beklenmeyen bir hata oluştu.");
     } finally {
       setSaving(false);
     }
@@ -153,7 +164,7 @@ function AppConfigureForm() {
   if (loading) {
     return (
       <div style={{ padding: "48px", textAlign: "center", color: "#64748b" }}>
-        <h3>Loading app configuration settings...</h3>
+        <h3>Uygulama ayarları yükleniyor...</h3>
       </div>
     );
   }
@@ -202,6 +213,8 @@ function AppConfigureForm() {
         return <EventsSettings config={config} onChange={(nextConfig) => setConfig(nextConfig)} />;
       case "hotel-guide":
         return <HotelGuideSettings config={config} onChange={(nextConfig) => setConfig(nextConfig)} />;
+      case "restaurant-menu":
+        return <RestaurantMenuSettings config={config} onChange={(nextConfig) => setConfig(nextConfig)} />;
     }
   };
 
@@ -224,13 +237,15 @@ function AppConfigureForm() {
         return <EventsPreview config={config} />;
       case "hotel-guide":
         return <HotelGuidePreview config={config} />;
+      case "restaurant-menu":
+        return <RestaurantMenuPreview config={config} orientation={previewOrientation} onChange={(nextConfig) => setConfig(nextConfig)} />;
     }
   };
 
   return (
-    <form onSubmit={handleSave} style={{ display: "flex", flexDirection: "column", minHeight: "100%", backgroundColor: "#f4f5f7" }}>
+    <form onSubmit={handleSave} className="app-studio-shell" style={{ display: "flex", flexDirection: "column", minHeight: "100%", backgroundColor: "#f4f5f7" }}>
       {/* Configure Page Header */}
-      <header style={{
+      <header className="app-studio-header" style={{
         backgroundColor: "#ffffff",
         borderBottom: "1px solid #e2e8f0",
         padding: "16px 32px",
@@ -240,7 +255,7 @@ function AppConfigureForm() {
         gap: "24px"
       }}>
         {/* Left: Icon and Instance name input */}
-        <div style={{ display: "flex", alignItems: "center", gap: "16px", flexGrow: 1, maxWidth: "500px" }}>
+        <div className="app-studio-title" style={{ display: "flex", alignItems: "center", gap: "16px", flexGrow: 1, maxWidth: "500px" }}>
           <div style={{
             width: "40px",
             height: "40px",
@@ -253,12 +268,12 @@ function AppConfigureForm() {
             justifyContent: "center",
             flexShrink: 0
           }}>
-            {appType === "clock" ? "🕒" : appType === "weather" ? "🌤️" : appType === "rss" ? "📰" : appType === "notice" ? "📢" : appType === "qrcode" ? "📱" : appType === "wayfinding" ? "⌖" : appType === "events" ? "▦" : "i"}
+            {APP_META[appType].icon}
           </div>
 
           <input
             type="text"
-            placeholder="Instance Name..."
+            placeholder="Uygulama adı..."
             value={instanceName}
             onChange={(e) => setInstanceName(e.target.value)}
             required
@@ -286,7 +301,7 @@ function AppConfigureForm() {
         </div>
 
         {/* Right buttons */}
-        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+        <div className="app-studio-actions" style={{ display: "flex", alignItems: "center", gap: "12px" }}>
           <Link
             href="/apps"
             style={{
@@ -303,7 +318,7 @@ function AppConfigureForm() {
               alignItems: "center"
             }}
           >
-            Cancel
+            Vazgeç
           </Link>
 
           <button
@@ -323,13 +338,13 @@ function AppConfigureForm() {
             onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "#ca8a04"}
             onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "#eab308"}
           >
-            {saving ? "Saving..." : "Save & Close"}
+            {saving ? "Kaydediliyor..." : "Kaydet ve Kapat"}
           </button>
         </div>
       </header>
 
       {/* Main Split Layout Content */}
-      <div style={{
+      <div className="app-studio-grid" style={{
         display: "grid",
         gridTemplateColumns: "1fr 1fr",
         padding: "32px",
@@ -340,7 +355,7 @@ function AppConfigureForm() {
         width: "100%"
       }}>
         {/* Left Side: Form Settings */}
-        <div style={{
+        <div className="app-studio-settings" style={{
           backgroundColor: "#ffffff",
           borderRadius: "16px",
           border: "1px solid #e2e8f0",
@@ -351,14 +366,14 @@ function AppConfigureForm() {
           gap: "24px"
         }}>
           <h3 style={{ margin: 0, fontSize: "16px", fontWeight: 800, color: "#1e293b", borderBottom: "1px solid #f1f5f9", paddingBottom: "12px" }}>
-            Widget Configuration
+            Uygulama Ayarları
           </h3>
 
           {renderConfigForm()}
         </div>
 
         {/* Right Side: Live Interactive Mockup Preview */}
-        <div style={{
+        <div className="app-studio-preview" style={{
           display: "flex",
           flexDirection: "column",
           gap: "16px",
@@ -367,18 +382,19 @@ function AppConfigureForm() {
           height: "fit-content"
         }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontSize: "13px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.5px" }}>
-              Live Signage Preview
-            </span>
-            <span style={{ fontSize: "11px", backgroundColor: "#e2e8f0", color: "#475569", fontWeight: 700, padding: "2px 8px", borderRadius: "20px" }}>
-              16:9 Screen
-            </span>
+            <span style={{ fontSize: "13px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.5px" }}>Canlı Ekran Önizlemesi</span>
+            <div className="preview-orientation-switch" role="group" aria-label="Önizleme yönü">
+              <button type="button" aria-pressed={previewOrientation === "landscape"} onClick={() => setPreviewOrientation("landscape")}>16:9</button>
+              <button type="button" aria-pressed={previewOrientation === "portrait"} onClick={() => setPreviewOrientation("portrait")}>9:16</button>
+            </div>
           </div>
 
-          {renderLivePreview()}
+          <div className={`configure-preview-frame ${previewOrientation}`}>
+            {renderLivePreview()}
+          </div>
 
           <div style={{ fontSize: "12px", color: "#94a3b8", textAlign: "center", lineHeight: "1.5" }}>
-            This preview simulates how the widget displays on the physical remote screen. Changes are updated in real-time as you type or adjust configurations.
+            Değişiklikler siz yazarken anında önizlemeye yansır. Yatay ve dikey ekran görünümünü üstteki düğmelerden kontrol edebilirsiniz.
           </div>
         </div>
       </div>
@@ -388,7 +404,7 @@ function AppConfigureForm() {
 
 export default function ConfigurePage() {
   return (
-    <Suspense fallback={<div style={{ padding: "48px", textAlign: "center", color: "#64748b" }}>Loading Configuration Page...</div>}>
+    <Suspense fallback={<div style={{ padding: "48px", textAlign: "center", color: "#64748b" }}>Yapılandırma sayfası yükleniyor...</div>}>
       <AppConfigureForm />
     </Suspense>
   );

@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/lib/*.test.ts"
+    "test": "tsx --test src/lib/*.test.ts",
+    "test:e2e:menu-editor": "playwright test e2e/restaurant-menu-editor.spec.ts"
   },
   "dependencies": {
     "next": "^15.5.22",

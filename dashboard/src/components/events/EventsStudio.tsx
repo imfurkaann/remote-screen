@@ -25,7 +25,8 @@ export const DEFAULT_EVENTS_CONFIG: EventsConfig = {
   showHost: true, showDirection: true, footer: "Salon değişiklikleri için resepsiyon ekibimize danışabilirsiniz."
 };
 
-const text = (value: unknown, fallback: string, max: number) => typeof value === "string" && value.trim() ? value.trim().slice(0, max) : fallback;
+const text = (value: unknown, fallback: string, max: number) => typeof value === "string" ? value.slice(0, max) : fallback;
+const safeId = (value: unknown, fallback: string) => (typeof value === "string" && value ? value : fallback).slice(0, 64).replace(/[^a-zA-Z0-9_-]/g, "-");
 const time = (value: unknown, fallback: string) => typeof value === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(value) ? value : fallback;
 const color = (value: unknown, fallback: string) => /^#[0-9a-f]{6}$/i.test(String(value ?? "")) ? String(value) : fallback;
 
@@ -34,8 +35,7 @@ export function normalizeEventsConfig(input: Record<string, unknown>): EventsCon
   const events = Array.isArray(input.events) ? input.events.slice(0, 10).flatMap((raw, index) => {
     if (!raw || typeof raw !== "object") return [];
     const item = raw as Record<string, unknown>; const title = text(item.title, "", 100);
-    if (!title) return [];
-    return [{ id: text(item.id, `event-${index + 1}`, 64).replace(/[^a-zA-Z0-9_-]/g, "-"), title, host: typeof item.host === "string" ? item.host.trim().slice(0, 80) : "", room: text(item.room, "-", 60), start: time(item.start, "09:00"), end: time(item.end, "10:00"), direction: item.direction === "left" || item.direction === "up" ? item.direction : "right" } as HotelEvent];
+    return [{ id: safeId(item.id, `event-${index + 1}`), title, host: typeof item.host === "string" ? item.host.slice(0, 80) : "", room: text(item.room, "", 60), start: time(item.start, "09:00"), end: time(item.end, "10:00"), direction: item.direction === "left" || item.direction === "up" ? item.direction : "right" } as HotelEvent];
   }) : DEFAULT_EVENTS_CONFIG.events;
   return {
     hotelName: text(input.hotelName, DEFAULT_EVENTS_CONFIG.hotelName, 80), heading: text(input.heading, DEFAULT_EVENTS_CONFIG.heading, 100),

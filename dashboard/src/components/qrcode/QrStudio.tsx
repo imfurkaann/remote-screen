@@ -69,13 +69,13 @@ export function normalizeQrConfig(input: Record<string, unknown>): QrConfig {
   }
   return {
     contentType: input.contentType === "text" || input.contentType === "wifi" ? input.contentType : "url",
-    url: typeof input.url === "string" && input.url.trim() ? input.url.trim().slice(0, 1200) : DEFAULT_QR_CONFIG.url,
-    text: typeof input.text === "string" && input.text.trim() ? input.text.trim().slice(0, 500) : DEFAULT_QR_CONFIG.text,
-    ssid: typeof input.ssid === "string" && input.ssid.trim() ? input.ssid.trim().slice(0, 128) : DEFAULT_QR_CONFIG.ssid,
+    url: typeof input.url === "string" ? input.url.slice(0, 1200) : DEFAULT_QR_CONFIG.url,
+    text: typeof input.text === "string" ? input.text.slice(0, 500) : DEFAULT_QR_CONFIG.text,
+    ssid: typeof input.ssid === "string" ? input.ssid.slice(0, 128) : DEFAULT_QR_CONFIG.ssid,
     password: typeof input.password === "string" ? input.password.slice(0, 128) : "",
     security: input.security === "WEP" || input.security === "nopass" ? input.security : "WPA",
     hiddenNetwork: input.hiddenNetwork === true,
-    title: typeof input.title === "string" && input.title.trim() ? input.title.trim().slice(0, 120) : DEFAULT_QR_CONFIG.title,
+    title: typeof input.title === "string" ? input.title.slice(0, 120) : DEFAULT_QR_CONFIG.title,
     description: typeof input.description === "string" ? input.description.trim().slice(0, 300) : DEFAULT_QR_CONFIG.description,
     layout: input.layout === "card" || input.layout === "minimal" ? input.layout : "split",
     theme: input.theme === "paper" || input.theme === "midnight" || input.theme === "ocean" ? input.theme : "emerald",

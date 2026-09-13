@@ -34,8 +34,8 @@ const THEMES = {
 } as const;
 
 export function normalizeRssConfig(input: Record<string, unknown>): RssConfig {
-  const rawUrl = typeof input.rssUrl === "string" ? input.rssUrl.trim().slice(0, 2048) : "";
-  const rawLabel = typeof input.sourceLabel === "string" ? input.sourceLabel.trim().slice(0, 50) : "";
+  const rawUrl = typeof input.rssUrl === "string" ? input.rssUrl.slice(0, 2048) : DEFAULT_RSS_CONFIG.rssUrl;
+  const rawLabel = typeof input.sourceLabel === "string" ? input.sourceLabel.slice(0, 50) : DEFAULT_RSS_CONFIG.sourceLabel;
   const oldTheme = String(input.theme ?? "");
   const theme: RssConfig["theme"] =
     oldTheme === "paper" || oldTheme === "light"
@@ -47,8 +47,8 @@ export function normalizeRssConfig(input: Record<string, unknown>): RssConfig {
           : "midnight";
 
   return {
-    rssUrl: rawUrl || DEFAULT_RSS_CONFIG.rssUrl,
-    sourceLabel: rawLabel || DEFAULT_RSS_CONFIG.sourceLabel,
+    rssUrl: rawUrl,
+    sourceLabel: rawLabel,
     locale: input.locale === "en" ? "en" : "tr",
     layout: input.layout === "ticker" || input.layout === "cards" ? input.layout : "split",
     theme,

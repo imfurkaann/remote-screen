@@ -136,6 +136,13 @@ const APP_DETAILS_DATA: Record<string, AppDetails> = {
     features: [{ header: "Present hotel services in a clear card directory", type: "guide-grid" }, { header: "Feature priority amenities with richer information", type: "guide-featured" }],
     aboutPoints: [{ title: "Everything in one place", desc: "Show dining, spa, Wi-Fi, concierge, transport and more." }, { title: "Useful service details", desc: "Publish opening hours, short descriptions and internal contacts." }, { title: "Made for every screen", desc: "Responsive layouts work in guest rooms, lobbies and lift areas." }],
     categories: ["Hospitality", "All Apps", "Internal Communication"]
+  },
+  "restaurant-menu": {
+    title: "Restoran Menüsü", subtitle: "Kafe ve restoranlar için hızlı, güncellenebilir ve kurumsal dijital menü.", icon: "≡",
+    iconBg: "linear-gradient(135deg, #9a3412 0%, #431407 100%)",
+    features: [{ header: "Ürün ve fiyatları okunaklı sütunlarda yayınlayın", type: "menu-columns" }, { header: "Kafe ve kahvaltı şablonlarıyla saniyeler içinde başlayın", type: "menu-board" }],
+    aboutPoints: [{ title: "Pratik ürün yönetimi", desc: "Kategori, ürün, açıklama, fiyat ve satış durumunu tek ekrandan yönetin." }, { title: "Hazır işletme şablonları", desc: "Restoran, kafe ve kahvaltı içeriklerini tek tıklamayla oluşturun." }, { title: "Her ekrana uyumlu", desc: "Yatay, dikey ve küçük ekranlarda içerik yoğunluğunu otomatik düzenler." }],
+    categories: ["Food & Beverage", "Hospitality", "All Apps"]
   }
 };
 
@@ -316,6 +323,9 @@ export default function AppDetailsModal({ open, onClose, appId, onGet, isAdded =
       case "guide-grid":
       case "guide-featured":
         return <div style={{ ...screenStyle, background: "linear-gradient(145deg,#071522,#10283c,#183952)", alignItems: "stretch", padding: "12px 14px", fontFamily: "system-ui,sans-serif" }}><div style={{ color: "#d7b46a", fontSize: 6, fontWeight: 900 }}>OTEL REHBERİ</div><div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 9 }}>{[["🍽", "Kahvaltı"], ["✦", "Spa"], ["⌁", "Wi-Fi"], ["i", "Concierge"]].map(item => <div key={item[1]} style={{ display: "flex", alignItems: "center", gap: 7, padding: 8, border: "1px solid rgba(255,255,255,.1)", borderRadius: 7, background: "rgba(255,255,255,.05)" }}><span style={{ color: "#d7b46a", fontSize: 12 }}>{item[0]}</span><b style={{ fontSize: 7 }}>{item[1]}</b></div>)}</div></div>;
+      case "menu-columns":
+      case "menu-board":
+        return <div style={{ ...screenStyle, background: "linear-gradient(145deg,#111315,#1d2225,#272e31)", alignItems: "stretch", padding: "12px 14px", fontFamily: "system-ui,sans-serif" }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "end", paddingBottom: 7, borderBottom: "1px solid rgba(255,255,255,.1)" }}><div><div style={{ color: "#f3c969", fontSize: 5, fontWeight: 900, letterSpacing: 1 }}>MASA & ATEŞ</div><b style={{ display: "block", marginTop: 2, fontSize: 12 }}>Günün Menüsü</b></div><span style={{ color: "#b8b5ad", fontSize: 5 }}>Taze ve özenle hazırlanmış.</span></div><div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 9, marginTop: 8 }}>{([ ["Başlangıçlar", "Günün Çorbası", "140 ₺"], ["Ana Yemekler", "Dana Bonfile", "620 ₺"], ["İçecekler", "Limonata", "120 ₺"] ] as const).map(row => <div key={row[0]}><b style={{ color: "#f3c969", fontSize: 5 }}>{row[0].toUpperCase()}</b><div style={{ display: "flex", justifyContent: "space-between", gap: 3, marginTop: 6, paddingTop: 5, borderTop: "1px solid rgba(255,255,255,.1)", fontSize: 6 }}><strong>{row[1]}</strong><span style={{ color: "#f3c969" }}>{row[2]}</span></div></div>)}</div></div>;
       default:
         return <div style={screenStyle}>🌐</div>;
     }

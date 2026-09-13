@@ -123,9 +123,9 @@ export default async function DashboardLayout({ children }: DashboardLayoutProps
   const avatarChar = displayName.charAt(0).toUpperCase();
 
   return (
-    <div style={{ display: "flex", minHeight: "100vh", backgroundColor: "var(--bg)" }}>
+    <div className="dashboard-shell" style={{ display: "flex", minHeight: "100vh", backgroundColor: "var(--bg)" }}>
       {/* Sidebar Section */}
-      <aside style={{
+      <aside className="dashboard-sidebar" style={{
         width: 260,
         backgroundColor: "var(--sidebar-bg, #0d0e12)",
         borderRight: "1px solid var(--sidebar-border, #1f2937)",
@@ -135,17 +135,17 @@ export default async function DashboardLayout({ children }: DashboardLayoutProps
         flexShrink: 0
       }}>
         {/* Branding Logo */}
-        <div style={{ marginBottom: 20, display: "flex", alignItems: "center", gap: "10px", paddingLeft: "8px" }}>
+        <div className="dashboard-brand" style={{ marginBottom: 20, display: "flex", alignItems: "center", gap: "10px", paddingLeft: "8px" }}>
           <svg style={{ width: 28, height: 28, color: "var(--primary)" }} fill="currentColor" viewBox="0 0 24 24">
             <path d="M19 2H5c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 12H5V4h14v10zm-7 4l-2 3h6l-2-3z" />
           </svg>
-          <span style={{ fontSize: "18px", fontWeight: 800, color: "#ffffff", letterSpacing: "-0.5px" }}>
+          <span className="dashboard-brand-name" style={{ fontSize: "18px", fontWeight: 800, color: "#ffffff", letterSpacing: "-0.5px" }}>
             ScreenCloud
           </span>
         </div>
 
         {/* Space Selector Box */}
-        <div style={{
+        <div className="dashboard-space" style={{
           backgroundColor: "#16171d",
           border: "1px solid #272935",
           borderRadius: "6px",
@@ -165,7 +165,7 @@ export default async function DashboardLayout({ children }: DashboardLayoutProps
         </div>
 
         {/* Bottom Support & User profile */}
-        <div style={{ marginTop: "auto", borderTop: "1px solid #1f2937", paddingTop: "12px" }}>
+        <div className="dashboard-sidebar-footer" style={{ marginTop: "auto", borderTop: "1px solid #1f2937", paddingTop: "12px" }}>
           {/* Support Link */}
           <a
             href="#"
@@ -199,7 +199,7 @@ export default async function DashboardLayout({ children }: DashboardLayoutProps
             }}>
               {avatarChar}
             </div>
-            <div style={{ flexGrow: 1, minWidth: 0 }}>
+            <div className="dashboard-user-copy" style={{ flexGrow: 1, minWidth: 0 }}>
               <div style={{ fontSize: "14px", fontWeight: 700, color: "#ffffff" }}>
                 {displayName}
               </div>
@@ -229,7 +229,7 @@ export default async function DashboardLayout({ children }: DashboardLayoutProps
       </aside>
 
       {/* Main Content Area */}
-      <main style={{ flexGrow: 1, overflowY: "auto", display: "flex", flexDirection: "column" }}>
+      <main className="dashboard-main" style={{ flexGrow: 1, overflowY: "auto", display: "flex", flexDirection: "column" }}>
         {children}
       </main>
     </div>

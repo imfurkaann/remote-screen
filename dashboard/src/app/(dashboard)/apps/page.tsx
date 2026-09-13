@@ -38,74 +38,92 @@ const CATEGORIES = [
   "Live Feeds",
   "Internal Communication",
   "Hospitality",
+  "Food & Beverage",
   "Content & Files"
 ];
+const CATEGORY_LABELS: Record<string, string> = {
+  "All Apps": "Tüm Uygulamalar",
+  Discover: "Keşfet",
+  "Live Feeds": "Canlı Akışlar",
+  "Internal Communication": "Kurumsal İletişim",
+  Hospitality: "Konaklama",
+  "Food & Beverage": "Yeme & İçme",
+  "Content & Files": "İçerik & Dosyalar"
+};
 
 // App Store catalog matching the user's requirements and popular options
 const APP_STORE_CATALOG: AppStoreItem[] = [
   {
     id: "clock",
-    name: "Clock",
-    description: "Create a modern digital, analog or split clock with timezone, color and visibility controls.",
+    name: "Modern Saat",
+    description: "Saat dilimi, renk ve görünürlük seçenekleriyle dijital, analog veya bölünmüş saat oluşturun.",
     icon: "🕒",
     iconBg: "linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)",
     category: "Discover"
   },
   {
     id: "weather",
-    name: "Weather App",
-    description: "Modern live weather, resilient offline caching, responsive details, and clear 3 or 5-day forecasts for digital screens.",
+    name: "Hava Durumu",
+    description: "Canlı hava bilgisi, çevrimdışı önbellek ve 3 veya 5 günlük tahminleri her ekranda yayınlayın.",
     icon: "🌤️",
     iconBg: "linear-gradient(135deg, #f59e0b 0%, #d97706 100%)",
     category: "Discover"
   },
   {
     id: "rss",
-    name: "RSS News Feed",
-    description: "Modern RSS and Atom tickers, cards, and editorial layouts with offline resilience and fleet-scale shared caching.",
+    name: "RSS Haber Akışı",
+    description: "RSS ve Atom kaynaklarını kayan bant, kart veya editoryal düzende güvenilir biçimde yayınlayın.",
     icon: "📰",
     iconBg: "linear-gradient(135deg, #ef4444 0%, #b91c1c 100%)",
     category: "Live Feeds"
   },
   {
     id: "notice",
-    name: "Notice Board",
-    description: "Modern welcome screens, editorial announcements, and high-visibility alerts with responsive layouts and safe content.",
+    name: "Duyuru Panosu",
+    description: "Karşılama ekranları, kurumsal duyurular ve yüksek görünürlüklü uyarılar hazırlayın.",
     icon: "📢",
     iconBg: "linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%)",
     category: "Internal Communication"
   },
   {
     id: "qrcode",
-    name: "QR Code Generator",
-    description: "Create offline-ready QR codes for links, text, and Wi-Fi with responsive layouts and automatic contrast protection.",
+    name: "QR Kod Oluşturucu",
+    description: "Bağlantı, metin ve Wi‑Fi için otomatik kontrast korumalı, çevrimdışı çalışan QR ekranları oluşturun.",
     icon: "📱",
     iconBg: "linear-gradient(135deg, #10b981 0%, #047857 100%)",
     category: "Content & Files"
   },
   {
     id: "wayfinding",
-    name: "Hotel Wayfinding",
-    description: "Guide guests through lobbies, floors and amenities with screen-specific locations, clear directions and offline-ready layouts.",
+    name: "Otel Yönlendirme",
+    description: "Misafirleri lobi, kat ve hizmet alanlarına ekrana özel, anlaşılır yönlendirmelerle ulaştırın.",
     icon: "⌖",
     iconBg: "linear-gradient(135deg, #b7791f 0%, #78350f 100%)",
     category: "Hospitality"
   },
   {
     id: "events",
-    name: "Events & Meetings",
-    description: "Publish today’s event schedule, meeting rooms, live status and directions on lobby and conference screens.",
+    name: "Etkinlik & Toplantı",
+    description: "Günün etkinliklerini, salonları, canlı durum bilgisini ve yönleri lobi ekranlarında yayınlayın.",
     icon: "▦",
     iconBg: "linear-gradient(135deg, #2563eb 0%, #172554 100%)",
     category: "Hospitality"
   },
   {
     id: "hotel-guide",
-    name: "Hotel Guide",
-    description: "Present dining, spa, Wi-Fi, concierge and other guest services with hours and contact details.",
+    name: "Otel Rehberi",
+    description: "Restoran, spa, Wi‑Fi, concierge ve diğer hizmetleri saat ve iletişim bilgileriyle sunun.",
     icon: "i",
     iconBg: "linear-gradient(135deg, #0f766e 0%, #134e4a 100%)",
     category: "Hospitality"
+  },
+  {
+    id: "restaurant-menu",
+    name: "Restoran Menüsü",
+    description: "Kafe, kahvaltı ve restoranlar için fiyatları saniyeler içinde güncellenebilen modern dijital menüler oluşturun.",
+    icon: "≡",
+    iconBg: "linear-gradient(135deg, #9a3412 0%, #431407 100%)",
+    category: "Food & Beverage"
   }
 ];
 
@@ -329,13 +347,16 @@ export default function AppsPage() {
     if (path.includes("hotel-guide")) {
       return { name: "Hotel Guide", icon: "i", color: "#0f766e" };
     }
+    if (path.includes("restaurant-menu")) {
+      return { name: "Restoran Menüsü", icon: "≡", color: "#9a3412" };
+    }
     return { name: "Web App", icon: "🌐", color: "#6b7280" };
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", minHeight: "100%", backgroundColor: "#f4f5f7" }}>
+    <div className="apps-page-shell" style={{ display: "flex", flexDirection: "column", minHeight: "100%", backgroundColor: "#f4f5f7" }}>
       {/* Premium Dashboard Header */}
-      <header style={{
+      <header className="apps-page-header" style={{
         backgroundColor: "#ffffff",
         borderBottom: "1px solid #e2e8f0",
         padding: "16px 32px",
@@ -346,7 +367,7 @@ export default function AppsPage() {
       }}>
         {/* Title */}
         <h1 style={{ margin: 0, fontSize: "24px", fontWeight: 800, color: "#0f172a", letterSpacing: "-0.5px" }}>
-          Apps
+          Uygulamalar
         </h1>
 
         {/* Search Bar in Middle */}
@@ -365,7 +386,7 @@ export default function AppsPage() {
           </svg>
           <input
             type="text"
-            placeholder={activeTab === "store" ? "Search App Store..." : "Search My Apps..."}
+            placeholder={activeTab === "store" ? "Uygulamalarda ara..." : "Uygulamalarımda ara..."}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             style={{
@@ -392,7 +413,7 @@ export default function AppsPage() {
 
         {/* Request App Button */}
         <button
-          onClick={() => alert("App request sent to the ScreenCloud team!")}
+          onClick={() => alert("Uygulama talebiniz alındı.")}
           type="button"
           style={{
             backgroundColor: "#ffffff",
@@ -414,7 +435,7 @@ export default function AppsPage() {
             e.currentTarget.style.borderColor = "#cbd5e1";
           }}
         >
-          Request App
+          Uygulama Talep Et
         </button>
       </header>
 
@@ -439,7 +460,7 @@ export default function AppsPage() {
             transition: "all 0.2s"
           }}
         >
-          APP STORE
+          UYGULAMA MAĞAZASI
         </button>
         <button
           onClick={() => { setActiveTab("my-apps"); setSearchTerm(""); void loadMyApps(); }}
@@ -455,12 +476,12 @@ export default function AppsPage() {
             transition: "all 0.2s"
           }}
         >
-          MY APPS ({myApps.length})
+          UYGULAMALARIM ({myApps.length})
         </button>
       </div>
 
       {/* Workspace Inner Wrapper */}
-      <div style={{ padding: "24px 32px", display: "flex", flexDirection: "column", gap: "24px" }}>
+      <div className="apps-page-content" style={{ padding: "24px 32px", display: "flex", flexDirection: "column", gap: "24px" }}>
         
         {/* APP STORE VIEW */}
         {activeTab === "store" && (
@@ -498,7 +519,7 @@ export default function AppsPage() {
                       if (!isActive) e.currentTarget.style.backgroundColor = "#ffffff";
                     }}
                   >
-                    {cat}
+                    {CATEGORY_LABELS[cat] ?? cat}
                     {cat === "Premium" && (
                       <span style={{
                         fontSize: "9px",
@@ -518,24 +539,27 @@ export default function AppsPage() {
             {/* Title Section */}
             <div style={{ marginTop: "8px" }}>
               <h2 style={{ margin: 0, fontSize: "20px", fontWeight: 800, color: "#1e293b" }}>
-                {selectedCategory} <span style={{ color: "#94a3b8", fontWeight: 500, fontSize: "16px", marginLeft: "6px" }}>{filteredCatalog.length}</span>
+                {CATEGORY_LABELS[selectedCategory] ?? selectedCategory} <span style={{ color: "#94a3b8", fontWeight: 500, fontSize: "16px", marginLeft: "6px" }}>{filteredCatalog.length}</span>
               </h2>
             </div>
 
             {/* App Catalog Grid */}
             {filteredCatalog.length === 0 ? (
               <div style={{ padding: "48px", textAlign: "center", color: "#64748b", backgroundColor: "#ffffff", borderRadius: "12px", border: "1px solid #e2e8f0" }}>
-                <p>No apps match your search or filter selection.</p>
+                <p>Aramanız veya filtrenizle eşleşen uygulama bulunamadı.</p>
               </div>
             ) : (
-              <div style={{
+              <div className="app-catalog-grid" style={{
                 display: "grid",
                 gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))",
                 gap: "20px"
               }}>
                 {filteredCatalog.map((app) => (
-                  <div
+                  <div className="app-catalog-card"
                     key={app.id}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`${app.name} ayrıntılarını aç`}
                     style={{
                       backgroundColor: "#ffffff",
                       border: "1px solid #e2e8f0",
@@ -552,6 +576,13 @@ export default function AppsPage() {
                     onClick={() => {
                       setSelectedAppId(app.id);
                       setIsDetailsOpen(true);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setSelectedAppId(app.id);
+                        setIsDetailsOpen(true);
+                      }
                     }}
                     onMouseEnter={(e) => {
                       e.currentTarget.style.transform = "translateY(-3px)";
@@ -624,7 +655,7 @@ export default function AppsPage() {
             {/* Title Section */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <h2 style={{ margin: 0, fontSize: "20px", fontWeight: 800, color: "#1e293b" }}>
-                My Configured Apps
+                Yapılandırılmış Uygulamalarım
               </h2>
               <button
                 onClick={() => { setActiveTab("store"); setSelectedCategory("All Apps"); }}
@@ -639,14 +670,14 @@ export default function AppsPage() {
                   cursor: "pointer"
                 }}
               >
-                + Get More Apps
+                + Yeni Uygulama
               </button>
             </div>
 
             {/* Apps Loading/State rendering */}
             {loading ? (
               <div style={{ padding: "48px", textAlign: "center", color: "#64748b", backgroundColor: "#ffffff", borderRadius: "12px", border: "1px solid #e2e8f0" }}>
-                <p>Loading configured apps list...</p>
+                <p>Yapılandırılmış uygulamalar yükleniyor...</p>
               </div>
             ) : myApps.length === 0 ? (
               <div style={{
@@ -672,9 +703,9 @@ export default function AppsPage() {
                 }}>
                   ⚙️
                 </div>
-                <h4 style={{ margin: 0, fontSize: "17px", color: "#0f172a", fontWeight: 700 }}>No App Instances Configured</h4>
+                <h4 style={{ margin: 0, fontSize: "17px", color: "#0f172a", fontWeight: 700 }}>Henüz Uygulama Oluşturulmadı</h4>
                 <p style={{ margin: 0, color: "#64748b", fontSize: "14px", maxWidth: "420px", lineHeight: "1.6" }}>
-                  Create and configure widgets like Clocks or Weather to display on your screen. Go to the App Store tab to select and install an app.
+                  Saat, hava durumu, duyuru veya restoran menüsü gibi içerikleri oluşturmak için mağazadan bir uygulama seçin.
                 </p>
                 <button
                   onClick={() => { setActiveTab("store"); setSelectedCategory("All Apps"); }}
@@ -689,12 +720,12 @@ export default function AppsPage() {
                     cursor: "pointer"
                   }}
                 >
-                  Browse App Store
+                  Uygulama Mağazasına Git
                 </button>
               </div>
             ) : filteredMyApps.length === 0 ? (
               <div style={{ padding: "48px", textAlign: "center", color: "#64748b", backgroundColor: "#ffffff", borderRadius: "12px", border: "1px solid #e2e8f0" }}>
-                <p>No configured apps match your search query.</p>
+                <p>Aramanızla eşleşen yapılandırılmış uygulama bulunamadı.</p>
               </div>
             ) : (
               /* Configured list */
@@ -708,9 +739,18 @@ export default function AppsPage() {
                 {filteredMyApps.map((app, idx) => {
                   const meta = getAppMeta(app.storage_path);
                   return (
-                    <div
+                    <div className="configured-app-row"
                       key={app.id}
+                      role="link"
+                      tabIndex={0}
+                      aria-label={`${app.filename} uygulamasını düzenle`}
                       onClick={() => router.push(`/apps/configure?id=${app.id}`)}
+                      onKeyDown={(event) => {
+                        if ((event.key === "Enter" || event.key === " ") && event.target === event.currentTarget) {
+                          event.preventDefault();
+                          router.push(`/apps/configure?id=${app.id}`);
+                        }
+                      }}
                       style={{
                         display: "flex",
                         alignItems: "center",
@@ -751,10 +791,10 @@ export default function AppsPage() {
                       </div>
 
                       {/* Middle Block: Created Date */}
-                      <div style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "12px", color: "#64748b", flexShrink: 0, width: "160px" }}>
-                        <span style={{ fontWeight: 500 }}>Created On</span>
+                      <div className="configured-app-date" style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "12px", color: "#64748b", flexShrink: 0, width: "160px" }}>
+                        <span style={{ fontWeight: 500 }}>Oluşturulma Tarihi</span>
                         <span style={{ fontWeight: 600, color: "#334155" }}>
-                          {new Date(app.created_at).toLocaleDateString("en-US", {
+                          {new Date(app.created_at).toLocaleDateString("tr-TR", {
                             year: "numeric",
                             month: "short",
                             day: "numeric"
@@ -763,7 +803,7 @@ export default function AppsPage() {
                       </div>
 
                       {/* Right Block: Actions */}
-                      <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
+                      <div className="configured-app-actions" style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
                         <Link
                           href={`/api/content/media/preview?path=${encodeURIComponent(app.media_url)}`}
                           target="_blank"
@@ -786,7 +826,7 @@ export default function AppsPage() {
                             e.currentTarget.style.backgroundColor = "#f1f5f9";
                           }}
                         >
-                          Preview
+                          Önizle
                         </Link>
                         <button
                           onClick={(e) => {
@@ -811,7 +851,7 @@ export default function AppsPage() {
                             e.currentTarget.style.backgroundColor = "rgba(16, 185, 129, 0.08)";
                           }}
                         >
-                          Set to Screen
+                          Ekrana Gönder
                         </button>
                         <button
                           onClick={(e) => void handleDeleteInstance(app.id, e)}
@@ -834,7 +874,7 @@ export default function AppsPage() {
                             e.currentTarget.style.backgroundColor = "rgba(239, 68, 68, 0.08)";
                           }}
                         >
-                          {deletingId === app.id ? "..." : "Delete"}
+                          {deletingId === app.id ? "..." : "Sil"}
                         </button>
                       </div>
                     </div>

@@ -97,9 +97,11 @@ export const DEFAULT_WAYFINDING_CONFIG: WayfindingConfig = {
 };
 
 function cleanText(value: unknown, fallback: string, maxLength: number): string {
-  return typeof value === "string" && value.trim()
-    ? value.trim().slice(0, maxLength)
-    : fallback;
+  return typeof value === "string" ? value.slice(0, maxLength) : fallback;
+}
+
+function safeId(value: unknown, fallback: string): string {
+  return (typeof value === "string" && value ? value : fallback).slice(0, 64).replace(/[^a-zA-Z0-9_-]/g, "-");
 }
 
 function validColor(value: unknown, fallback: string): string {
@@ -111,16 +113,15 @@ function normalizeDestination(value: unknown, index: number): WayfindingDestinat
   if (!value || typeof value !== "object") return null;
   const input = value as Record<string, unknown>;
   const name = cleanText(input.name, "", 80);
-  if (!name) return null;
   const direction = typeof input.direction === "string" && input.direction in DIRECTIONS
     ? input.direction as WayfindingDirection
     : "up";
   return {
-    id: cleanText(input.id, `destination-${index + 1}`, 64).replace(/[^a-zA-Z0-9_-]/g, "-"),
+    id: safeId(input.id, `destination-${index + 1}`),
     name,
-    details: typeof input.details === "string" ? input.details.trim().slice(0, 120) : "",
-    floor: typeof input.floor === "string" ? input.floor.trim().slice(0, 40) : "",
-    distance: typeof input.distance === "string" ? input.distance.trim().slice(0, 30) : "",
+    details: typeof input.details === "string" ? input.details.slice(0, 120) : "",
+    floor: typeof input.floor === "string" ? input.floor.slice(0, 40) : "",
+    distance: typeof input.distance === "string" ? input.distance.slice(0, 30) : "",
     direction
   };
 }

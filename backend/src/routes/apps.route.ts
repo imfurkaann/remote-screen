@@ -11,6 +11,7 @@ import { parseRssXml, renderRssHtml, type ParsedRssFeed } from "../lib/rss-rende
 import { renderWeatherHtml } from "../lib/weather-renderer.js";
 import { renderWayfindingHtml } from "../lib/wayfinding-renderer.js";
 import { renderEventsHtml, renderHotelGuideHtml } from "../lib/hotel-renderers.js";
+import { renderRestaurantMenuHtml } from "../lib/restaurant-menu-renderer.js";
 import { normalizePlaylistName, playlistContentChecksum } from "../lib/playlist-policy.js";
 import { requireRoles, requireUserAuth } from "../middlewares/auth.js";
 import { DeviceModel } from "../models/device.model.js";
@@ -20,7 +21,7 @@ import { contentRepository } from "../repositories/content.repository.js";
 import { emitSyncContentToDevices, type SyncContentPayload } from "../sockets/registry.js";
 
 const logger = new Logger("AppsRoute");
-const SUPPORTED_APP_TYPES = new Set(["clock", "weather", "rss", "notice", "qrcode", "wayfinding", "events", "hotel-guide"]);
+const SUPPORTED_APP_TYPES = new Set(["clock", "weather", "rss", "notice", "qrcode", "wayfinding", "events", "hotel-guide", "restaurant-menu"]);
 
 const RSS_MAX_BYTES = 1_000_000;
 const RSS_MAX_REDIRECTS = 3;
@@ -342,6 +343,9 @@ export function buildAppsRouter(deps: AppsRouterDeps): Router {
           break;
         case "hotel-guide":
           htmlContent = renderHotelGuideHtml(title, config);
+          break;
+        case "restaurant-menu":
+          htmlContent = renderRestaurantMenuHtml(title, config);
           break;
         default:
           htmlContent = `<html><body><h1>Unknown App Type: ${appType}</h1></body></html>`;

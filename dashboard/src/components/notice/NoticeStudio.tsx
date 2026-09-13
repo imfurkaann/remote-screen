@@ -69,8 +69,8 @@ export function normalizeNoticeConfig(input: Record<string, unknown>): NoticeCon
 
   return {
     eyebrow: typeof input.eyebrow === "string" ? input.eyebrow.trim().slice(0, 60) : DEFAULT_NOTICE_CONFIG.eyebrow,
-    headline: typeof input.headline === "string" && input.headline.trim() ? input.headline.trim().slice(0, 140) : DEFAULT_NOTICE_CONFIG.headline,
-    body: typeof input.body === "string" && input.body.trim() ? input.body.trim().slice(0, 800) : DEFAULT_NOTICE_CONFIG.body,
+    headline: typeof input.headline === "string" ? input.headline.slice(0, 140) : DEFAULT_NOTICE_CONFIG.headline,
+    body: typeof input.body === "string" ? input.body.slice(0, 800) : DEFAULT_NOTICE_CONFIG.body,
     layout: input.layout === "centered" || input.layout === "banner" ? input.layout : "editorial",
     theme,
     icon,
