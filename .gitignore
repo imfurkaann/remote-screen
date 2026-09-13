@@ -46,6 +46,7 @@ playwright-report/
 
 # Runtime data must live in object storage or a mounted volume
 backend/uploads/
+backend/.local-data/
 test_token.txt
 screencap.png
 

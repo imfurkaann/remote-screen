@@ -11,6 +11,7 @@ import { QrPreview, QrSettings, DEFAULT_QR_CONFIG, normalizeQrConfig } from "@/c
 import { WayfindingPreview, WayfindingSettings, DEFAULT_WAYFINDING_CONFIG, normalizeWayfindingConfig } from "@/components/wayfinding/WayfindingStudio";
 import { EventsPreview, EventsSettings, DEFAULT_EVENTS_CONFIG, normalizeEventsConfig } from "@/components/events/EventsStudio";
 import { HotelGuidePreview, HotelGuideSettings, DEFAULT_HOTEL_GUIDE_CONFIG, normalizeHotelGuideConfig } from "@/components/hotel-guide/HotelGuideStudio";
+import { createSnackMenuTemplate } from "@/lib/pizza-menu-template";
 import { RestaurantMenuPreview, RestaurantMenuSettings, RestaurantMenuTextTools, DEFAULT_RESTAURANT_MENU_CONFIG, normalizeRestaurantMenuConfig } from "@/components/restaurant-menu/RestaurantMenuStudio";
 
 type AppType = "clock" | "weather" | "rss" | "notice" | "qrcode" | "wayfinding" | "events" | "hotel-guide" | "restaurant-menu";
@@ -39,7 +40,7 @@ function AppConfigureForm() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [instanceName, setInstanceName] = useState("");
-  const [previewOrientation, setPreviewOrientation] = useState<"landscape" | "portrait">("landscape");
+  const [previewOrientation, setPreviewOrientation] = useState<"landscape" | "portrait">(createType === "restaurant-menu" ? "portrait" : "landscape");
 
   // App type determination
   const appType: AppType = useMemo(() => {
@@ -50,23 +51,7 @@ function AppConfigureForm() {
 
   // Unified dynamic configuration state
   const [config, setConfig] = useState<Record<string, any>>({});
-  const draftKey = `restaurant-menu-draft:${editId ?? "new"}`;
-  const readMenuDraft = (fallback: Record<string, unknown>) => {
-    try {
-      const saved = localStorage.getItem(draftKey);
-      if (saved) return normalizeRestaurantMenuConfig(JSON.parse(saved));
-    } catch { /* A damaged or unavailable draft must not prevent opening the menu. */ }
-    return normalizeRestaurantMenuConfig(fallback);
-  };
-  const changeMenu = (next: Record<string, any>) => {
-    setConfig(next);
-    try {
-      localStorage.setItem(draftKey, JSON.stringify(next));
-    } catch {
-      // The server save action remains available if browser storage is unavailable.
-    }
-  };
-
+  const changeMenu = (next: Record<string, any>) => setConfig(next);
 
   // Load initial configurations if editing
   useEffect(() => {
@@ -90,7 +75,7 @@ function AppConfigureForm() {
       } else if (appType === "hotel-guide") {
         setConfig(DEFAULT_HOTEL_GUIDE_CONFIG);
       } else if (appType === "restaurant-menu") {
-        setConfig(readMenuDraft(DEFAULT_RESTAURANT_MENU_CONFIG));
+        setConfig(normalizeRestaurantMenuConfig(searchParams.get("template") === "snack" ? createSnackMenuTemplate() : DEFAULT_RESTAURANT_MENU_CONFIG));
       }
       return;
     }
@@ -127,7 +112,7 @@ function AppConfigureForm() {
                           : itemType === "hotel-guide"
                             ? normalizeHotelGuideConfig(itemConfig)
                             : itemType === "restaurant-menu"
-                              ? readMenuDraft(itemConfig)
+                              ? normalizeRestaurantMenuConfig(itemConfig)
                             : itemConfig);
           }
         }
@@ -164,9 +149,6 @@ function AppConfigureForm() {
       });
 
       if (res.ok) {
-        if (appType === "restaurant-menu") {
-          try { localStorage.removeItem(draftKey); } catch { /* Saving to the server succeeded. */ }
-        }
         router.push("/apps");
       } else {
         const errorData = await res.json().catch(() => ({}));
@@ -404,13 +386,15 @@ function AppConfigureForm() {
         }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span style={{ fontSize: "13px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.5px" }}>Canlı Ekran Önizlemesi</span>
+            {appType === "restaurant-menu" && <button type="button" onClick={() => { if (window.confirm("Tuvaldeki içeriğin yerine hazır pizza menüsü yerleştirilsin mi? Kaydettiğiniz menü, tekrar kaydedene kadar korunur.")) { changeMenu(structuredClone(DEFAULT_RESTAURANT_MENU_CONFIG)); setPreviewOrientation("portrait"); } }}>Hazır pizza şablonunu uygula</button>}
+            {appType === "restaurant-menu" && <button type="button" onClick={() => { if (window.confirm("Tuvaldeki içeriğin yerine Snack Menu şablonu yerleştirilsin mi?")) { changeMenu(createSnackMenuTemplate()); setPreviewOrientation("portrait"); } }}>Snack Menu şablonunu uygula</button>}
             <div className="preview-orientation-switch" role="group" aria-label="Önizleme yönü">
               <button type="button" aria-pressed={previewOrientation === "landscape"} onClick={() => setPreviewOrientation("landscape")}>16:9</button>
-              <button type="button" aria-pressed={previewOrientation === "portrait"} onClick={() => setPreviewOrientation("portrait")}>9:16</button>
+              <button type="button" aria-pressed={previewOrientation === "portrait"} onClick={() => setPreviewOrientation("portrait")}>{appType === "restaurant-menu" && (config.theme === "paper" || config.theme === "snack") ? "Dikey (A4)" : "9:16"}</button>
             </div>
           </div>
 
-          <div className={`configure-preview-frame ${previewOrientation} ${appType === "restaurant-menu" ? "restaurant-menu-workspace" : ""}`}>
+          <div className={`configure-preview-frame ${previewOrientation} ${appType === "restaurant-menu" ? "restaurant-menu-workspace" : ""}`} style={appType === "restaurant-menu" && (config.theme === "paper" || config.theme === "snack") && previewOrientation === "portrait" ? { aspectRatio: "210/297", width: "min(100%, calc((100vh - 230px) * .7071))" } : undefined}>
             {renderLivePreview()}
           </div>
 

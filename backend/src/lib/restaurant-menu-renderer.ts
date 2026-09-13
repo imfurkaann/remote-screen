@@ -1,3 +1,4 @@
+import { createPizzaMenuTemplate, MENU_DECORATIONS, menuDecorationSource } from "./pizza-menu-template.js";
 type MenuBadge = "none" | "popular" | "new" | "chef" | "vegan";
 type MenuCategory = { id: string; name: string };
 type MenuItem = { id: string; categoryId: string; name: string; description: string; price: string; badge: MenuBadge; available: boolean };
@@ -8,6 +9,7 @@ type CanvasElement = {
   textDecoration?: "none" | "underline" | "line-through";
   textTransform?: "none" | "uppercase" | "lowercase" | "sentence";
   listStyle?: "none" | "bullet" | "number";
+  fontFamily?: "sans" | "serif";
   rotation?: number;
 };
 type TextPreset = "text" | "heading" | "subheading" | "body";
@@ -17,12 +19,14 @@ type EditorConfig = { version: 2; snapToGrid: boolean; textElements: TextElement
 export type RestaurantMenuConfig = {
   restaurantName: string; heading: string; subtitle: string; locale: "tr" | "en";
   currency: "₺" | "$" | "€" | "£"; currencyPosition: "before" | "after";
-  layout: "board" | "columns" | "editorial"; theme: "charcoal" | "cream" | "terracotta" | "forest";
+  layout: "board" | "columns" | "editorial"; theme: "charcoal" | "cream" | "terracotta" | "forest" | "paper" | "snack";
   accentColor: string; categories: MenuCategory[]; items: MenuItem[];
   showDescriptions: boolean; showUnavailable: boolean; footer: string; editor: EditorConfig;
 };
 
 const THEMES = {
+  snack: { scheme: "light", bg: "#f8f9ff", surface: "#f8f9ff", text: "#3861b0", muted: "#3861b0", line: "transparent", accent: "#3861b0" },
+  paper: { scheme: "light", bg: "#ffffff", surface: "#ffffff", text: "#000000", muted: "#000000", line: "transparent", accent: "#bd3034" },
   charcoal: { bg: "linear-gradient(145deg,#111315,#1d2225 58%,#272e31)", surface: "rgba(255,255,255,.055)", text: "#f7f5ef", muted: "#b8b5ad", line: "rgba(255,255,255,.11)", accent: "#f3c969", scheme: "dark" },
   cream: { bg: "linear-gradient(145deg,#fffdf7,#f4ecdd 62%,#eadbc4)", surface: "rgba(255,255,255,.7)", text: "#29231d", muted: "#786d62", line: "rgba(41,35,29,.12)", accent: "#9a5b2b", scheme: "light" },
   terracotta: { bg: "linear-gradient(145deg,#3b1712,#752d22 55%,#a94734)", surface: "rgba(255,255,255,.065)", text: "#fff8f2", muted: "#f4c7ba", line: "rgba(255,255,255,.13)", accent: "#ffd08a", scheme: "dark" },
@@ -50,6 +54,7 @@ const safeCanvasColor = (value: unknown) => {
   return /^#[0-9a-f]{6}$/i.test(color) || /^linear-gradient\((90deg|135deg|180deg),#[0-9a-f]{6},#[0-9a-f]{6}\)$/i.test(color) ? color : "";
 };
 const safeImageSource = (value: unknown) => {
+  if (typeof value === "string" && MENU_DECORATIONS[value]) return value;
   let source = typeof value === "string" ? value.trim().slice(0, 4096) : "";
   if (/^https?:\/\//i.test(source)) {
     try { source = new URL(source).pathname; } catch { return ""; }
@@ -67,7 +72,7 @@ const normalizeLayout = (value: unknown): Record<string, CanvasElement> => {
   return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 80).flatMap(([key, raw]) => {
     if (!/^(restaurantName|heading|subtitle|footer|category:[a-zA-Z0-9_-]+|item:[a-zA-Z0-9_-]+|text:[a-zA-Z0-9_-]+|image:[a-zA-Z0-9_-]+)$/.test(key) || !raw || typeof raw !== "object") return [];
     const item = raw as Record<string, unknown>;
-    const width = bounded(item.width, 24, 6, 96); const height = bounded(item.height, 10, 3, 92);
+    const width = bounded(item.width, 24, 6, 100); const height = bounded(item.height, 10, 3, 92);
     return [[key, {
       x: bounded(item.x, 0, 0, 100 - width), y: bounded(item.y, 0, 0, 100 - height), width, height,
       fontScale: bounded(item.fontScale, 1, .55, 2.4),
@@ -79,6 +84,7 @@ const normalizeLayout = (value: unknown): Record<string, CanvasElement> => {
       ...(item.textDecoration === "underline" || item.textDecoration === "line-through" || item.textDecoration === "none" ? { textDecoration: item.textDecoration } : {}),
       ...(item.textTransform === "uppercase" || item.textTransform === "lowercase" || item.textTransform === "sentence" || item.textTransform === "none" ? { textTransform: item.textTransform } : {}),
       ...(item.listStyle === "bullet" || item.listStyle === "number" || item.listStyle === "none" ? { listStyle: item.listStyle } : {}),
+      ...(item.fontFamily === "serif" || item.fontFamily === "sans" ? { fontFamily: item.fontFamily } : {}),
       ...(Number.isFinite(Number(item.rotation)) ? { rotation: bounded(item.rotation, 0, 0, 359) } : {})
     } satisfies CanvasElement]];
   }));
@@ -90,7 +96,7 @@ const normalizeEditor = (value: unknown): EditorConfig => {
     if (!raw || typeof raw !== "object") return [];
     const item = raw as Record<string, unknown>;
     const preset: TextPreset = item.preset === "heading" || item.preset === "subheading" || item.preset === "body" ? item.preset : "text";
-    return [{ id: safeId(item.id, `text-${index + 1}`), text: optional(item.text, 500) || "Metninizi yazın", preset }];
+    return [{ id: safeId(item.id, `text-${index + 1}`), text: typeof item.text === "string" ? item.text.slice(0, 500) : "Metninizi yazın", preset }];
   }) : [];
   const imageElements = Array.isArray(editor.imageElements) ? editor.imageElements.slice(0, 40).flatMap((raw, index) => {
     if (!raw || typeof raw !== "object") return [];
@@ -103,15 +109,16 @@ const normalizeEditor = (value: unknown): EditorConfig => {
 };
 
 export function normalizeRestaurantMenuConfig(input: Record<string, unknown> = {}): RestaurantMenuConfig {
-  const theme: RestaurantMenuConfig["theme"] = input.theme === "cream" || input.theme === "terracotta" || input.theme === "forest" ? input.theme : "charcoal";
+  if (Object.keys(input).length === 0) return createPizzaMenuTemplate();
+  const theme: RestaurantMenuConfig["theme"] = input.theme === "snack" || input.theme === "paper" || input.theme === "cream" || input.theme === "terracotta" || input.theme === "forest" ? input.theme : "charcoal";
   const categories = Array.isArray(input.categories) ? input.categories.slice(0, 6).flatMap((raw, index) => {
     if (!raw || typeof raw !== "object") return [];
     const item = raw as Record<string, unknown>; const name = clean(item.name, "", 60); if (!name) return [];
     return [{ id: safeId(item.id, `category-${index + 1}`), name }];
   }) : DEFAULT_CATEGORIES;
-  const usableCategories = categories.length ? categories : DEFAULT_CATEGORIES;
+  const usableCategories = Array.isArray(input.categories) ? categories : DEFAULT_CATEGORIES;
   const categoryIds = new Set(usableCategories.map(item => item.id));
-  const firstCategory = usableCategories[0]!.id;
+  const firstCategory = usableCategories[0]?.id ?? "menu";
   const items = Array.isArray(input.items) ? input.items.slice(0, 24).flatMap((raw, index) => {
     if (!raw || typeof raw !== "object") return [];
     const item = raw as Record<string, unknown>; const name = clean(item.name, "", 90); if (!name) return [];
@@ -120,12 +127,12 @@ export function normalizeRestaurantMenuConfig(input: Record<string, unknown> = {
     return [{ id: safeId(item.id, `item-${index + 1}`), categoryId: categoryIds.has(requestedCategory) ? requestedCategory : firstCategory, name, description: optional(item.description, 180), price: optional(item.price, 24), badge, available: item.available !== false }];
   }) : DEFAULT_ITEMS;
   return {
-    restaurantName: clean(input.restaurantName, "Masa & Ateş", 80), heading: clean(input.heading, "Günün Menüsü", 100),
+    restaurantName: typeof input.restaurantName === "string" ? optional(input.restaurantName, 80) : "Masa & Ateş", heading: typeof input.heading === "string" ? optional(input.heading, 100) : "Günün Menüsü",
     subtitle: optional(input.subtitle, 220), locale: input.locale === "en" ? "en" : "tr",
     currency: input.currency === "$" || input.currency === "€" || input.currency === "£" ? input.currency : "₺",
     currencyPosition: input.currencyPosition === "before" ? "before" : "after",
     layout: input.layout === "board" || input.layout === "editorial" ? input.layout : "columns", theme,
-    accentColor: safeColor(input.accentColor, THEMES[theme].accent), categories: usableCategories, items: items.length ? items : DEFAULT_ITEMS,
+    accentColor: safeColor(input.accentColor, THEMES[theme].accent), categories: usableCategories, items,
     showDescriptions: input.showDescriptions !== false, showUnavailable: input.showUnavailable === true,
     footer: typeof input.footer === "string" ? input.footer.trim().slice(0, 220) : "Alerjen bilgisi için ekibimize danışabilirsiniz. Fiyatlara KDV dahildir.",
     editor: normalizeEditor(input.editor)
@@ -157,6 +164,8 @@ const canvasVariables = (landscape: CanvasElement, portrait: CanvasElement) => {
   ];
   if (landscape.color?.startsWith("linear-gradient(")) values.push("--lc:transparent", `--lbg:${landscape.color}`);
   else if (landscape.color) values.push(`--lc:${landscape.color}`);
+  if (landscape.fontFamily) values.push(`--lff:${landscape.fontFamily === "serif" ? "Georgia,Times New Roman,serif" : "Arial,sans-serif"}`);
+  if (portrait.fontFamily) values.push(`--pff:${portrait.fontFamily === "serif" ? "Georgia,Times New Roman,serif" : "Arial,sans-serif"}`);
   if (landscape.fontWeight) values.push(`--lfw:${landscape.fontWeight}`);
   if (landscape.fontStyle) values.push(`--lfi:${landscape.fontStyle}`);
   if (landscape.textDecoration) values.push(`--ltd:${landscape.textDecoration}`);
@@ -216,13 +225,15 @@ export function renderRestaurantMenuHtml(title: string, raw: Record<string, unkn
     const id = `image:${element.id}`;
     const landscape = mergeCanvasLayout(automaticCanvasLayout("landscape", "image"), config.editor.layouts.landscape[id]);
     const portrait = mergeCanvasLayout(automaticCanvasLayout("portrait", "image"), config.editor.layouts.portrait[id]);
-    return `<div class="block custom-image" style="${canvasVariables(landscape, portrait)}"><img class="landscape-image" src="${escapeHtml(element.source)}" alt="${escapeHtml(element.name)}"><img class="portrait-image" src="${escapeHtml(element.source)}" alt="${escapeHtml(element.name)}"></div>`;
+    return `<div class="block custom-image" style="${canvasVariables(landscape, portrait)}"><img class="landscape-image" src="${escapeHtml(menuDecorationSource(element.source))}" alt="${escapeHtml(element.name)}"><img class="portrait-image" src="${escapeHtml(menuDecorationSource(element.source))}" alt="${escapeHtml(element.name)}"></div>`;
   }).join("");
   return `<!doctype html><html lang="${config.locale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><title>${escapeHtml(title)}</title><style>
     :root{color-scheme:${theme.scheme};--bg:${theme.bg};--surface:${theme.surface};--text:${theme.text};--muted:${theme.muted};--line:${theme.line};--accent:${config.accentColor}}
     *{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden}body{background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased;text-rendering:geometricPrecision}.stage{position:relative;width:100%;height:100%;min-height:100vh;overflow:hidden;container-type:size}.stage:before,.stage:after{content:"";position:absolute;left:6%;right:6%;border-top:1px solid var(--line)}.stage:before{top:28%}.stage:after{top:90%}
-    .block{position:absolute;left:var(--lx);top:var(--ly);width:var(--lw);height:var(--lh);z-index:var(--lz);overflow:hidden;text-align:var(--la);font-size:calc(var(--base)*var(--lfs));overflow-wrap:anywhere;color:var(--lc,inherit);background-image:var(--lbg,none);background-clip:text;-webkit-background-clip:text;font-weight:var(--lfw,inherit);font-style:var(--lfi,normal);text-decoration:var(--ltd,none);text-transform:var(--ltt,none)}.brand{--base:1.15cqw;color:var(--lc,var(--accent));font-weight:var(--lfw,900);line-height:1.25;letter-spacing:.17em;text-transform:var(--ltt,uppercase)}.heading{--base:4.6cqw;margin:0;line-height:1.02;letter-spacing:-.04em}.subtitle{--base:1.25cqw;margin:0;color:var(--lc,var(--muted));line-height:1.45}.category{--base:1.35cqw;margin:0;color:var(--lc,var(--accent));line-height:1.25;letter-spacing:.12em;text-transform:var(--ltt,uppercase)}.item{--base:1.4cqw;padding-top:.55em;border-top:1px solid var(--line)}.item-line{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.65em;align-items:baseline}.item-line strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:1em}.item-line b{color:var(--lc,var(--accent));font-size:.95em;white-space:nowrap}.badge{display:block;margin-top:.45em;color:var(--lc,var(--accent));font-size:.5em;font-weight:900;letter-spacing:.1em}.item p{margin:.4em 0 0;color:var(--lc,var(--muted));font-size:.62em;line-height:1.35}.footer{--base:1.05cqw;color:var(--lc,var(--muted));line-height:1.3}.custom-text{--base:1.3cqw;line-height:1.2;white-space:pre-wrap;text-transform:none}.custom-text-heading{font-weight:var(--lfw,900)}.custom-text-subheading{font-weight:var(--lfw,700)}.custom-text-body{font-weight:var(--lfw,500)}.custom-line{display:grid;grid-template-columns:1.4em 1fr;gap:.25em}.portrait-content{display:none}.custom-image{overflow:visible;background:none}.custom-image img{display:block;width:100%;height:100%;object-fit:contain;transform:rotate(var(--lr,0deg));transform-origin:center}.custom-image .portrait-image{display:none}.unavailable{opacity:.42}.portrait-only{display:none}body[data-layout=board] .item{padding:.65em;border:1px solid var(--line);border-radius:.65em;background-color:var(--surface)}body[data-layout=editorial] .item-line strong{letter-spacing:-.02em}
-    @media(max-aspect-ratio:1/1){.stage:before{top:28%}.block{left:var(--px);top:var(--py);width:var(--pw);height:var(--ph);z-index:var(--pz);text-align:var(--pa);font-size:calc(var(--portrait-base,var(--base))*var(--pfs));color:var(--pc,var(--lc,inherit));background-image:var(--pbg,var(--lbg,none));font-weight:var(--pfw,var(--lfw,inherit));font-style:var(--pfi,var(--lfi,normal));text-decoration:var(--ptd,var(--ltd,none));text-transform:var(--ptt,var(--ltt,none))}.brand{--portrait-base:2.2cqw;color:var(--pc,var(--lc,var(--accent)));font-weight:var(--pfw,var(--lfw,900));text-transform:var(--ptt,var(--ltt,uppercase))}.heading{--portrait-base:8.4cqw}.subtitle{--portrait-base:2.25cqw;color:var(--pc,var(--lc,var(--muted)))}.category{--portrait-base:2.5cqw;color:var(--pc,var(--lc,var(--accent)));text-transform:var(--ptt,var(--ltt,uppercase))}.item{--portrait-base:2.75cqw}.item-line b,.badge{color:var(--pc,var(--lc,var(--accent)))}.item p{color:var(--pc,var(--lc,var(--muted)))}.footer{--portrait-base:1.9cqw;color:var(--pc,var(--lc,var(--muted)))}.custom-text{--portrait-base:2.3cqw;text-transform:none}.landscape-content{display:none}.portrait-content{display:inline}.custom-image .landscape-image{display:none}.custom-image .portrait-image{display:block;transform:rotate(var(--pr,var(--lr,0deg)))}.portrait-only{display:block}.landscape-only{display:none}}
+    .block{position:absolute;left:var(--lx);top:var(--ly);width:var(--lw);height:var(--lh);z-index:var(--lz);overflow:hidden;text-align:var(--la);font-size:calc(var(--base)*var(--lfs));overflow-wrap:anywhere;color:var(--lc,inherit);background-image:var(--lbg,none);background-clip:text;-webkit-background-clip:text;font-weight:var(--lfw,inherit);font-style:var(--lfi,normal);text-decoration:var(--ltd,none);text-transform:var(--ltt,none);font-family:var(--lff,inherit)}.brand{--base:1.15cqw;color:var(--lc,var(--accent));font-weight:var(--lfw,900);line-height:1.25;letter-spacing:.17em;text-transform:var(--ltt,uppercase)}.heading{--base:4.6cqw;margin:0;line-height:1.02;letter-spacing:-.04em}.subtitle{--base:1.25cqw;margin:0;color:var(--lc,var(--muted));line-height:1.45}.category{--base:1.35cqw;margin:0;color:var(--lc,var(--accent));line-height:1.25;letter-spacing:.12em;text-transform:var(--ltt,uppercase)}.item{--base:1.4cqw;padding-top:.55em;border-top:1px solid var(--line)}.item-line{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.65em;align-items:baseline}.item-line strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:1em}.item-line b{color:var(--lc,var(--accent));font-size:.95em;white-space:nowrap}.badge{display:block;margin-top:.45em;color:var(--lc,var(--accent));font-size:.5em;font-weight:900;letter-spacing:.1em}.item p{margin:.4em 0 0;color:var(--lc,var(--muted));font-size:.62em;line-height:1.35}.footer{--base:1.05cqw;color:var(--lc,var(--muted));line-height:1.3}.custom-text{--base:1.3cqw;line-height:1.2;white-space:pre-wrap;text-transform:none}.custom-text-heading{font-weight:var(--lfw,900)}.custom-text-subheading{font-weight:var(--lfw,700)}.custom-text-body{font-weight:var(--lfw,500)}.custom-line{display:grid;grid-template-columns:1.4em 1fr;gap:.25em}.portrait-content{display:none}.custom-image{overflow:visible;background:none}.custom-image img{display:block;width:100%;height:100%;object-fit:contain;transform:rotate(var(--lr,0deg));transform-origin:center}.custom-image .portrait-image{display:none}.unavailable{opacity:.42}.portrait-only{display:none}body[data-layout=board] .item{padding:.65em;border:1px solid var(--line);border-radius:.65em;background-color:var(--surface)}body[data-layout=editorial] .item-line strong{letter-spacing:-.02em}
+    @media(max-aspect-ratio:1/1){.stage:before{top:28%}.block{left:var(--px);top:var(--py);width:var(--pw);height:var(--ph);z-index:var(--pz);text-align:var(--pa);font-size:calc(var(--portrait-base,var(--base))*var(--pfs));color:var(--pc,var(--lc,inherit));background-image:var(--pbg,var(--lbg,none));font-weight:var(--pfw,var(--lfw,inherit));font-style:var(--pfi,var(--lfi,normal));text-decoration:var(--ptd,var(--ltd,none));text-transform:var(--ptt,var(--ltt,none));font-family:var(--pff,var(--lff,inherit))}.brand{--portrait-base:2.2cqw;color:var(--pc,var(--lc,var(--accent)));font-weight:var(--pfw,var(--lfw,900));text-transform:var(--ptt,var(--ltt,uppercase))}.heading{--portrait-base:8.4cqw}.subtitle{--portrait-base:2.25cqw;color:var(--pc,var(--lc,var(--muted)))}.category{--portrait-base:2.5cqw;color:var(--pc,var(--lc,var(--accent)));text-transform:var(--ptt,var(--ltt,uppercase))}.item{--portrait-base:2.75cqw}.item-line b,.badge{color:var(--pc,var(--lc,var(--accent)))}.item p{color:var(--pc,var(--lc,var(--muted)))}.footer{--portrait-base:1.9cqw;color:var(--pc,var(--lc,var(--muted)))}.custom-text{--portrait-base:2.3cqw;text-transform:none}.landscape-content{display:none}.portrait-content{display:inline}.custom-image .landscape-image{display:none}.custom-image .portrait-image{display:block;transform:rotate(var(--pr,var(--lr,0deg)))}.portrait-only{display:block}.landscape-only{display:none}}
+    body[data-theme=snack] .custom-text{--base:2.8cqw;--portrait-base:5.4cqw}
+    body[data-theme=paper] .custom-text{--base:1.6cqw;--portrait-base:2.8cqw}
     @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
-  </style></head><body data-layout="${config.layout}"><main class="stage"><div class="block brand" style="${vars("restaurantName", "restaurantName")}">${escapeHtml(config.restaurantName)}</div><h1 class="block heading" style="${vars("heading", "heading")}">${escapeHtml(config.heading)}</h1><p class="block subtitle" style="${vars("subtitle", "subtitle")}">${escapeHtml(config.subtitle)}</p>${categoryHtml}<footer class="block footer" style="${vars("footer", "footer")}">${escapeHtml(config.footer)}</footer>${customTextHtml}${customImageHtml}</main></body></html>`;
+  </style></head><body data-theme="${config.theme}" data-layout="${config.layout}"><main class="stage"><div class="block brand" style="${vars("restaurantName", "restaurantName")}">${escapeHtml(config.restaurantName)}</div><h1 class="block heading" style="${vars("heading", "heading")}">${escapeHtml(config.heading)}</h1><p class="block subtitle" style="${vars("subtitle", "subtitle")}">${escapeHtml(config.subtitle)}</p>${categoryHtml}<footer class="block footer" style="${vars("footer", "footer")}">${escapeHtml(config.footer)}</footer>${customTextHtml}${customImageHtml}</main></body></html>`;
 }
