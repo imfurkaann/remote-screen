@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ChangeEvent as ReactChangeEvent, CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 
 export type MenuBadge = "none" | "popular" | "new" | "chef" | "vegan";
 export type RestaurantMenuItem = {
@@ -14,6 +14,17 @@ export type RestaurantMenuItem = {
   available: boolean;
 };
 export type RestaurantMenuCategory = { id: string; name: string };
+export type RestaurantMenuTextPreset = "text" | "heading" | "subheading" | "body";
+export type RestaurantMenuTextElement = {
+  id: string;
+  text: string;
+  preset: RestaurantMenuTextPreset;
+};
+export type RestaurantMenuImageElement = {
+  id: string;
+  name: string;
+  source: string;
+};
 export type RestaurantMenuCanvasElement = {
   x: number;
   y: number;
@@ -22,10 +33,32 @@ export type RestaurantMenuCanvasElement = {
   fontScale: number;
   align: "left" | "center" | "right";
   zIndex: number;
+  color?: string;
+  fontWeight?: "normal" | "bold";
+  fontStyle?: "normal" | "italic";
+  textDecoration?: "none" | "underline" | "line-through";
+  textTransform?: "none" | "uppercase" | "lowercase" | "sentence";
+  listStyle?: "none" | "bullet" | "number";
+  rotation?: number;
 };
+
+const MENU_SOLID_COLORS = [
+  "#000000", "#4b4b4b", "#737373", "#a6a6a6", "#b8b8b8", "#d9d9d9", "#ffffff",
+  "#ff3131", "#ff5757", "#f35db8", "#cb8ade", "#bc67dc", "#8748f5", "#5e17eb",
+  "#0899b5", "#12b6d6", "#55d2d9", "#38b6ff", "#5271ff", "#0d4fbd", "#1800a8",
+  "#00bf63", "#6bd34b", "#a7f45a", "#ffdc5c", "#ffbd59", "#ff8647", "#ff681f"
+] as const;
+const MENU_GRADIENT_COLORS = [
+  "linear-gradient(90deg,#000000,#737373)", "linear-gradient(90deg,#111111,#ffffff)", "linear-gradient(90deg,#9ca3af,#ffffff)", "linear-gradient(135deg,#b8f55b,#49c63f)", "linear-gradient(90deg,#0f172a,#e2aa00)", "linear-gradient(180deg,#7134a5,#ffd44d)", "linear-gradient(135deg,#06008f,#2537d8)",
+  "linear-gradient(135deg,#d7ffd9,#89b9ff)", "linear-gradient(90deg,#ff3131,#ff914d)", "linear-gradient(90deg,#ff3131,#a64df0)", "linear-gradient(90deg,#5271ff,#f35db8)", "linear-gradient(90deg,#1592ff,#8e3bc8)", "linear-gradient(90deg,#7d4dff,#39d5d0)", "linear-gradient(135deg,#64d5e7,#0069a8)",
+  "linear-gradient(135deg,#7d4dff,#00a888)", "linear-gradient(90deg,#7552e9,#00c485)", "linear-gradient(90deg,#00bf63,#ffdc5c)", "linear-gradient(90deg,#ffbd59,#ffde59)", "linear-gradient(90deg,#ffcf80,#ff759d)", "linear-gradient(90deg,#fff2c2,#ef8ce8)", "linear-gradient(90deg,#48c6ef,#d95698)"
+] as const;
+const isMenuGradient = (color: string | undefined) => color?.startsWith("linear-gradient(") === true;
 export type RestaurantMenuEditorConfig = {
-  version: 1;
+  version: 2;
   snapToGrid: boolean;
+  textElements: RestaurantMenuTextElement[];
+  imageElements: RestaurantMenuImageElement[];
   layouts: {
     landscape: Record<string, RestaurantMenuCanvasElement>;
     portrait: Record<string, RestaurantMenuCanvasElement>;
@@ -50,8 +83,10 @@ export type RestaurantMenuConfig = {
 };
 
 const EMPTY_EDITOR: RestaurantMenuEditorConfig = {
-  version: 1,
+  version: 2,
   snapToGrid: true,
+  textElements: [],
+  imageElements: [],
   layouts: { landscape: {}, portrait: {} }
 };
 
@@ -98,6 +133,14 @@ export const DEFAULT_RESTAURANT_MENU_CONFIG: RestaurantMenuConfig = {
 const color = (value: unknown, fallback: string) => /^#[0-9a-f]{6}$/i.test(String(value ?? "")) ? String(value) : fallback;
 const editable = (value: unknown, fallback: string, max: number) => typeof value === "string" ? value.slice(0, max) : fallback;
 const safeId = (value: unknown, fallback: string) => editable(value, fallback, 64).replace(/[^a-zA-Z0-9_-]/g, "-") || fallback;
+const normalizeUploadedSource = (value: unknown) => {
+  let source = editable(value, "", 4096).trim();
+  if (/^https?:\/\//i.test(source)) {
+    try { source = new URL(source).pathname; } catch { return ""; }
+  }
+  try { source = decodeURIComponent(source); } catch { /* Keep the original path if it is not encoded. */ }
+  return source.startsWith("/uploads/") && !source.includes("..") && !/[?#\u0000-\u001f]/.test(source) ? source : "";
+};
 const bounded = (value: unknown, fallback: number, min: number, max: number) => {
   const number = typeof value === "number" ? value : Number(value);
   return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback;
@@ -106,7 +149,7 @@ const bounded = (value: unknown, fallback: number, min: number, max: number) => 
 function normalizeCanvasLayout(value: unknown): Record<string, RestaurantMenuCanvasElement> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 80).flatMap(([key, raw]) => {
-    if (!/^(restaurantName|heading|subtitle|footer|category:[a-zA-Z0-9_-]+|item:[a-zA-Z0-9_-]+)$/.test(key) || !raw || typeof raw !== "object") return [];
+    if (!/^(restaurantName|heading|subtitle|footer|category:[a-zA-Z0-9_-]+|item:[a-zA-Z0-9_-]+|text:[a-zA-Z0-9_-]+|image:[a-zA-Z0-9_-]+)$/.test(key) || !raw || typeof raw !== "object") return [];
     const item = raw as Record<string, unknown>;
     const width = bounded(item.width, 24, 6, 96);
     const height = bounded(item.height, 10, 3, 92);
@@ -117,7 +160,14 @@ function normalizeCanvasLayout(value: unknown): Record<string, RestaurantMenuCan
       height,
       fontScale: bounded(item.fontScale, 1, .55, 2.4),
       align: item.align === "center" || item.align === "right" ? item.align : "left",
-      zIndex: Math.round(bounded(item.zIndex, 1, 1, 30))
+      zIndex: Math.round(bounded(item.zIndex, 1, 1, 30)),
+      ...((/^#[0-9a-f]{6}$/i.test(String(item.color ?? "")) || /^linear-gradient\((90deg|135deg|180deg),#[0-9a-f]{6},#[0-9a-f]{6}\)$/i.test(String(item.color ?? ""))) ? { color: String(item.color) } : {}),
+      ...(item.fontWeight === "bold" || item.fontWeight === "normal" ? { fontWeight: item.fontWeight } : {}),
+      ...(item.fontStyle === "italic" || item.fontStyle === "normal" ? { fontStyle: item.fontStyle } : {}),
+      ...(item.textDecoration === "underline" || item.textDecoration === "line-through" || item.textDecoration === "none" ? { textDecoration: item.textDecoration } : {}),
+      ...(item.textTransform === "uppercase" || item.textTransform === "lowercase" || item.textTransform === "sentence" || item.textTransform === "none" ? { textTransform: item.textTransform } : {}),
+      ...(item.listStyle === "bullet" || item.listStyle === "number" || item.listStyle === "none" ? { listStyle: item.listStyle } : {}),
+      ...(Number.isFinite(Number(item.rotation)) ? { rotation: bounded(item.rotation, 0, 0, 359) } : {})
     } satisfies RestaurantMenuCanvasElement]];
   }));
 }
@@ -126,8 +176,21 @@ function normalizeEditor(value: unknown): RestaurantMenuEditorConfig {
   const editor = value && typeof value === "object" ? value as Record<string, unknown> : {};
   const layouts = editor.layouts && typeof editor.layouts === "object" ? editor.layouts as Record<string, unknown> : {};
   return {
-    version: 1,
+    version: 2,
     snapToGrid: editor.snapToGrid !== false,
+    textElements: Array.isArray(editor.textElements) ? editor.textElements.slice(0, 40).flatMap((raw, index) => {
+      if (!raw || typeof raw !== "object") return [];
+      const item = raw as Record<string, unknown>;
+      const preset: RestaurantMenuTextPreset = item.preset === "heading" || item.preset === "subheading" || item.preset === "body" ? item.preset : "text";
+      return [{ id: safeId(item.id, `text-${index + 1}`), text: editable(item.text, "Metninizi yazın", 500), preset }];
+    }) : [],
+    imageElements: Array.isArray(editor.imageElements) ? editor.imageElements.slice(0, 40).flatMap((raw, index) => {
+      if (!raw || typeof raw !== "object") return [];
+      const item = raw as Record<string, unknown>;
+      const source = normalizeUploadedSource(item.source);
+      if (!source) return [];
+      return [{ id: safeId(item.id, `image-${index + 1}`), name: editable(item.name, `Görsel ${index + 1}`, 180), source }];
+    }) : [],
     layouts: {
       landscape: normalizeCanvasLayout(layouts.landscape),
       portrait: normalizeCanvasLayout(layouts.portrait)
@@ -271,16 +334,190 @@ export function RestaurantMenuSettings({ config: raw, onChange }: { config: Reco
   </div>;
 }
 
+const TEXT_PRESETS: Record<RestaurantMenuTextPreset, { label: string; text: string; fontScale: number; width: number; height: number }> = {
+  text: { label: "Metin kutusu ekle", text: "Metninizi yazın", fontScale: 1, width: 30, height: 7 },
+  heading: { label: "Başlık ekle", text: "Başlığınızı yazın", fontScale: 2.2, width: 52, height: 12 },
+  subheading: { label: "Alt başlık ekle", text: "Alt başlığınızı yazın", fontScale: 1.45, width: 42, height: 9 },
+  body: { label: "Birkaç satır gövde metni ekle", text: "Metninizi buraya yazın. Birkaç satırlık açıklama ekleyebilirsiniz.", fontScale: .85, width: 38, height: 13 }
+};
+
+function transformMenuText(value: string, transform: RestaurantMenuCanvasElement["textTransform"]): string {
+  if (transform === "uppercase") return value.toLocaleUpperCase("tr-TR");
+  if (transform === "lowercase") return value.toLocaleLowerCase("tr-TR");
+  if (transform === "sentence") {
+    const lower = value.toLocaleLowerCase("tr-TR");
+    return lower.replace(/[A-Za-zÇĞİÖŞÜçğıöşü]/, character => character.toLocaleUpperCase("tr-TR"));
+  }
+  return value;
+}
+
+function FormattedMenuText({ value, rect }: { value: string; rect: RestaurantMenuCanvasElement }) {
+  const transformed = transformMenuText(value, rect.textTransform);
+  const lines = transformed.split(/\r?\n/);
+  if (rect.listStyle === "bullet" || rect.listStyle === "number") {
+    return <span style={{ display: "grid", gap: ".18em" }}>{lines.map((line, index) => <span key={index} style={{ display: "grid", gridTemplateColumns: "1.4em 1fr", gap: ".25em" }}><span>{rect.listStyle === "bullet" ? "•" : `${index + 1}.`}</span><span>{line || "\u00a0"}</span></span>)}</span>;
+  }
+  return <>{transformed || "\u00a0"}</>;
+}
+
+type RestaurantUploadMedia = { id: string; filename: string; mime_type: string; media_url: string };
+const mediaPreviewSource = (source: string) => {
+  const path = normalizeUploadedSource(source);
+  return path ? `/api/content/media/preview?path=${encodeURIComponent(path)}` : "";
+};
+
+export function RestaurantMenuTextTools({ config: raw, onChange }: { config: Record<string, unknown>; onChange: (next: RestaurantMenuConfig) => void }) {
+  const config = normalizeRestaurantMenuConfig(raw);
+  const [panel, setPanel] = useState<"text" | "uploads" | null>(null);
+  const [uploads, setUploads] = useState<RestaurantUploadMedia[]>([]);
+  const [search, setSearch] = useState("");
+  const [loadingUploads, setLoadingUploads] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const loadUploads = async (query = "") => {
+    setLoadingUploads(true);
+    setUploadError("");
+    try {
+      const params = new URLSearchParams({ page: "1", limit: "100" });
+      if (query.trim()) params.set("search", query.trim());
+      const response = await fetch(`/api/content/media?${params}`, { cache: "no-store" });
+      const payload = await response.json().catch(() => ({})) as { media?: RestaurantUploadMedia[]; message?: string };
+      if (!response.ok) throw new Error(payload.message || "Görseller yüklenemedi.");
+      setUploads((payload.media ?? []).flatMap(item => {
+        const source = normalizeUploadedSource(item.media_url);
+        return item.mime_type.startsWith("image/") && source ? [{ ...item, media_url: source }] : [];
+      }));
+    } catch (error) {
+      setUploadError((error as Error).message);
+    } finally {
+      setLoadingUploads(false);
+    }
+  };
+
+  useEffect(() => {
+    if (panel !== "uploads") return;
+    const timer = window.setTimeout(() => { void loadUploads(search); }, search.trim() ? 250 : 0);
+    return () => window.clearTimeout(timer);
+  }, [panel, search]);
+
+  const addText = (preset: RestaurantMenuTextPreset) => {
+    const definition = TEXT_PRESETS[preset];
+    const id = `text-${Date.now().toString(36)}`;
+    const item: RestaurantMenuTextElement = { id, text: definition.text, preset };
+    const offset = (config.editor.textElements.length % 6) * 2;
+    const landscape: RestaurantMenuCanvasElement = { x: Math.min(65, 28 + offset), y: Math.min(75, 28 + offset), width: definition.width, height: definition.height, fontScale: definition.fontScale, align: "center", zIndex: 20 };
+    const portrait: RestaurantMenuCanvasElement = { ...landscape, x: Math.max(7, (100 - Math.min(86, definition.width * 1.5)) / 2), width: Math.min(86, definition.width * 1.5) };
+    onChange({
+      ...config,
+      editor: {
+        ...config.editor,
+        textElements: [...config.editor.textElements, item],
+        layouts: {
+          landscape: { ...config.editor.layouts.landscape, [`text:${id}`]: landscape },
+          portrait: { ...config.editor.layouts.portrait, [`text:${id}`]: portrait }
+        }
+      }
+    });
+    setPanel(null);
+  };
+
+  const addImage = (media: RestaurantUploadMedia) => {
+    const source = normalizeUploadedSource(media.media_url);
+    if (!source) return;
+    const id = `image-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const image: RestaurantMenuImageElement = { id, name: media.filename, source };
+    const offset = (config.editor.imageElements.length % 6) * 2;
+    const landscape: RestaurantMenuCanvasElement = { x: 35 + offset, y: 30 + offset, width: 24, height: 24, fontScale: 1, align: "center", zIndex: 18, rotation: 0 };
+    const portrait: RestaurantMenuCanvasElement = { ...landscape, x: 28 + offset, width: 44, height: 24 };
+    onChange({
+      ...config,
+      editor: {
+        ...config.editor,
+        imageElements: [...config.editor.imageElements, image],
+        layouts: {
+          landscape: { ...config.editor.layouts.landscape, [`image:${id}`]: landscape },
+          portrait: { ...config.editor.layouts.portrait, [`image:${id}`]: portrait }
+        }
+      }
+    });
+  };
+
+  const handleUpload = async (event: ReactChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []).filter(file => file.type.startsWith("image/"));
+    event.target.value = "";
+    if (!files.length) return;
+    setUploading(true);
+    setUploadError("");
+    try {
+      const added: RestaurantUploadMedia[] = [];
+      for (const file of files) {
+        const form = new FormData();
+        form.append("file", file);
+        const response = await fetch("/api/content/media/upload", { method: "POST", body: form });
+        const payload = await response.json().catch(() => ({})) as { media?: RestaurantUploadMedia; message?: string };
+        if (!response.ok || !payload.media) throw new Error(payload.message || `${file.name} yüklenemedi.`);
+        const source = normalizeUploadedSource(payload.media.media_url);
+        if (!source) throw new Error(`${file.name} için geçerli görsel adresi alınamadı.`);
+        added.push({ ...payload.media, media_url: source });
+      }
+      setUploads(current => [...added, ...current.filter(item => !added.some(upload => upload.id === item.id))]);
+    } catch (error) {
+      setUploadError((error as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return <aside className="restaurant-editor-rail">
+    <button type="button" className="restaurant-tool-tile" aria-expanded={panel === "text"} aria-controls="restaurant-text-panel" onClick={() => setPanel(value => value === "text" ? null : "text")}>
+      <span className="restaurant-tool-icon">T</span>
+      <span>Metin</span>
+    </button>
+    <button type="button" className="restaurant-tool-tile" aria-expanded={panel === "uploads"} aria-controls="restaurant-upload-panel" onClick={() => setPanel(value => value === "uploads" ? null : "uploads")}>
+      <span className="restaurant-tool-icon upload" aria-hidden="true">↥</span>
+      <span>Yüklemeler</span>
+    </button>
+    {panel === "text" && <div id="restaurant-text-panel" className="restaurant-text-panel">
+      <div className="restaurant-text-panel-header"><div><strong>Metin ekle</strong><small>Tuvale yeni bir yazı alanı yerleştirin</small></div><button type="button" aria-label="Metin panelini kapat" onClick={() => setPanel(null)}>×</button></div>
+      <button type="button" className="restaurant-add-text-primary" onClick={() => addText("text")}><span>T</span> Metin kutusu ekle</button>
+      <div className="restaurant-text-style-title">Varsayılan metin stilleri</div>
+      <button type="button" className="restaurant-text-preset heading" onClick={() => addText("heading")}>Başlık ekle</button>
+      <button type="button" className="restaurant-text-preset subheading" onClick={() => addText("subheading")}>Alt başlık ekle</button>
+      <button type="button" className="restaurant-text-preset body" onClick={() => addText("body")}>Birkaç satır gövde metni ekle</button>
+      <p className="restaurant-text-panel-tip">Eklenen metni taşımak için sürükleyin, içeriğini değiştirmek için çift tıklayın.</p>
+    </div>}
+    {panel === "uploads" && <div id="restaurant-upload-panel" className="restaurant-text-panel restaurant-upload-panel">
+      <div className="restaurant-text-panel-header"><div><strong>Yüklemeler</strong><small>Görsellerinizi yükleyin ve tasarımda kullanın</small></div><button type="button" aria-label="Yüklemeler panelini kapat" onClick={() => setPanel(null)}>×</button></div>
+      <label className="restaurant-upload-search"><span aria-hidden="true">⌕</span><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Görsellerde arayın" aria-label="Yüklenen görsellerde ara" /></label>
+      <input ref={fileInputRef} hidden type="file" accept="image/*" multiple onChange={handleUpload} />
+      <button type="button" className="restaurant-add-text-primary restaurant-upload-primary" disabled={uploading} onClick={() => fileInputRef.current?.click()}>{uploading ? "Yükleniyor…" : "Dosya yükleyin"}</button>
+      {uploadError && <p className="restaurant-upload-error">{uploadError}</p>}
+      <div className="restaurant-upload-title"><span>Görseller</span><small>{uploads.length}</small></div>
+      {loadingUploads ? <div className="restaurant-upload-empty">Görseller yükleniyor…</div> : uploads.length ? <div className="restaurant-upload-grid">
+        {uploads.map(media => <button type="button" key={media.id} title={`${media.filename} — tasarıma ekle`} onClick={() => addImage(media)}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={mediaPreviewSource(media.media_url)} alt={media.filename} />
+          <span>{media.filename}</span>
+        </button>)}
+      </div> : <div className="restaurant-upload-empty">{search ? "Aramanızla eşleşen görsel bulunamadı." : "Henüz görsel yüklenmedi."}</div>}
+    </div>}
+  </aside>;
+}
+
 const BADGES: Record<MenuBadge, { tr: string; en: string }> = {
   none: { tr: "", en: "" }, popular: { tr: "POPÜLER", en: "POPULAR" }, new: { tr: "YENİ", en: "NEW" }, chef: { tr: "ŞEFİN SEÇİMİ", en: "CHEF'S PICK" }, vegan: { tr: "VEGAN", en: "VEGAN" }
 };
 
 type CanvasBlock = {
   id: string;
-  kind: "restaurantName" | "heading" | "subtitle" | "footer" | "category" | "item";
+  kind: "restaurantName" | "heading" | "subtitle" | "footer" | "category" | "item" | "customText" | "image";
   label: string;
   category?: RestaurantMenuCategory;
   item?: RestaurantMenuItem;
+  textElement?: RestaurantMenuTextElement;
+  imageElement?: RestaurantMenuImageElement;
   defaultLayout: RestaurantMenuCanvasElement;
 };
 
@@ -291,6 +528,8 @@ const automaticLayout = (
   itemIndex = 0,
   categoryCount = 3
 ): RestaurantMenuCanvasElement => {
+  if (kind === "customText") return { x: 30, y: 30, width: 36, height: 9, fontScale: 1, align: "center", zIndex: 20 };
+  if (kind === "image") return { x: 36, y: 30, width: orientation === "portrait" ? 42 : 24, height: 24, fontScale: 1, align: "center", zIndex: 18, rotation: 0 };
   if (kind === "restaurantName") return orientation === "portrait"
     ? { x: 7, y: 5, width: 86, height: 4, fontScale: 1, align: "left", zIndex: 2 }
     : { x: 6, y: 7, width: 43, height: 5, fontScale: 1, align: "left", zIndex: 2 };
@@ -326,8 +565,11 @@ export function RestaurantMenuPreview({
 }) {
   const config = useMemo(() => normalizeRestaurantMenuConfig(raw), [raw]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [colorPaletteOpen, setColorPaletteOpen] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
-  const interaction = useRef<null | { id: string; mode: "move" | "resize"; pointerId: number; clientX: number; clientY: number; start: RestaurantMenuCanvasElement }>(null);
+  const colorPickerRef = useRef<HTMLDivElement>(null);
+  const interaction = useRef<null | { id: string; mode: "move" | "resize" | "rotate"; pointerId: number; clientX: number; clientY: number; start: RestaurantMenuCanvasElement; centerX?: number; centerY?: number; startAngle?: number }>(null);
   const theme = THEMES[config.theme];
   const editablePreview = Boolean(onChange);
   const items = config.items.filter(item => item.available || config.showUnavailable);
@@ -350,11 +592,34 @@ export function RestaurantMenuPreview({
       });
     });
     fixed.push({ id: "footer", kind: "footer", label: "Alt bilgi", defaultLayout: automaticLayout(orientation, "footer") });
+    config.editor.textElements.forEach(element => {
+      fixed.push({ id: `text:${element.id}`, kind: "customText", label: TEXT_PRESETS[element.preset].label, textElement: element, defaultLayout: automaticLayout(orientation, "customText") });
+    });
+    config.editor.imageElements.forEach(element => {
+      fixed.push({ id: `image:${element.id}`, kind: "image", label: element.name, imageElement: element, defaultLayout: automaticLayout(orientation, "image") });
+    });
     return fixed;
-  }, [items, itemLimit, orientation, shownCategories]);
+  }, [config.editor.imageElements, config.editor.textElements, items, itemLimit, orientation, shownCategories]);
   const selectedBlock = blocks.find(block => block.id === selectedId) ?? null;
   const layoutFor = (block: CanvasBlock) => overrides[block.id] ?? block.defaultLayout;
   const selectedLayout = selectedBlock ? layoutFor(selectedBlock) : null;
+
+  useEffect(() => {
+    if (!editingId) return;
+    const editor = canvasRef.current?.querySelector<HTMLElement>(`[data-canvas-id="${editingId}"] [data-text-editor="true"]`);
+    if (!editor) return;
+    editor.focus();
+    (editor as HTMLTextAreaElement).select();
+  }, [editingId]);
+
+  useEffect(() => {
+    if (!colorPaletteOpen) return;
+    const closePalette = (event: PointerEvent) => {
+      if (!colorPickerRef.current?.contains(event.target as Node)) setColorPaletteOpen(false);
+    };
+    document.addEventListener("pointerdown", closePalette);
+    return () => document.removeEventListener("pointerdown", closePalette);
+  }, [colorPaletteOpen]);
 
   const updateLayout = (id: string, next: RestaurantMenuCanvasElement) => {
     if (!onChange) return;
@@ -373,19 +638,40 @@ export function RestaurantMenuPreview({
     if (!selectedBlock || !selectedLayout) return;
     updateLayout(selectedBlock.id, { ...selectedLayout, ...patch });
   };
-  const selectAndStart = (event: ReactPointerEvent<HTMLElement>, block: CanvasBlock, mode: "move" | "resize") => {
+  const updateText = (id: string, text: string) => {
+    if (!onChange) return;
+    onChange({ ...config, editor: { ...config.editor, textElements: config.editor.textElements.map(element => element.id === id ? { ...element, text: text.slice(0, 500) } : element) } });
+  };
+  const selectAndStart = (event: ReactPointerEvent<HTMLElement>, block: CanvasBlock, mode: "move" | "resize" | "rotate") => {
     if (!editablePreview) return;
+    if (editingId === block.id && mode === "move") return;
     event.preventDefault();
     event.stopPropagation();
     setSelectedId(block.id);
-    canvasRef.current?.setPointerCapture(event.pointerId);
-    interaction.current = { id: block.id, mode, pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, start: layoutFor(block) };
+    const start = layoutFor(block);
+    if (mode === "rotate" && canvasRef.current) {
+      const bounds = canvasRef.current.getBoundingClientRect();
+      const centerX = bounds.left + ((start.x + start.width / 2) / 100) * bounds.width;
+      const centerY = bounds.top + ((start.y + start.height / 2) / 100) * bounds.height;
+      interaction.current = { id: block.id, mode, pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, start, centerX, centerY, startAngle: Math.atan2(event.clientY - centerY, event.clientX - centerX) };
+      return;
+    }
+    interaction.current = { id: block.id, mode, pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, start };
   };
   const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     const active = interaction.current;
     const canvas = canvasRef.current;
     if (!active || !canvas || active.pointerId !== event.pointerId) return;
     const bounds = canvas.getBoundingClientRect();
+    if (Math.hypot(event.clientX - active.clientX, event.clientY - active.clientY) < 4) return;
+    if (!canvas.hasPointerCapture(event.pointerId)) canvas.setPointerCapture(event.pointerId);
+    if (active.mode === "rotate" && active.centerX !== undefined && active.centerY !== undefined && active.startAngle !== undefined) {
+      const currentAngle = Math.atan2(event.clientY - active.centerY, event.clientX - active.centerX);
+      const rawRotation = (active.start.rotation ?? 0) + (currentAngle - active.startAngle) * 180 / Math.PI;
+      const rotation = Math.round((rawRotation % 360 + 360) % 360);
+      updateLayout(active.id, { ...active.start, rotation });
+      return;
+    }
     const dx = (event.clientX - active.clientX) / bounds.width * 100;
     const dy = (event.clientY - active.clientY) / bounds.height * 100;
     const snap = (value: number) => config.editor.snapToGrid ? Math.round(value * 2) / 2 : Math.round(value * 10) / 10;
@@ -396,6 +682,7 @@ export function RestaurantMenuPreview({
   };
   const finishInteraction = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (interaction.current?.pointerId === event.pointerId) interaction.current = null;
+    if (canvasRef.current?.hasPointerCapture(event.pointerId)) canvasRef.current.releasePointerCapture(event.pointerId);
   };
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>, block: CanvasBlock) => {
     if (!editablePreview || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
@@ -406,12 +693,6 @@ export function RestaurantMenuPreview({
     const xDelta = event.key === "ArrowLeft" ? -step : event.key === "ArrowRight" ? step : 0;
     const yDelta = event.key === "ArrowUp" ? -step : event.key === "ArrowDown" ? step : 0;
     updateLayout(block.id, { ...current, x: Math.min(100 - current.width, Math.max(0, current.x + xDelta)), y: Math.min(100 - current.height, Math.max(0, current.y + yDelta)) });
-  };
-  const resetSelected = () => {
-    if (!onChange || !selectedBlock) return;
-    const nextOverrides = { ...overrides };
-    delete nextOverrides[selectedBlock.id];
-    onChange({ ...config, editor: { ...config.editor, layouts: { ...config.editor.layouts, [orientation]: nextOverrides } } });
   };
   const frame: CSSProperties = {
     width: "100%",
@@ -432,8 +713,8 @@ export function RestaurantMenuPreview({
     backgroundSize: editablePreview && config.editor.snapToGrid ? "5% 5%,5% 5%,auto" : undefined
   };
   const baseFont = (kind: CanvasBlock["kind"]) => portrait
-    ? ({ restaurantName: 2.2, heading: 8.4, subtitle: 2.25, category: 2.5, item: 2.75, footer: 1.9 }[kind])
-    : ({ restaurantName: 1.15, heading: 4.6, subtitle: 1.25, category: 1.35, item: 1.4, footer: 1.05 }[kind]);
+    ? ({ restaurantName: 2.2, heading: 8.4, subtitle: 2.25, category: 2.5, item: 2.75, footer: 1.9, customText: 2.3, image: 1 }[kind])
+    : ({ restaurantName: 1.15, heading: 4.6, subtitle: 1.25, category: 1.35, item: 1.4, footer: 1.05, customText: 1.3, image: 1 }[kind]);
 
   return <div
     ref={canvasRef}
@@ -450,6 +731,7 @@ export function RestaurantMenuPreview({
     {blocks.map(block => {
       const rect = layoutFor(block);
       const selected = editablePreview && selectedId === block.id;
+      const gradient = isMenuGradient(rect.color);
       const blockStyle: CSSProperties = {
         position: "absolute",
         left: `${rect.x}%`,
@@ -457,9 +739,17 @@ export function RestaurantMenuPreview({
         width: `${rect.width}%`,
         height: `${rect.height}%`,
         zIndex: rect.zIndex,
-        overflow: "hidden",
+        overflow: block.kind === "image" ? "visible" : "hidden",
         textAlign: rect.align,
         fontSize: `${baseFont(block.kind) * rect.fontScale}cqw`,
+        color: gradient ? "transparent" : rect.color,
+        backgroundImage: gradient ? rect.color : undefined,
+        backgroundClip: gradient ? "text" : undefined,
+        WebkitBackgroundClip: gradient ? "text" : undefined,
+        fontWeight: rect.fontWeight,
+        fontStyle: rect.fontStyle,
+        textDecoration: rect.textDecoration,
+        textTransform: block.kind === "customText" ? undefined : rect.textTransform === "sentence" ? "capitalize" : rect.textTransform,
         cursor: editablePreview ? "move" : "default",
         outline: selected ? "2px solid #38bdf8" : editablePreview ? "1px dashed transparent" : "none",
         outlineOffset: selected ? 2 : 0,
@@ -476,34 +766,93 @@ export function RestaurantMenuPreview({
         style={blockStyle}
         onPointerDown={event => selectAndStart(event, block, "move")}
         onKeyDown={event => handleKeyDown(event, block)}
+        onDoubleClick={event => {
+          if (block.kind !== "customText") return;
+          event.preventDefault();
+          event.stopPropagation();
+          setSelectedId(block.id);
+          setEditingId(block.id);
+        }}
       >
-        {block.kind === "restaurantName" && <div style={{ height: "100%", color: config.accentColor, fontWeight: 900, letterSpacing: ".17em", textTransform: "uppercase", lineHeight: 1.25 }}>{config.restaurantName}</div>}
+        {block.kind === "restaurantName" && <div style={{ height: "100%", color: gradient ? "inherit" : rect.color ?? config.accentColor, fontWeight: rect.fontWeight ?? 900, letterSpacing: ".17em", textTransform: rect.textTransform ? "inherit" : "uppercase", lineHeight: 1.25 }}>{config.restaurantName}</div>}
         {block.kind === "heading" && <h2 style={{ margin: 0, fontSize: "1em", lineHeight: 1.02, letterSpacing: "-.04em", overflowWrap: "anywhere" }}>{config.heading}</h2>}
-        {block.kind === "subtitle" && <p style={{ margin: 0, color: theme.muted, fontSize: "1em", lineHeight: 1.45, overflowWrap: "anywhere" }}>{config.subtitle}</p>}
-        {block.kind === "category" && <h3 style={{ margin: 0, color: config.accentColor, fontSize: "1em", lineHeight: 1.25, letterSpacing: ".12em", textTransform: "uppercase", overflowWrap: "anywhere" }}>{block.category?.name}</h3>}
+        {block.kind === "subtitle" && <p style={{ margin: 0, color: gradient ? "inherit" : rect.color ?? theme.muted, fontSize: "1em", lineHeight: 1.45, overflowWrap: "anywhere" }}>{config.subtitle}</p>}
+        {block.kind === "category" && <h3 style={{ margin: 0, color: gradient ? "inherit" : rect.color ?? config.accentColor, fontWeight: rect.fontWeight, fontSize: "1em", lineHeight: 1.25, letterSpacing: ".12em", textTransform: rect.textTransform ? "inherit" : "uppercase", overflowWrap: "anywhere" }}>{block.category?.name}</h3>}
         {block.kind === "item" && block.item && <article style={{ height: "100%", opacity: block.item.available ? 1 : .45, paddingTop: ".55em", borderTop: `1px solid ${theme.line}` }}>
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: ".65em", alignItems: "baseline" }}><strong style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: "1em" }}>{block.item.name}</strong><b style={{ color: config.accentColor, fontSize: ".95em", whiteSpace: "nowrap" }}>{money(block.item.price)}</b></div>
-          {block.item.badge !== "none" && <small style={{ display: "block", marginTop: ".45em", color: config.accentColor, fontSize: ".5em", fontWeight: 900, letterSpacing: ".1em" }}>{BADGES[block.item.badge][config.locale]}</small>}
-          {config.showDescriptions && block.item.description && <p style={{ margin: ".4em 0 0", color: theme.muted, fontSize: ".62em", lineHeight: 1.35, overflowWrap: "anywhere" }}>{block.item.description}</p>}
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: ".65em", alignItems: "baseline" }}><strong style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: rect.fontWeight, fontSize: "1em" }}>{block.item.name}</strong><b style={{ color: gradient ? "inherit" : rect.color ?? config.accentColor, fontWeight: rect.fontWeight, fontSize: ".95em", whiteSpace: "nowrap" }}>{money(block.item.price)}</b></div>
+          {block.item.badge !== "none" && <small style={{ display: "block", marginTop: ".45em", color: gradient ? "inherit" : rect.color ?? config.accentColor, fontSize: ".5em", fontWeight: rect.fontWeight ?? 900, letterSpacing: ".1em" }}>{BADGES[block.item.badge][config.locale]}</small>}
+          {config.showDescriptions && block.item.description && <p style={{ margin: ".4em 0 0", color: gradient ? "inherit" : rect.color ?? theme.muted, fontSize: ".62em", lineHeight: 1.35, overflowWrap: "anywhere" }}>{block.item.description}</p>}
         </article>}
-        {block.kind === "footer" && <div style={{ color: theme.muted, fontSize: "1em", lineHeight: 1.3, overflowWrap: "anywhere" }}>{config.footer}</div>}
+        {block.kind === "footer" && <div style={{ color: gradient ? "inherit" : rect.color ?? theme.muted, fontSize: "1em", lineHeight: 1.3, overflowWrap: "anywhere" }}>{config.footer}</div>}
+        {block.kind === "customText" && block.textElement && (editingId === block.id ? <textarea
+          data-text-editor="true"
+          aria-label="Metni düzenle"
+          value={block.textElement.text}
+          maxLength={500}
+          onChange={event => updateText(block.textElement!.id, event.target.value)}
+          onBlur={() => setEditingId(null)}
+          onPointerDown={event => { if (editingId === block.id) event.stopPropagation(); }}
+          onKeyDown={event => {
+            event.stopPropagation();
+            if (event.key === "Escape") event.currentTarget.blur();
+          }}
+          style={{ width: "100%", height: "100%", padding: 0, border: 0, resize: "none", background: "transparent", color: gradient ? theme.text : "inherit", fontFamily: "inherit", fontSize: "inherit", fontStyle: "inherit", textDecoration: "inherit", textAlign: rect.align, lineHeight: 1.2, fontWeight: rect.fontWeight ?? (block.textElement.preset === "heading" ? 900 : block.textElement.preset === "subheading" ? 700 : 500), userSelect: "text", cursor: "text", outline: "none" }}
+        /> : <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.2, overflowWrap: "anywhere", fontWeight: rect.fontWeight ?? (block.textElement.preset === "heading" ? 900 : block.textElement.preset === "subheading" ? 700 : 500) }}><FormattedMenuText value={block.textElement.text} rect={rect} /></div>)}
+        {block.kind === "image" && block.imageElement && <div className="restaurant-canvas-image-frame" style={{ transform: `rotate(${rect.rotation ?? 0}deg)` }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={mediaPreviewSource(block.imageElement.source)} alt={block.imageElement.name} draggable={false} />
+        </div>}
         {selected && <span
           aria-hidden="true"
           data-testid={`resize-${block.id}`}
           onPointerDown={event => selectAndStart(event, block, "resize")}
           style={{ position: "absolute", right: 0, bottom: 0, width: 12, height: 12, borderRadius: "3px 0 0", background: "#38bdf8", border: "2px solid #fff", cursor: "nwse-resize" }}
         />}
+        {selected && block.kind === "image" && <>
+          <span className="restaurant-rotation-line" aria-hidden="true" />
+          <button type="button" className="restaurant-rotation-handle" aria-label="Görseli döndür" title="Sürükleyerek döndür" onPointerDown={event => selectAndStart(event, block, "rotate")}>↻</button>
+          <output className="restaurant-rotation-degree" aria-live="polite">{Math.round(rect.rotation ?? 0)}°</output>
+        </>}
       </div>;
     })}
-    {editablePreview && <div style={{ position: "absolute", zIndex: 50, left: 8, right: 8, bottom: 8, minHeight: 36, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 8px", border: "1px solid rgba(255,255,255,.22)", borderRadius: 10, background: "rgba(15,23,42,.88)", color: "#fff", boxShadow: "0 8px 24px rgba(0,0,0,.25)", backdropFilter: "blur(10px)" }}>
-      <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 9, fontWeight: 750 }}>{selectedBlock ? selectedBlock.label : "Bir metin bloğu seçin ve sürükleyin"}</span>
-      {selectedBlock && selectedLayout && <div style={{ display: "flex", flexShrink: 0, gap: 4 }}>
-        <button type="button" aria-label="Yazıyı küçült" onClick={() => patchSelected({ fontScale: Math.max(.55, selectedLayout.fontScale - .1) })} className="menu-canvas-tool">A−</button>
-        <button type="button" aria-label="Yazıyı büyüt" onClick={() => patchSelected({ fontScale: Math.min(2.4, selectedLayout.fontScale + .1) })} className="menu-canvas-tool">A+</button>
-        <button type="button" aria-label="Metin hizasını değiştir" onClick={() => patchSelected({ align: selectedLayout.align === "left" ? "center" : selectedLayout.align === "center" ? "right" : "left" })} className="menu-canvas-tool">{selectedLayout.align === "left" ? "☰" : selectedLayout.align === "center" ? "≡" : "☷"}</button>
-        <button type="button" aria-label="Öne getir" onClick={() => patchSelected({ zIndex: Math.min(30, selectedLayout.zIndex + 1) })} className="menu-canvas-tool">Öne</button>
-        <button type="button" aria-label="Seçili bloğu otomatik konuma döndür" onClick={resetSelected} className="menu-canvas-tool">Sıfırla</button>
-      </div>}
-    </div>}
+    {editablePreview && selectedBlock && selectedBlock.kind !== "image" && selectedLayout && (() => {
+      const unit = baseFont(selectedBlock.kind) * 10;
+      const point = Math.max(1, Math.round(selectedLayout.fontScale * unit));
+      const setPoint = (next: number) => patchSelected({ fontScale: Math.min(2.4, Math.max(.55, next / unit)) });
+      const nextTransform = selectedLayout.textTransform === "uppercase" ? "lowercase" : selectedLayout.textTransform === "lowercase" ? "sentence" : "uppercase";
+      const nextAlign = selectedLayout.align === "left" ? "center" : selectedLayout.align === "center" ? "right" : "left";
+      return <div className="restaurant-text-toolbar">
+        <div className="restaurant-point-control">
+          <button type="button" aria-label="Punto küçült" onClick={() => setPoint(point - 1)}>−</button>
+          <input aria-label="Punto" type="number" min={Math.ceil(unit * .55)} max={Math.floor(unit * 2.4)} value={point} onChange={event => setPoint(Number(event.target.value) || point)} />
+          <button type="button" aria-label="Punto büyüt" onClick={() => setPoint(point + 1)}>+</button>
+        </div>
+        <div ref={colorPickerRef} className="restaurant-color-picker">
+          <button type="button" className="restaurant-color-control" aria-label="Metin rengini seç" aria-expanded={colorPaletteOpen} onClick={() => setColorPaletteOpen(value => !value)}>
+            <span style={{ background: selectedLayout.color ?? theme.text }} />
+            <b>A</b>
+          </button>
+          {colorPaletteOpen && <div className="restaurant-color-palette" role="dialog" aria-label="Metin renkleri">
+            <section>
+              <h4><span aria-hidden="true">◉</span> Varsayılan tek renkler</h4>
+              <div className="restaurant-color-swatches">{MENU_SOLID_COLORS.map(color => <button key={color} type="button" aria-label={`${color} rengini seç`} aria-pressed={selectedLayout.color === color} className="restaurant-color-swatch" style={{ background: color }} onClick={() => { patchSelected({ color }); setColorPaletteOpen(false); }} />)}</div>
+            </section>
+            <section>
+              <h4><span aria-hidden="true">▣</span> Varsayılan gradyanlı renkler</h4>
+              <div className="restaurant-color-swatches">{MENU_GRADIENT_COLORS.map((color, index) => <button key={color} type="button" aria-label={`${index + 1}. gradyanı seç`} aria-pressed={selectedLayout.color === color} className="restaurant-color-swatch" style={{ background: color }} onClick={() => { patchSelected({ color }); setColorPaletteOpen(false); }} />)}</div>
+            </section>
+          </div>}
+        </div>
+        <button type="button" className="restaurant-format-button" aria-label="Kalın" aria-pressed={selectedLayout.fontWeight === "bold"} onClick={() => patchSelected({ fontWeight: selectedLayout.fontWeight === "bold" ? "normal" : "bold" })}><b>B</b></button>
+        <button type="button" className="restaurant-format-button" aria-label="İtalik" aria-pressed={selectedLayout.fontStyle === "italic"} onClick={() => patchSelected({ fontStyle: selectedLayout.fontStyle === "italic" ? "normal" : "italic" })}><i>I</i></button>
+        <button type="button" className="restaurant-format-button underline" aria-label="Altı çizili" aria-pressed={selectedLayout.textDecoration === "underline"} onClick={() => patchSelected({ textDecoration: selectedLayout.textDecoration === "underline" ? "none" : "underline" })}>U</button>
+        <button type="button" className="restaurant-format-button strike" aria-label="Üstü çizili" aria-pressed={selectedLayout.textDecoration === "line-through"} onClick={() => patchSelected({ textDecoration: selectedLayout.textDecoration === "line-through" ? "none" : "line-through" })}>S</button>
+        <span className="restaurant-toolbar-divider" />
+        <button type="button" className="restaurant-format-button case" aria-label="Büyük küçük harf biçimini değiştir" title="Sırayla: büyük harf, küçük harf, yalnızca ilk harf büyük" onClick={() => patchSelected({ textTransform: nextTransform })}>aA</button>
+        <button type="button" className="restaurant-format-button" aria-label="Metin hizasını değiştir" title="Sol, orta ve sağ hizalama arasında geçiş yapar" onClick={() => patchSelected({ align: nextAlign })}>{selectedLayout.align === "left" ? "☰" : selectedLayout.align === "center" ? "≡" : "☷"}</button>
+        <button type="button" className="restaurant-format-button list" aria-label="Madde işaretli liste" aria-pressed={selectedLayout.listStyle === "bullet"} disabled={selectedBlock.kind !== "customText"} onClick={() => patchSelected({ listStyle: selectedLayout.listStyle === "bullet" ? "none" : "bullet" })}>•<span>☰</span></button>
+        <button type="button" className="restaurant-format-button list number" aria-label="Numaralı liste" aria-pressed={selectedLayout.listStyle === "number"} disabled={selectedBlock.kind !== "customText"} onClick={() => patchSelected({ listStyle: selectedLayout.listStyle === "number" ? "none" : "number" })}>1.<span>☰</span></button>
+      </div>;
+    })()}
   </div>;
 }

@@ -1,8 +1,19 @@
 type MenuBadge = "none" | "popular" | "new" | "chef" | "vegan";
 type MenuCategory = { id: string; name: string };
 type MenuItem = { id: string; categoryId: string; name: string; description: string; price: string; badge: MenuBadge; available: boolean };
-type CanvasElement = { x: number; y: number; width: number; height: number; fontScale: number; align: "left" | "center" | "right"; zIndex: number };
-type EditorConfig = { version: 1; snapToGrid: boolean; layouts: { landscape: Record<string, CanvasElement>; portrait: Record<string, CanvasElement> } };
+type CanvasElement = {
+  x: number; y: number; width: number; height: number; fontScale: number;
+  align: "left" | "center" | "right"; zIndex: number;
+  color?: string; fontWeight?: "normal" | "bold"; fontStyle?: "normal" | "italic";
+  textDecoration?: "none" | "underline" | "line-through";
+  textTransform?: "none" | "uppercase" | "lowercase" | "sentence";
+  listStyle?: "none" | "bullet" | "number";
+  rotation?: number;
+};
+type TextPreset = "text" | "heading" | "subheading" | "body";
+type TextElement = { id: string; text: string; preset: TextPreset };
+type ImageElement = { id: string; name: string; source: string };
+type EditorConfig = { version: 2; snapToGrid: boolean; textElements: TextElement[]; imageElements: ImageElement[]; layouts: { landscape: Record<string, CanvasElement>; portrait: Record<string, CanvasElement> } };
 export type RestaurantMenuConfig = {
   restaurantName: string; heading: string; subtitle: string; locale: "tr" | "en";
   currency: "₺" | "$" | "€" | "£"; currencyPosition: "before" | "after";
@@ -34,6 +45,18 @@ const clean = (value: unknown, fallback: string, max: number) => typeof value ==
 const optional = (value: unknown, max: number) => typeof value === "string" ? value.trim().slice(0, max) : "";
 const safeId = (value: unknown, fallback: string) => clean(value, fallback, 64).replace(/[^a-zA-Z0-9_-]/g, "-");
 const safeColor = (value: unknown, fallback: string) => /^#[0-9a-f]{6}$/i.test(String(value ?? "")) ? String(value) : fallback;
+const safeCanvasColor = (value: unknown) => {
+  const color = String(value ?? "");
+  return /^#[0-9a-f]{6}$/i.test(color) || /^linear-gradient\((90deg|135deg|180deg),#[0-9a-f]{6},#[0-9a-f]{6}\)$/i.test(color) ? color : "";
+};
+const safeImageSource = (value: unknown) => {
+  let source = typeof value === "string" ? value.trim().slice(0, 4096) : "";
+  if (/^https?:\/\//i.test(source)) {
+    try { source = new URL(source).pathname; } catch { return ""; }
+  }
+  try { source = decodeURIComponent(source); } catch { /* Keep the original path if it is not encoded. */ }
+  return source.startsWith("/uploads/") && !source.includes("..") && !/[?#\u0000-\u001f]/.test(source) ? source : "";
+};
 const escapeHtml = (value: unknown) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 const bounded = (value: unknown, fallback: number, min: number, max: number) => {
   const number = typeof value === "number" ? value : Number(value);
@@ -42,16 +65,41 @@ const bounded = (value: unknown, fallback: number, min: number, max: number) => 
 const normalizeLayout = (value: unknown): Record<string, CanvasElement> => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return Object.fromEntries(Object.entries(value as Record<string, unknown>).slice(0, 80).flatMap(([key, raw]) => {
-    if (!/^(restaurantName|heading|subtitle|footer|category:[a-zA-Z0-9_-]+|item:[a-zA-Z0-9_-]+)$/.test(key) || !raw || typeof raw !== "object") return [];
+    if (!/^(restaurantName|heading|subtitle|footer|category:[a-zA-Z0-9_-]+|item:[a-zA-Z0-9_-]+|text:[a-zA-Z0-9_-]+|image:[a-zA-Z0-9_-]+)$/.test(key) || !raw || typeof raw !== "object") return [];
     const item = raw as Record<string, unknown>;
     const width = bounded(item.width, 24, 6, 96); const height = bounded(item.height, 10, 3, 92);
-    return [[key, { x: bounded(item.x, 0, 0, 100 - width), y: bounded(item.y, 0, 0, 100 - height), width, height, fontScale: bounded(item.fontScale, 1, .55, 2.4), align: item.align === "center" || item.align === "right" ? item.align : "left", zIndex: Math.round(bounded(item.zIndex, 1, 1, 30)) } satisfies CanvasElement]];
+    return [[key, {
+      x: bounded(item.x, 0, 0, 100 - width), y: bounded(item.y, 0, 0, 100 - height), width, height,
+      fontScale: bounded(item.fontScale, 1, .55, 2.4),
+      align: item.align === "center" || item.align === "right" ? item.align : "left",
+      zIndex: Math.round(bounded(item.zIndex, 1, 1, 30)),
+      ...(safeCanvasColor(item.color) ? { color: safeCanvasColor(item.color) } : {}),
+      ...(item.fontWeight === "bold" || item.fontWeight === "normal" ? { fontWeight: item.fontWeight } : {}),
+      ...(item.fontStyle === "italic" || item.fontStyle === "normal" ? { fontStyle: item.fontStyle } : {}),
+      ...(item.textDecoration === "underline" || item.textDecoration === "line-through" || item.textDecoration === "none" ? { textDecoration: item.textDecoration } : {}),
+      ...(item.textTransform === "uppercase" || item.textTransform === "lowercase" || item.textTransform === "sentence" || item.textTransform === "none" ? { textTransform: item.textTransform } : {}),
+      ...(item.listStyle === "bullet" || item.listStyle === "number" || item.listStyle === "none" ? { listStyle: item.listStyle } : {}),
+      ...(Number.isFinite(Number(item.rotation)) ? { rotation: bounded(item.rotation, 0, 0, 359) } : {})
+    } satisfies CanvasElement]];
   }));
 };
 const normalizeEditor = (value: unknown): EditorConfig => {
   const editor = value && typeof value === "object" ? value as Record<string, unknown> : {};
   const layouts = editor.layouts && typeof editor.layouts === "object" ? editor.layouts as Record<string, unknown> : {};
-  return { version: 1, snapToGrid: editor.snapToGrid !== false, layouts: { landscape: normalizeLayout(layouts.landscape), portrait: normalizeLayout(layouts.portrait) } };
+  const textElements = Array.isArray(editor.textElements) ? editor.textElements.slice(0, 40).flatMap((raw, index) => {
+    if (!raw || typeof raw !== "object") return [];
+    const item = raw as Record<string, unknown>;
+    const preset: TextPreset = item.preset === "heading" || item.preset === "subheading" || item.preset === "body" ? item.preset : "text";
+    return [{ id: safeId(item.id, `text-${index + 1}`), text: optional(item.text, 500) || "Metninizi yazın", preset }];
+  }) : [];
+  const imageElements = Array.isArray(editor.imageElements) ? editor.imageElements.slice(0, 40).flatMap((raw, index) => {
+    if (!raw || typeof raw !== "object") return [];
+    const item = raw as Record<string, unknown>;
+    const source = safeImageSource(item.source);
+    if (!source) return [];
+    return [{ id: safeId(item.id, `image-${index + 1}`), name: clean(item.name, `Görsel ${index + 1}`, 180), source }];
+  }) : [];
+  return { version: 2, snapToGrid: editor.snapToGrid !== false, textElements, imageElements, layouts: { landscape: normalizeLayout(layouts.landscape), portrait: normalizeLayout(layouts.portrait) } };
 };
 
 export function normalizeRestaurantMenuConfig(input: Record<string, unknown> = {}): RestaurantMenuConfig {
@@ -84,7 +132,9 @@ export function normalizeRestaurantMenuConfig(input: Record<string, unknown> = {
   };
 }
 
-const automaticCanvasLayout = (orientation: "landscape" | "portrait", kind: "restaurantName" | "heading" | "subtitle" | "footer" | "category" | "item", categoryIndex = 0, itemIndex = 0, categoryCount = 3): CanvasElement => {
+const automaticCanvasLayout = (orientation: "landscape" | "portrait", kind: "restaurantName" | "heading" | "subtitle" | "footer" | "category" | "item" | "customText" | "image", categoryIndex = 0, itemIndex = 0, categoryCount = 3): CanvasElement => {
+  if (kind === "customText") return { x: 30, y: 30, width: 36, height: 9, fontScale: 1, align: "center", zIndex: 20 };
+  if (kind === "image") return { x: 36, y: 30, width: orientation === "portrait" ? 42 : 24, height: 24, fontScale: 1, align: "center", zIndex: 18, rotation: 0 };
   if (kind === "restaurantName") return orientation === "portrait" ? { x: 7, y: 5, width: 86, height: 4, fontScale: 1, align: "left", zIndex: 2 } : { x: 6, y: 7, width: 43, height: 5, fontScale: 1, align: "left", zIndex: 2 };
   if (kind === "heading") return orientation === "portrait" ? { x: 7, y: 10, width: 86, height: 9, fontScale: 1, align: "left", zIndex: 2 } : { x: 6, y: 13, width: 48, height: 12, fontScale: 1, align: "left", zIndex: 2 };
   if (kind === "subtitle") return orientation === "portrait" ? { x: 7, y: 20, width: 86, height: 7, fontScale: 1, align: "left", zIndex: 2 } : { x: 57, y: 14, width: 37, height: 9, fontScale: 1, align: "right", zIndex: 2 };
@@ -100,10 +150,44 @@ const automaticCanvasLayout = (orientation: "landscape" | "portrait", kind: "res
 };
 
 const mergeCanvasLayout = (base: CanvasElement, override: CanvasElement | undefined): CanvasElement => override ? { ...base, ...override } : base;
-const canvasVariables = (landscape: CanvasElement, portrait: CanvasElement) => [
-  `--lx:${landscape.x}%`, `--ly:${landscape.y}%`, `--lw:${landscape.width}%`, `--lh:${landscape.height}%`, `--lfs:${landscape.fontScale}`, `--la:${landscape.align}`, `--lz:${landscape.zIndex}`,
-  `--px:${portrait.x}%`, `--py:${portrait.y}%`, `--pw:${portrait.width}%`, `--ph:${portrait.height}%`, `--pfs:${portrait.fontScale}`, `--pa:${portrait.align}`, `--pz:${portrait.zIndex}`
-].join(";");
+const canvasVariables = (landscape: CanvasElement, portrait: CanvasElement) => {
+  const values = [
+    `--lx:${landscape.x}%`, `--ly:${landscape.y}%`, `--lw:${landscape.width}%`, `--lh:${landscape.height}%`, `--lfs:${landscape.fontScale}`, `--la:${landscape.align}`, `--lz:${landscape.zIndex}`,
+    `--px:${portrait.x}%`, `--py:${portrait.y}%`, `--pw:${portrait.width}%`, `--ph:${portrait.height}%`, `--pfs:${portrait.fontScale}`, `--pa:${portrait.align}`, `--pz:${portrait.zIndex}`
+  ];
+  if (landscape.color?.startsWith("linear-gradient(")) values.push("--lc:transparent", `--lbg:${landscape.color}`);
+  else if (landscape.color) values.push(`--lc:${landscape.color}`);
+  if (landscape.fontWeight) values.push(`--lfw:${landscape.fontWeight}`);
+  if (landscape.fontStyle) values.push(`--lfi:${landscape.fontStyle}`);
+  if (landscape.textDecoration) values.push(`--ltd:${landscape.textDecoration}`);
+  if (landscape.textTransform) values.push(`--ltt:${landscape.textTransform === "sentence" ? "capitalize" : landscape.textTransform}`);
+  if (landscape.rotation !== undefined) values.push(`--lr:${landscape.rotation}deg`);
+  if (portrait.color?.startsWith("linear-gradient(")) values.push("--pc:transparent", `--pbg:${portrait.color}`);
+  else if (portrait.color) values.push(`--pc:${portrait.color}`);
+  if (portrait.fontWeight) values.push(`--pfw:${portrait.fontWeight}`);
+  if (portrait.fontStyle) values.push(`--pfi:${portrait.fontStyle}`);
+  if (portrait.textDecoration) values.push(`--ptd:${portrait.textDecoration}`);
+  if (portrait.textTransform) values.push(`--ptt:${portrait.textTransform === "sentence" ? "capitalize" : portrait.textTransform}`);
+  if (portrait.rotation !== undefined) values.push(`--pr:${portrait.rotation}deg`);
+  return values.join(";");
+};
+
+const transformMenuText = (value: string, transform: CanvasElement["textTransform"]) => {
+  if (transform === "uppercase") return value.toLocaleUpperCase("tr-TR");
+  if (transform === "lowercase") return value.toLocaleLowerCase("tr-TR");
+  if (transform === "sentence") {
+    const lower = value.toLocaleLowerCase("tr-TR");
+    return lower.replace(/[A-Za-zÇĞİÖŞÜçğıöşü]/, character => character.toLocaleUpperCase("tr-TR"));
+  }
+  return value;
+};
+const customTextContent = (value: string, layout: CanvasElement) => {
+  const lines = transformMenuText(value, layout.textTransform).split(/\r?\n/);
+  if (layout.listStyle === "bullet" || layout.listStyle === "number") {
+    return lines.map((line, index) => `<span class="custom-line"><span>${layout.listStyle === "bullet" ? "•" : `${index + 1}.`}</span><span>${escapeHtml(line) || "&nbsp;"}</span></span>`).join("");
+  }
+  return escapeHtml(lines.join("\n")) || "&nbsp;";
+};
 
 export function renderRestaurantMenuHtml(title: string, raw: Record<string, unknown> = {}): string {
   const config = normalizeRestaurantMenuConfig(raw); const theme = THEMES[config.theme];
@@ -122,11 +206,23 @@ export function renderRestaurantMenuHtml(title: string, raw: Record<string, unkn
     const itemHtml = visibleItems.filter(item => item.categoryId === category.id).slice(0, 3).map((item, itemIndex) => `<article class="block item${visibility}${itemIndex === 2 ? " landscape-only" : ""}${item.available ? "" : " unavailable"}" style="${vars(`item:${item.id}`, "item", categoryIndex, itemIndex)}"><div class="item-line"><strong>${escapeHtml(item.name)}</strong><b>${escapeHtml(price(item.price))}</b></div>${item.badge !== "none" ? `<span class="badge">${escapeHtml(badges[item.badge])}</span>` : ""}${config.showDescriptions && item.description ? `<p>${escapeHtml(item.description)}</p>` : ""}</article>`).join("");
     return heading + itemHtml;
   }).join("");
+  const customTextHtml = config.editor.textElements.map(element => {
+    const id = `text:${element.id}`;
+    const landscape = mergeCanvasLayout(automaticCanvasLayout("landscape", "customText"), config.editor.layouts.landscape[id]);
+    const portrait = mergeCanvasLayout(automaticCanvasLayout("portrait", "customText"), config.editor.layouts.portrait[id]);
+    return `<div class="block custom-text custom-text-${element.preset}" style="${canvasVariables(landscape, portrait)}"><span class="landscape-content">${customTextContent(element.text, landscape)}</span><span class="portrait-content">${customTextContent(element.text, portrait)}</span></div>`;
+  }).join("");
+  const customImageHtml = config.editor.imageElements.map(element => {
+    const id = `image:${element.id}`;
+    const landscape = mergeCanvasLayout(automaticCanvasLayout("landscape", "image"), config.editor.layouts.landscape[id]);
+    const portrait = mergeCanvasLayout(automaticCanvasLayout("portrait", "image"), config.editor.layouts.portrait[id]);
+    return `<div class="block custom-image" style="${canvasVariables(landscape, portrait)}"><img class="landscape-image" src="${escapeHtml(element.source)}" alt="${escapeHtml(element.name)}"><img class="portrait-image" src="${escapeHtml(element.source)}" alt="${escapeHtml(element.name)}"></div>`;
+  }).join("");
   return `<!doctype html><html lang="${config.locale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><title>${escapeHtml(title)}</title><style>
     :root{color-scheme:${theme.scheme};--bg:${theme.bg};--surface:${theme.surface};--text:${theme.text};--muted:${theme.muted};--line:${theme.line};--accent:${config.accentColor}}
     *{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden}body{background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased;text-rendering:geometricPrecision}.stage{position:relative;width:100%;height:100%;min-height:100vh;overflow:hidden;container-type:size}.stage:before,.stage:after{content:"";position:absolute;left:6%;right:6%;border-top:1px solid var(--line)}.stage:before{top:28%}.stage:after{top:90%}
-    .block{position:absolute;left:var(--lx);top:var(--ly);width:var(--lw);height:var(--lh);z-index:var(--lz);overflow:hidden;text-align:var(--la);font-size:calc(var(--base)*var(--lfs));overflow-wrap:anywhere}.brand{--base:1.15cqw;color:var(--accent);font-weight:900;line-height:1.25;letter-spacing:.17em;text-transform:uppercase}.heading{--base:4.6cqw;margin:0;line-height:1.02;letter-spacing:-.04em}.subtitle{--base:1.25cqw;margin:0;color:var(--muted);line-height:1.45}.category{--base:1.35cqw;margin:0;color:var(--accent);line-height:1.25;letter-spacing:.12em;text-transform:uppercase}.item{--base:1.4cqw;padding-top:.55em;border-top:1px solid var(--line)}.item-line{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.65em;align-items:baseline}.item-line strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:1em}.item-line b{color:var(--accent);font-size:.95em;white-space:nowrap}.badge{display:block;margin-top:.45em;color:var(--accent);font-size:.5em;font-weight:900;letter-spacing:.1em}.item p{margin:.4em 0 0;color:var(--muted);font-size:.62em;line-height:1.35}.footer{--base:1.05cqw;color:var(--muted);line-height:1.3}.unavailable{opacity:.42}.portrait-only{display:none}body[data-layout=board] .item{padding:.65em;border:1px solid var(--line);border-radius:.65em;background:var(--surface)}body[data-layout=editorial] .item-line strong{letter-spacing:-.02em}
-    @media(max-aspect-ratio:1/1){.stage:before{top:28%}.block{left:var(--px);top:var(--py);width:var(--pw);height:var(--ph);z-index:var(--pz);text-align:var(--pa);font-size:calc(var(--portrait-base,var(--base))*var(--pfs))}.brand{--portrait-base:2.2cqw}.heading{--portrait-base:8.4cqw}.subtitle{--portrait-base:2.25cqw}.category{--portrait-base:2.5cqw}.item{--portrait-base:2.75cqw}.footer{--portrait-base:1.9cqw}.portrait-only{display:block}.landscape-only{display:none}}
+    .block{position:absolute;left:var(--lx);top:var(--ly);width:var(--lw);height:var(--lh);z-index:var(--lz);overflow:hidden;text-align:var(--la);font-size:calc(var(--base)*var(--lfs));overflow-wrap:anywhere;color:var(--lc,inherit);background-image:var(--lbg,none);background-clip:text;-webkit-background-clip:text;font-weight:var(--lfw,inherit);font-style:var(--lfi,normal);text-decoration:var(--ltd,none);text-transform:var(--ltt,none)}.brand{--base:1.15cqw;color:var(--lc,var(--accent));font-weight:var(--lfw,900);line-height:1.25;letter-spacing:.17em;text-transform:var(--ltt,uppercase)}.heading{--base:4.6cqw;margin:0;line-height:1.02;letter-spacing:-.04em}.subtitle{--base:1.25cqw;margin:0;color:var(--lc,var(--muted));line-height:1.45}.category{--base:1.35cqw;margin:0;color:var(--lc,var(--accent));line-height:1.25;letter-spacing:.12em;text-transform:var(--ltt,uppercase)}.item{--base:1.4cqw;padding-top:.55em;border-top:1px solid var(--line)}.item-line{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.65em;align-items:baseline}.item-line strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:1em}.item-line b{color:var(--lc,var(--accent));font-size:.95em;white-space:nowrap}.badge{display:block;margin-top:.45em;color:var(--lc,var(--accent));font-size:.5em;font-weight:900;letter-spacing:.1em}.item p{margin:.4em 0 0;color:var(--lc,var(--muted));font-size:.62em;line-height:1.35}.footer{--base:1.05cqw;color:var(--lc,var(--muted));line-height:1.3}.custom-text{--base:1.3cqw;line-height:1.2;white-space:pre-wrap;text-transform:none}.custom-text-heading{font-weight:var(--lfw,900)}.custom-text-subheading{font-weight:var(--lfw,700)}.custom-text-body{font-weight:var(--lfw,500)}.custom-line{display:grid;grid-template-columns:1.4em 1fr;gap:.25em}.portrait-content{display:none}.custom-image{overflow:visible;background:none}.custom-image img{display:block;width:100%;height:100%;object-fit:contain;transform:rotate(var(--lr,0deg));transform-origin:center}.custom-image .portrait-image{display:none}.unavailable{opacity:.42}.portrait-only{display:none}body[data-layout=board] .item{padding:.65em;border:1px solid var(--line);border-radius:.65em;background-color:var(--surface)}body[data-layout=editorial] .item-line strong{letter-spacing:-.02em}
+    @media(max-aspect-ratio:1/1){.stage:before{top:28%}.block{left:var(--px);top:var(--py);width:var(--pw);height:var(--ph);z-index:var(--pz);text-align:var(--pa);font-size:calc(var(--portrait-base,var(--base))*var(--pfs));color:var(--pc,var(--lc,inherit));background-image:var(--pbg,var(--lbg,none));font-weight:var(--pfw,var(--lfw,inherit));font-style:var(--pfi,var(--lfi,normal));text-decoration:var(--ptd,var(--ltd,none));text-transform:var(--ptt,var(--ltt,none))}.brand{--portrait-base:2.2cqw;color:var(--pc,var(--lc,var(--accent)));font-weight:var(--pfw,var(--lfw,900));text-transform:var(--ptt,var(--ltt,uppercase))}.heading{--portrait-base:8.4cqw}.subtitle{--portrait-base:2.25cqw;color:var(--pc,var(--lc,var(--muted)))}.category{--portrait-base:2.5cqw;color:var(--pc,var(--lc,var(--accent)));text-transform:var(--ptt,var(--ltt,uppercase))}.item{--portrait-base:2.75cqw}.item-line b,.badge{color:var(--pc,var(--lc,var(--accent)))}.item p{color:var(--pc,var(--lc,var(--muted)))}.footer{--portrait-base:1.9cqw;color:var(--pc,var(--lc,var(--muted)))}.custom-text{--portrait-base:2.3cqw;text-transform:none}.landscape-content{display:none}.portrait-content{display:inline}.custom-image .landscape-image{display:none}.custom-image .portrait-image{display:block;transform:rotate(var(--pr,var(--lr,0deg)))}.portrait-only{display:block}.landscape-only{display:none}}
     @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
-  </style></head><body data-layout="${config.layout}"><main class="stage"><div class="block brand" style="${vars("restaurantName", "restaurantName")}">${escapeHtml(config.restaurantName)}</div><h1 class="block heading" style="${vars("heading", "heading")}">${escapeHtml(config.heading)}</h1><p class="block subtitle" style="${vars("subtitle", "subtitle")}">${escapeHtml(config.subtitle)}</p>${categoryHtml}<footer class="block footer" style="${vars("footer", "footer")}">${escapeHtml(config.footer)}</footer></main></body></html>`;
+  </style></head><body data-layout="${config.layout}"><main class="stage"><div class="block brand" style="${vars("restaurantName", "restaurantName")}">${escapeHtml(config.restaurantName)}</div><h1 class="block heading" style="${vars("heading", "heading")}">${escapeHtml(config.heading)}</h1><p class="block subtitle" style="${vars("subtitle", "subtitle")}">${escapeHtml(config.subtitle)}</p>${categoryHtml}<footer class="block footer" style="${vars("footer", "footer")}">${escapeHtml(config.footer)}</footer>${customTextHtml}${customImageHtml}</main></body></html>`;
 }

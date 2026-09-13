@@ -11,7 +11,7 @@ import { QrPreview, QrSettings, DEFAULT_QR_CONFIG, normalizeQrConfig } from "@/c
 import { WayfindingPreview, WayfindingSettings, DEFAULT_WAYFINDING_CONFIG, normalizeWayfindingConfig } from "@/components/wayfinding/WayfindingStudio";
 import { EventsPreview, EventsSettings, DEFAULT_EVENTS_CONFIG, normalizeEventsConfig } from "@/components/events/EventsStudio";
 import { HotelGuidePreview, HotelGuideSettings, DEFAULT_HOTEL_GUIDE_CONFIG, normalizeHotelGuideConfig } from "@/components/hotel-guide/HotelGuideStudio";
-import { RestaurantMenuPreview, RestaurantMenuSettings, DEFAULT_RESTAURANT_MENU_CONFIG, normalizeRestaurantMenuConfig } from "@/components/restaurant-menu/RestaurantMenuStudio";
+import { RestaurantMenuPreview, RestaurantMenuSettings, RestaurantMenuTextTools, DEFAULT_RESTAURANT_MENU_CONFIG, normalizeRestaurantMenuConfig } from "@/components/restaurant-menu/RestaurantMenuStudio";
 
 type AppType = "clock" | "weather" | "rss" | "notice" | "qrcode" | "wayfinding" | "events" | "hotel-guide" | "restaurant-menu";
 const APP_TYPES: AppType[] = ["clock", "weather", "rss", "notice", "qrcode", "wayfinding", "events", "hotel-guide", "restaurant-menu"];
@@ -50,6 +50,22 @@ function AppConfigureForm() {
 
   // Unified dynamic configuration state
   const [config, setConfig] = useState<Record<string, any>>({});
+  const draftKey = `restaurant-menu-draft:${editId ?? "new"}`;
+  const readMenuDraft = (fallback: Record<string, unknown>) => {
+    try {
+      const saved = localStorage.getItem(draftKey);
+      if (saved) return normalizeRestaurantMenuConfig(JSON.parse(saved));
+    } catch { /* A damaged or unavailable draft must not prevent opening the menu. */ }
+    return normalizeRestaurantMenuConfig(fallback);
+  };
+  const changeMenu = (next: Record<string, any>) => {
+    setConfig(next);
+    try {
+      localStorage.setItem(draftKey, JSON.stringify(next));
+    } catch {
+      // The server save action remains available if browser storage is unavailable.
+    }
+  };
 
 
   // Load initial configurations if editing
@@ -74,7 +90,7 @@ function AppConfigureForm() {
       } else if (appType === "hotel-guide") {
         setConfig(DEFAULT_HOTEL_GUIDE_CONFIG);
       } else if (appType === "restaurant-menu") {
-        setConfig(DEFAULT_RESTAURANT_MENU_CONFIG);
+        setConfig(readMenuDraft(DEFAULT_RESTAURANT_MENU_CONFIG));
       }
       return;
     }
@@ -111,7 +127,7 @@ function AppConfigureForm() {
                           : itemType === "hotel-guide"
                             ? normalizeHotelGuideConfig(itemConfig)
                             : itemType === "restaurant-menu"
-                              ? normalizeRestaurantMenuConfig(itemConfig)
+                              ? readMenuDraft(itemConfig)
                             : itemConfig);
           }
         }
@@ -148,6 +164,9 @@ function AppConfigureForm() {
       });
 
       if (res.ok) {
+        if (appType === "restaurant-menu") {
+          try { localStorage.removeItem(draftKey); } catch { /* Saving to the server succeeded. */ }
+        }
         router.push("/apps");
       } else {
         const errorData = await res.json().catch(() => ({}));
@@ -238,7 +257,7 @@ function AppConfigureForm() {
       case "hotel-guide":
         return <HotelGuidePreview config={config} />;
       case "restaurant-menu":
-        return <RestaurantMenuPreview config={config} orientation={previewOrientation} onChange={(nextConfig) => setConfig(nextConfig)} />;
+        return <RestaurantMenuPreview config={config} orientation={previewOrientation} onChange={changeMenu} />;
     }
   };
 
@@ -346,16 +365,16 @@ function AppConfigureForm() {
       {/* Main Split Layout Content */}
       <div className="app-studio-grid" style={{
         display: "grid",
-        gridTemplateColumns: "1fr 1fr",
-        padding: "32px",
-        gap: "32px",
+        gridTemplateColumns: appType === "restaurant-menu" ? "76px minmax(0, 1fr)" : "1fr 1fr",
+        padding: appType === "restaurant-menu" ? "0 32px 40px 0" : "32px",
+        gap: appType === "restaurant-menu" ? "20px" : "32px",
         flexGrow: 1,
-        maxWidth: "1200px",
+        maxWidth: appType === "restaurant-menu" ? "1500px" : "1200px",
         margin: "0 auto",
         width: "100%"
       }}>
         {/* Left Side: Form Settings */}
-        <div className="app-studio-settings" style={{
+        {appType !== "restaurant-menu" && <div className="app-studio-settings" style={{
           backgroundColor: "#ffffff",
           borderRadius: "16px",
           border: "1px solid #e2e8f0",
@@ -370,15 +389,17 @@ function AppConfigureForm() {
           </h3>
 
           {renderConfigForm()}
-        </div>
+        </div>}
+
+        {appType === "restaurant-menu" && <RestaurantMenuTextTools config={config} onChange={changeMenu} />}
 
         {/* Right Side: Live Interactive Mockup Preview */}
         <div className="app-studio-preview" style={{
           display: "flex",
           flexDirection: "column",
           gap: "16px",
-          position: "sticky",
-          top: "32px",
+          position: appType === "restaurant-menu" ? "relative" : "sticky",
+          top: appType === "restaurant-menu" ? undefined : "32px",
           height: "fit-content"
         }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -389,13 +410,13 @@ function AppConfigureForm() {
             </div>
           </div>
 
-          <div className={`configure-preview-frame ${previewOrientation}`}>
+          <div className={`configure-preview-frame ${previewOrientation} ${appType === "restaurant-menu" ? "restaurant-menu-workspace" : ""}`}>
             {renderLivePreview()}
           </div>
 
-          <div style={{ fontSize: "12px", color: "#94a3b8", textAlign: "center", lineHeight: "1.5" }}>
+          {appType !== "restaurant-menu" && <div style={{ fontSize: "12px", color: "#94a3b8", textAlign: "center", lineHeight: "1.5" }}>
             Değişiklikler siz yazarken anında önizlemeye yansır. Yatay ve dikey ekran görünümünü üstteki düğmelerden kontrol edebilirsiniz.
-          </div>
+          </div>}
         </div>
       </div>
     </form>
