@@ -3,10 +3,24 @@ import test from "node:test";
 import { normalizeWeatherConfig, renderWeatherHtml } from "./weather-renderer.js";
 
 test("weather renderer migrates legacy configuration", () => {
-  assert.equal(normalizeWeatherConfig({ theme: "glassmorphism" }).theme, "sky");
-  assert.equal(normalizeWeatherConfig({ theme: "dark" }).theme, "midnight");
+  assert.equal(normalizeWeatherConfig({ theme: "glassmorphism" }).theme, "paper");
+  assert.equal(normalizeWeatherConfig({ theme: "dark" }).theme, "paper");
   assert.equal(normalizeWeatherConfig({ theme: "light" }).theme, "paper");
   assert.equal(normalizeWeatherConfig({ units: "imperial" }).units, "imperial");
+});
+
+test("weather preserves text and display settings but locks the design", () => {
+  const config = normalizeWeatherConfig({ city:"London", heading:"HEAD OFFICE", caption:"Welcome", layout:"split", units:"imperial", theme:"sunset", forecastDays:3 });
+  assert.equal(config.heading,"HEAD OFFICE");
+  assert.equal(config.caption,"Welcome");
+  assert.equal(config.layout,"split");
+  assert.equal(config.theme,"paper");
+  assert.equal(config.forecastDays,3);
+  assert.equal(normalizeWeatherConfig({heading:"x".repeat(100)}).heading.length,80);
+  assert.equal(normalizeWeatherConfig({caption:"x".repeat(200)}).caption.length,140);
+  const html=renderWeatherHtml("Weather",{heading:"<b>Office</b>",caption:"Welcome & enjoy"});
+  assert.match(html,/&lt;b&gt;Office&lt;\/b&gt;/);
+  assert.match(html,/Welcome &amp; enjoy/);
 });
 
 test("weather renderer uses current Open-Meteo fields and resilient refresh", () => {

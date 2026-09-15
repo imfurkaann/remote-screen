@@ -588,50 +588,23 @@ function getOverlayStyle(pos: string, x: number, y: number, widthOrSize?: number
 }
 
 type ModernClockConfig = {
-  timezone: string;
-  locale: "tr" | "en";
-  format: "24h" | "12h";
-  layout: "digital" | "analog" | "split";
-  theme: "midnight" | "paper" | "aurora" | "warm";
-  primaryColor: string;
-  showSeconds: boolean;
-  showDate: boolean;
-  showTimezone: boolean;
+  timezone: string; locale: "tr" | "en"; format: "24h" | "12h";
+  layout: "digital" | "analog" | "split"; theme: "paper"; primaryColor: string;
+  heading: string; caption: string; showSeconds: boolean; showDate: boolean; showTimezone: boolean;
 };
 
 export function normalizeClockConfig(config: Record<string, unknown>): ModernClockConfig {
-  const legacyLayout = String(config.layout ?? "");
-  const layout: ModernClockConfig["layout"] = legacyLayout === "analog"
-    ? "analog"
-    : legacyLayout === "digital"
-      ? "digital"
-      : legacyLayout === "split" || legacyLayout === "hybrid"
-        ? "split"
-        : "split";
-  const legacyTheme = String(config.theme ?? "");
-  const theme: ModernClockConfig["theme"] = legacyTheme === "paper" || legacyTheme === "light"
-    ? "paper"
-    : legacyTheme === "aurora" || legacyTheme === "oceanic"
-      ? "aurora"
-      : legacyTheme === "warm" || legacyTheme === "sunset"
-        ? "warm"
-        : "midnight";
-  const defaultAccent: Record<ModernClockConfig["theme"], string> = {
-    midnight: "#6ee7b7",
-    paper: "#0f766e",
-    aurora: "#67e8f9",
-    warm: "#fdba74"
-  };
+  let timezone = typeof config.timezone === "string" ? config.timezone : "Europe/Istanbul";
+  try { if (timezone !== "local") new Intl.DateTimeFormat("en", { timeZone: timezone }).format(); }
+  catch { timezone = "Europe/Istanbul"; }
   return {
-    timezone: typeof config.timezone === "string" && config.timezone ? config.timezone : "Europe/Istanbul",
-    locale: config.locale === "en" ? "en" : "tr",
+    timezone, locale: config.locale === "tr" ? "tr" : "en",
     format: config.format === "12h" ? "12h" : "24h",
-    layout,
-    theme,
-    primaryColor: safeCssColor(config.primaryColor, defaultAccent[theme]),
-    showSeconds: config.showSeconds !== false,
-    showDate: config.showDate !== false,
-    showTimezone: config.showTimezone !== false
+    layout: config.layout === "digital" || config.layout === "analog" ? config.layout : "split",
+    theme: "paper", primaryColor: "#9b8159",
+    heading: typeof config.heading === "string" ? config.heading.slice(0, 80) : "LOCAL TIME",
+    caption: typeof config.caption === "string" ? config.caption.slice(0, 140) : "Every moment matters.",
+    showSeconds: config.showSeconds !== false, showDate: config.showDate !== false, showTimezone: config.showTimezone !== false
   };
 }
 
@@ -720,17 +693,58 @@ export function renderClockHtml(title: string, rawConfig: Record<string, unknown
       .stage[data-layout="split"] .meta-mark { margin:0 0 7%; }
       .analog { width:min(76vw,58vh); }
     }
+    /* Locked, light corporate collection. */
+    body.theme-paper { --bg:#fff; --text:#273331; --muted:#807c73; --line:#e6e2dc; color-scheme:light; }
+    .ambient { display:none; }
+    .app { display:flex; flex-direction:column; padding:5vh 6vw; }
+    .stage { flex:1; min-height:0; height:auto; padding:0; }
+    .clock-heading { text-align:center; color:#8f7753; font:500 1.3vw/1.4 Arial,sans-serif; letter-spacing:.3em; overflow-wrap:anywhere; }
+    .clock-caption { text-align:center; color:#807c73; font:italic 1.65vw/1.5 Georgia,serif; overflow-wrap:anywhere; }
+    .time-main { font-family:"Helvetica Neue",Arial,sans-serif; font-size:21vw; font-weight:300; letter-spacing:-.065em; line-height:1; }
+    .seconds { font-size:4vw; font-weight:300; }
+    .period { font-size:1.8vw; font-weight:500; }
+    .date { font:normal 2.1vw/1.5 Georgia,serif; letter-spacing:0; }
+    .timezone { font:500 1.2vw/1.5 Arial,sans-serif; letter-spacing:.2em; }
+    .stage[data-layout="digital"] { grid-template-rows:auto auto; align-content:center; gap:4vw; }
+    .stage[data-layout="digital"] .meta { padding:0; }
+    .stage[data-layout="analog"] { grid-template-rows:auto auto; align-content:center; gap:1.5vw; }
+    .analog { width:36vw; height:36vw; max-width:53vh; max-height:53vh; border:1px solid #c8baa4; box-shadow:inset 0 0 0 6px #fff,inset 0 0 0 7px #e8e3dc; background:#fff; }
+    .analog::after { display:none; }
+    .number { font-family:Georgia,serif; font-weight:normal; color:#303737; }
+    .pin { box-shadow:none; }
+    .stage[data-layout="analog"] .date { font-size:1.6vw; }
+    body[data-clock-layout="split"] .app { background:linear-gradient(90deg,#fff 65%,#f7f5f0 65%); }
+    body[data-clock-layout="split"] .clock-heading, body[data-clock-layout="split"] .clock-caption { text-align:left; }
+    .stage[data-layout="split"] { grid-template-columns:minmax(0,1.8fr) minmax(0,1fr); gap:5%; }
+    .stage[data-layout="split"] .digital { padding:0; }
+    .stage[data-layout="split"] .time-main { font-size:14vw; }
+    .stage[data-layout="split"] .seconds { font-size:2.4vw; }
+    .stage[data-layout="split"] .meta { align-self:center; padding:0 0 0 14%; border:0; }
+    .stage[data-layout="split"] .date { font-size:3vw; }
+    .meta-mark { display:none; }
+    @media (max-aspect-ratio:1/1) {
+      body[data-clock-layout="split"] .app { background:linear-gradient(#fff 65%,#f7f5f0 65%); }
+      .clock-heading { font-size:2.4vw; } .clock-caption { font-size:3vw; }
+      .date,.stage[data-layout="analog"] .date,.stage[data-layout="split"] .date { font-size:4vw; }
+      .timezone { font-size:2.4vw; }
+      .analog { width:76vw; height:76vw; max-width:60vh; max-height:60vh; }
+      .stage[data-layout="split"] { display:flex; flex-direction:column; justify-content:center; gap:15vw; }
+      .stage[data-layout="split"] .time-main { font-size:22vw; }
+      .stage[data-layout="split"] .meta { padding:0; text-align:center; }
+    }
     @media (prefers-reduced-motion:reduce) { * { scroll-behavior:auto !important; } }
   </style>
 </head>
-<body class="theme-${config.theme}">
+<body class="theme-${config.theme}" data-clock-layout="${config.layout}">
   <main class="app" aria-label="${escapeHtml(title)}">
     <span class="ambient one" aria-hidden="true"></span><span class="ambient two" aria-hidden="true"></span>
+    <div class="clock-heading">${escapeHtml(config.heading)}</div>
     <section class="stage" data-layout="${config.layout}">
       <div class="digital" aria-live="off"><div class="time-row"><span class="time-main"><span id="hour">00</span><span class="colon">:</span><span id="minute">00</span></span><span class="seconds" id="second"${config.showSeconds ? "" : " hidden"}>00</span><span class="period" id="period"></span></div></div>
       <div class="analog" aria-label="Analog clock">${ticks}<b class="number n12">12</b><b class="number n3">3</b><b class="number n6">6</b><b class="number n9">9</b><span class="hand hour-hand" id="hour-hand"></span><span class="hand minute-hand" id="minute-hand"></span><span class="hand second-hand" id="second-hand"${config.showSeconds ? "" : " hidden"}></span><span class="pin"></span></div>
       <aside class="meta"><span class="meta-mark" aria-hidden="true"></span><div class="date" id="date"${config.showDate ? "" : " hidden"}></div><div class="timezone" id="timezone"${config.showTimezone ? "" : " hidden"}></div></aside>
     </section>
+    <div class="clock-caption">${escapeHtml(config.caption)}</div>
   </main>
   <script>
     var config = ${configJson};
@@ -758,7 +772,8 @@ export function renderClockHtml(title: string, rawConfig: Record<string, unknown
     function update() {
       try {
         var now = new Date();
-        var displayOptions = { hour:"2-digit", minute:"2-digit", second:"2-digit", hour12:config.format === "12h" };
+        var displayOptions = { hour:"2-digit", minute:"2-digit", second:"2-digit" };
+        if (config.format === "12h") displayOptions.hour12 = true;
         if (config.format === "24h") displayOptions.hourCycle = "h23";
         var displayParts = formatter(displayOptions).formatToParts(now);
         if (hourEl) hourEl.textContent = twoDigits(part(displayParts,"hour"));

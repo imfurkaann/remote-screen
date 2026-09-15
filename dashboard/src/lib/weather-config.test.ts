@@ -7,8 +7,8 @@ test("weather config supplies production-safe defaults", () => {
 });
 
 test("weather config migrates legacy themes", () => {
-  assert.equal(normalizeWeatherConfig({ theme: "glassmorphism" }).theme, "sky");
-  assert.equal(normalizeWeatherConfig({ theme: "dark" }).theme, "midnight");
+  assert.equal(normalizeWeatherConfig({ theme: "glassmorphism" }).theme, "paper");
+  assert.equal(normalizeWeatherConfig({ theme: "dark" }).theme, "paper");
   assert.equal(normalizeWeatherConfig({ theme: "light" }).theme, "paper");
 });
 
@@ -24,7 +24,7 @@ test("weather config constrains invalid and oversized values", () => {
 
   assert.equal(normalized.city.length, 120);
   assert.equal(normalized.units, "metric");
-  assert.equal(normalized.locale, "tr");
+  assert.equal(normalized.locale, "en");
   assert.equal(normalized.forecastDays, 5);
   assert.equal(normalized.layout, "overview");
   assert.equal(normalized.showDetails, false);

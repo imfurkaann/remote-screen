@@ -7,6 +7,13 @@ import {
 } from "../routes/apps.route.js";
 
 describe("clock renderer", () => {
+  it("safely renders personalized text with a locked light theme", () => {
+    const html = renderClockHtml("Office", { heading:"<b>Office</b>", caption:"Welcome & enjoy", theme:"warm", primaryColor:"#ff0000", layout:"split" });
+    assert.match(html, /&lt;b&gt;Office&lt;\/b&gt;/);
+    assert.match(html, /Welcome &amp; enjoy/);
+    assert.match(html, /class="theme-paper" data-clock-layout="split"/);
+    assert.doesNotMatch(html, /#ff0000/);
+  });
   it("migrates legacy clock settings to the modern layouts", () => {
     const config = normalizeClockConfig({ layout: "hybrid", theme: "light" });
     assert.equal(config.layout, "split");
@@ -35,6 +42,6 @@ describe("clock renderer", () => {
     });
     assert.doesNotMatch(html, /url\(javascript/);
     assert.doesNotMatch(html, /<\/script><script>alert/);
-    assert.match(html, /--accent: #6ee7b7/);
+    assert.match(html, /--accent: #9b8159/);
   });
 });

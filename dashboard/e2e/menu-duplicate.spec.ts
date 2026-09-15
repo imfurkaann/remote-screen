@@ -28,7 +28,7 @@ test("text and line duplicates retain both layouts and survive save", async ({ p
   expect(copiedTextId).not.toBe("text:snack-title");
   await copiedText.dblclick();
   await page.getByLabel("Metni düzenle", { exact: true }).fill("Yeni başlık");
-  await page.getByPlaceholder("Uygulama adı...").fill("Kopyalama doğrulama menüsü");
+  await page.getByPlaceholder("App name...").fill("Menu duplication check");
   await expect(title).toHaveText("Snack Menu");
   const saved = page.waitForResponse(r => r.url().endsWith("/api/apps/create-app") && r.request().method() === "POST");
   await page.getByRole("button", { name: /Kaydet/ }).click();

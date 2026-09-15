@@ -104,7 +104,7 @@ export default function SidebarNav({ links }: SidebarNavProps) {
           return (
             <div
               key={link.href}
-              title={`${link.label} (Yakında)`}
+              title={`${link.label} (Coming soon)`}
               style={{
                 display: "flex",
                 alignItems: "center",

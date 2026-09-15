@@ -773,3 +773,50 @@ small,
 
 
 
+.elegant-clock { width:100%; height:100%; aspect-ratio:16/9; container-type:inline-size; display:flex; flex-direction:column; padding:5% 6%; background:#fff; color:#273331; font-family:Georgia,"Times New Roman",serif; overflow:hidden; border:1px solid #e6e2dc; }
+.clock-heading { text-align:center; font:500 1.3cqw/1.4 Arial,sans-serif; letter-spacing:.3em; color:#8f7753; min-height:2em; overflow-wrap:anywhere; }
+.clock-caption { text-align:center; font:italic 1.65cqw/1.5 Georgia,serif; color:#807c73; min-height:1.5em; overflow-wrap:anywhere; }
+.clock-heading button,.clock-caption button,.clock-heading input,.clock-caption input { font:inherit; letter-spacing:inherit; color:inherit; background:transparent; border:1px dashed transparent; border-radius:3px; padding:.25em .5em; text-align:inherit; max-width:100%; cursor:text; }
+.clock-heading button:hover,.clock-caption button:hover { border-color:#c4b293; }
+.clock-heading input,.clock-caption input { width:100%; outline:1px solid #9b8159; }
+.clock-composition { flex:1; min-height:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4cqw; }
+.clock-digits { display:flex; align-items:baseline; justify-content:center; white-space:nowrap; font-variant-numeric:tabular-nums; font-family:"Helvetica Neue",Arial,sans-serif; }
+.clock-digits>span { font-size:21cqw; font-weight:300; line-height:1; letter-spacing:-.065em; }
+.clock-digits i { color:#9b8159; font-style:normal; font-weight:200; padding:0 .04em; }
+.clock-digits small { font:300 4cqw Arial,sans-serif; color:#9b8159; margin-left:.5em; }
+.clock-digits em { font:500 1.8cqw Arial,sans-serif; margin-left:.6em; color:#807c73; }
+.clock-meta { text-align:center; }
+.clock-date { font-size:2.1cqw; line-height:1.5; }
+.clock-zone { color:#8f7753; font:500 1.2cqw/1.5 Arial,sans-serif; letter-spacing:.2em; text-transform:uppercase; margin-top:1em; }
+.clock-dial { width:36%; max-height:100%; flex-shrink:1; }
+.elegant-clock[data-layout="analog"] .clock-composition { gap:1.5cqw; }
+.elegant-clock[data-layout="analog"] .clock-date { font-size:1.6cqw; }
+.elegant-clock[data-layout="split"] { background:linear-gradient(90deg,#fff 0%,#fff 65%,#f7f5f0 65%,#f7f5f0 100%); }
+.elegant-clock[data-layout="split"] .clock-heading,.elegant-clock[data-layout="split"] .clock-caption { text-align:left; }
+.elegant-clock[data-layout="split"] .clock-composition { display:grid; grid-template-columns:minmax(0,1.8fr) minmax(0,1fr); gap:5%; }
+.elegant-clock[data-layout="split"] .clock-digits>span { font-size:14cqw; }
+.elegant-clock[data-layout="split"] .clock-digits small { font-size:2.4cqw; }
+.elegant-clock[data-layout="split"] .clock-meta { text-align:left; padding-left:14%; }
+.elegant-clock[data-layout="split"] .clock-date { font-size:3cqw; }
+.elegant-clock.portrait { aspect-ratio:9/16; padding:10% 7%; }
+.elegant-clock.portrait .clock-heading { font-size:2.4cqw; }
+.elegant-clock.portrait .clock-caption { font-size:3cqw; }
+.elegant-clock.portrait .clock-date { font-size:4cqw; }
+.elegant-clock.portrait .clock-zone { font-size:2.4cqw; }
+.elegant-clock.portrait .clock-dial { width:90%; }
+.elegant-clock.portrait[data-layout="split"] { background:linear-gradient(#fff 65%,#f7f5f0 65%); }
+.elegant-clock.portrait[data-layout="split"] .clock-composition { display:flex; gap:15cqw; }
+.elegant-clock.portrait[data-layout="split"] .clock-digits>span { font-size:22cqw; }
+.elegant-clock.portrait[data-layout="split"] .clock-meta { padding:0; text-align:center; }
+.clock-options-panel { max-height:calc(100vh - 110px); overflow:auto; }
+.clock-panel-close { float:right; background:#f1f5f9; color:#64748b; border:0; cursor:pointer; }
+.clock-settings { display:flex; flex-direction:column; gap:15px; color:#334155; }
+.clock-settings h3 { margin:0 0 5px; font-size:15px; }
+.clock-settings label { display:flex; flex-direction:column; gap:6px; font-size:12px; font-weight:600; }
+.clock-settings select,.clock-settings input:not([type="checkbox"]),.clock-settings textarea { width:100%; padding:9px; border:1px solid #dbe1e7; border-radius:7px; color:#334155; background:#fff; font:12px Arial,sans-serif; }
+.clock-settings .clock-toggle { flex-direction:row; justify-content:space-between; }
+@media (max-width:980px) {
+  .app-studio-grid.canvas-studio-grid { grid-template-columns:76px minmax(0,1fr) !important; padding:0 12px 24px 0 !important; max-width:none !important; gap:12px !important; }
+  .canvas-studio-grid .app-studio-preview { grid-row:auto; }
+  .canvas-studio-grid .restaurant-text-panel { width:min(320px,calc(100vw - 100px)); }
+}

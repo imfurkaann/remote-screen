@@ -3,29 +3,28 @@
 import { useEffect, useState, useMemo, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { ClockPreview, ClockSettings, DEFAULT_CLOCK_CONFIG, normalizeClockConfig } from "@/components/clock/ClockStudio";
-import { WeatherPreview, WeatherSettings, DEFAULT_WEATHER_CONFIG, normalizeWeatherConfig } from "@/components/weather/WeatherStudio";
+import { ClockPreview, ClockSettings, ClockTools, DEFAULT_CLOCK_CONFIG, normalizeClockConfig } from "@/components/clock/ClockStudio";
+import { WeatherPreview, WeatherSettings, WeatherTools, DEFAULT_WEATHER_CONFIG, normalizeWeatherConfig } from "@/components/weather/WeatherStudio";
 import { RssPreview, RssSettings, DEFAULT_RSS_CONFIG, normalizeRssConfig } from "@/components/rss/RssStudio";
 import { NoticePreview, NoticeSettings, DEFAULT_NOTICE_CONFIG, normalizeNoticeConfig } from "@/components/notice/NoticeStudio";
 import { QrPreview, QrSettings, DEFAULT_QR_CONFIG, normalizeQrConfig } from "@/components/qrcode/QrStudio";
 import { WayfindingPreview, WayfindingSettings, DEFAULT_WAYFINDING_CONFIG, normalizeWayfindingConfig } from "@/components/wayfinding/WayfindingStudio";
-import { EventsPreview, EventsSettings, DEFAULT_EVENTS_CONFIG, normalizeEventsConfig } from "@/components/events/EventsStudio";
+import { EventsPreview, EventsSettings, EventsTools, DEFAULT_EVENTS_CONFIG, normalizeEventsConfig } from "@/components/events/EventsStudio";
 import { HotelGuidePreview, HotelGuideSettings, DEFAULT_HOTEL_GUIDE_CONFIG, normalizeHotelGuideConfig } from "@/components/hotel-guide/HotelGuideStudio";
-import { createSnackMenuTemplate } from "@/lib/pizza-menu-template";
-import { RestaurantMenuPreview, RestaurantMenuSettings, RestaurantMenuTextTools, DEFAULT_RESTAURANT_MENU_CONFIG, normalizeRestaurantMenuConfig } from "@/components/restaurant-menu/RestaurantMenuStudio";
+import { createRestaurantMenuTemplate, RestaurantMenuPreview, RestaurantMenuSettings, RestaurantMenuTextTools, normalizeRestaurantMenuConfig, type RestaurantMenuTemplateId } from "@/components/restaurant-menu/RestaurantMenuStudio";
 
 type AppType = "clock" | "weather" | "rss" | "notice" | "qrcode" | "wayfinding" | "events" | "hotel-guide" | "restaurant-menu";
 const APP_TYPES: AppType[] = ["clock", "weather", "rss", "notice", "qrcode", "wayfinding", "events", "hotel-guide", "restaurant-menu"];
 const APP_META: Record<AppType, { icon: string; defaultName: string }> = {
-  clock: { icon: "🕒", defaultName: "Yeni Modern Saat" },
-  weather: { icon: "🌤️", defaultName: "Yeni Hava Durumu" },
-  rss: { icon: "📰", defaultName: "Yeni RSS Akışı" },
-  notice: { icon: "📢", defaultName: "Yeni Duyuru" },
-  qrcode: { icon: "▦", defaultName: "Yeni QR Kod" },
-  wayfinding: { icon: "⌖", defaultName: "Lobi Yönlendirme" },
-  events: { icon: "▤", defaultName: "Bugünün Etkinlikleri" },
-  "hotel-guide": { icon: "i", defaultName: "Otel Rehberi" },
-  "restaurant-menu": { icon: "≡", defaultName: "Yeni Restoran Menüsü" }
+  clock: { icon: "🕒", defaultName: "New Modern Clock" },
+  weather: { icon: "🌤️", defaultName: "New Weather Display" },
+  rss: { icon: "📰", defaultName: "New RSS Feed" },
+  notice: { icon: "📢", defaultName: "New Notice" },
+  qrcode: { icon: "▦", defaultName: "New QR Code" },
+  wayfinding: { icon: "⌖", defaultName: "Lobby Wayfinding" },
+  events: { icon: "▤", defaultName: "Today's Events" },
+  "hotel-guide": { icon: "i", defaultName: "Hotel Guide" },
+  "restaurant-menu": { icon: "≡", defaultName: "New Restaurant Menu" }
 };
 
 function AppConfigureForm() {
@@ -59,9 +58,9 @@ function AppConfigureForm() {
       // Set default configurations for new instances
       setInstanceName(APP_META[appType].defaultName);
       if (appType === "clock") {
-        setConfig(DEFAULT_CLOCK_CONFIG);
+        setConfig(normalizeClockConfig({ ...DEFAULT_CLOCK_CONFIG, layout: searchParams.get("template") ?? "split" }));
       } else if (appType === "weather") {
-        setConfig(DEFAULT_WEATHER_CONFIG);
+        setConfig(normalizeWeatherConfig({ ...DEFAULT_WEATHER_CONFIG, layout: searchParams.get("template") ?? "overview" }));
       } else if (appType === "rss") {
         setConfig(DEFAULT_RSS_CONFIG);
       } else if (appType === "notice") {
@@ -71,11 +70,13 @@ function AppConfigureForm() {
       } else if (appType === "wayfinding") {
         setConfig(DEFAULT_WAYFINDING_CONFIG);
       } else if (appType === "events") {
-        setConfig(DEFAULT_EVENTS_CONFIG);
+        setConfig(normalizeEventsConfig({ ...DEFAULT_EVENTS_CONFIG, layout: searchParams.get("template") ?? "agenda" }));
       } else if (appType === "hotel-guide") {
         setConfig(DEFAULT_HOTEL_GUIDE_CONFIG);
       } else if (appType === "restaurant-menu") {
-        setConfig(normalizeRestaurantMenuConfig(searchParams.get("template") === "snack" ? createSnackMenuTemplate() : DEFAULT_RESTAURANT_MENU_CONFIG));
+        const requestedTemplate = searchParams.get("template");
+        const templateId: RestaurantMenuTemplateId = requestedTemplate === "snack" || requestedTemplate === "restaurant" || requestedTemplate === "cafe" || requestedTemplate === "breakfast" ? requestedTemplate : "pizza";
+        setConfig(createRestaurantMenuTemplate(templateId));
       }
       return;
     }
@@ -130,11 +131,16 @@ function AppConfigureForm() {
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!instanceName.trim()) {
-      alert("Lütfen uygulama adını girin.");
+      alert("Please enter an app name.");
       return;
     }
 
     setSaving(true);
+    if (appType === "weather" && !String(config.city ?? "").trim()) {
+      alert("Please enter a city or location.");
+      setSaving(false);
+      return;
+    }
     try {
       const url = editId ? `/api/apps/update-app/${editId}` : "/api/apps/create-app";
       const method = editId ? "PUT" : "POST";
@@ -152,11 +158,11 @@ function AppConfigureForm() {
         router.push("/apps");
       } else {
         const errorData = await res.json().catch(() => ({}));
-        alert(errorData.message || "Yapılandırma kaydedilemedi.");
+        alert(errorData.message || "The configuration could not be saved.");
       }
     } catch (err) {
       console.error("Save error:", err);
-      alert("Kaydetme sırasında beklenmeyen bir hata oluştu.");
+      alert("An unexpected error occurred while saving.");
     } finally {
       setSaving(false);
     }
@@ -165,7 +171,7 @@ function AppConfigureForm() {
   if (loading) {
     return (
       <div style={{ padding: "48px", textAlign: "center", color: "#64748b" }}>
-        <h3>Uygulama ayarları yükleniyor...</h3>
+        <h3>Loading app settings...</h3>
       </div>
     );
   }
@@ -223,9 +229,9 @@ function AppConfigureForm() {
   const renderLivePreview = () => {
     switch (appType) {
       case "clock":
-        return <ClockPreview config={config} />;
+        return <ClockPreview config={config} orientation={previewOrientation} onChange={setConfig} />;
       case "weather":
-        return <WeatherPreview config={config} />;
+        return <WeatherPreview config={config} orientation={previewOrientation} onChange={setConfig} />;
       case "rss":
         return <RssPreview config={config} />;
       case "notice":
@@ -235,7 +241,7 @@ function AppConfigureForm() {
       case "wayfinding":
         return <WayfindingPreview config={config} />;
       case "events":
-        return <EventsPreview config={config} />;
+        return <EventsPreview config={config} onChange={setConfig} orientation={previewOrientation} />;
       case "hotel-guide":
         return <HotelGuidePreview config={config} />;
       case "restaurant-menu":
@@ -274,7 +280,7 @@ function AppConfigureForm() {
 
           <input
             type="text"
-            placeholder="Uygulama adı..."
+            placeholder="App name..."
             value={instanceName}
             onChange={(e) => setInstanceName(e.target.value)}
             required
@@ -319,7 +325,7 @@ function AppConfigureForm() {
               alignItems: "center"
             }}
           >
-            Vazgeç
+            Cancel
           </Link>
 
           <button
@@ -339,24 +345,24 @@ function AppConfigureForm() {
             onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "#ca8a04"}
             onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "#eab308"}
           >
-            {saving ? "Kaydediliyor..." : "Kaydet ve Kapat"}
+            {saving ? "Saving..." : "Save and Close"}
           </button>
         </div>
       </header>
 
       {/* Main Split Layout Content */}
-      <div className="app-studio-grid" style={{
+      <div className={`app-studio-grid ${appType === "clock" || appType === "restaurant-menu" || appType === "weather" || appType === "events" ? "canvas-studio-grid" : ""}`} style={{
         display: "grid",
-        gridTemplateColumns: appType === "restaurant-menu" ? "76px minmax(0, 1fr)" : "1fr 1fr",
-        padding: appType === "restaurant-menu" ? "0 32px 40px 0" : "32px",
-        gap: appType === "restaurant-menu" ? "20px" : "32px",
+        gridTemplateColumns: appType === "restaurant-menu" || appType === "clock" || appType === "weather" || appType === "events" ? "76px minmax(0, 1fr)" : "1fr 1fr",
+        padding: appType === "restaurant-menu" || appType === "clock" || appType === "weather" || appType === "events" ? "0 32px 40px 0" : "32px",
+        gap: appType === "restaurant-menu" || appType === "clock" || appType === "weather" || appType === "events" ? "20px" : "32px",
         flexGrow: 1,
-        maxWidth: appType === "restaurant-menu" ? "1500px" : "1200px",
-        margin: "0 auto",
+        maxWidth: appType === "restaurant-menu" || appType === "clock" || appType === "weather" || appType === "events" ? "none" : "1200px",
+        margin: appType === "restaurant-menu" || appType === "clock" || appType === "weather" || appType === "events" ? "0" : "0 auto",
         width: "100%"
       }}>
         {/* Left Side: Form Settings */}
-        {appType !== "restaurant-menu" && <div className="app-studio-settings" style={{
+        {appType !== "restaurant-menu" && appType !== "clock" && appType !== "weather" && appType !== "events" && <div className="app-studio-settings" style={{
           backgroundColor: "#ffffff",
           borderRadius: "16px",
           border: "1px solid #e2e8f0",
@@ -367,39 +373,40 @@ function AppConfigureForm() {
           gap: "24px"
         }}>
           <h3 style={{ margin: 0, fontSize: "16px", fontWeight: 800, color: "#1e293b", borderBottom: "1px solid #f1f5f9", paddingBottom: "12px" }}>
-            Uygulama Ayarları
+            App Settings
           </h3>
 
           {renderConfigForm()}
         </div>}
 
         {appType === "restaurant-menu" && <RestaurantMenuTextTools config={config} onChange={changeMenu} />}
+        {appType === "clock" && <ClockTools config={config} onChange={setConfig} />}
+        {appType === "weather" && <WeatherTools config={config} onChange={setConfig} />}
+        {appType === "events" && <EventsTools config={config} onChange={setConfig} />}
 
         {/* Right Side: Live Interactive Mockup Preview */}
         <div className="app-studio-preview" style={{
           display: "flex",
           flexDirection: "column",
           gap: "16px",
-          position: appType === "restaurant-menu" ? "relative" : "sticky",
-          top: appType === "restaurant-menu" ? undefined : "32px",
+          position: appType === "restaurant-menu" || appType === "clock" || appType === "weather" || appType === "events" ? "relative" : "sticky",
+          top: appType === "restaurant-menu" || appType === "clock" || appType === "weather" || appType === "events" ? undefined : "32px",
           height: "fit-content"
         }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontSize: "13px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.5px" }}>Canlı Ekran Önizlemesi</span>
-            {appType === "restaurant-menu" && <button type="button" onClick={() => { if (window.confirm("Tuvaldeki içeriğin yerine hazır pizza menüsü yerleştirilsin mi? Kaydettiğiniz menü, tekrar kaydedene kadar korunur.")) { changeMenu(structuredClone(DEFAULT_RESTAURANT_MENU_CONFIG)); setPreviewOrientation("portrait"); } }}>Hazır pizza şablonunu uygula</button>}
-            {appType === "restaurant-menu" && <button type="button" onClick={() => { if (window.confirm("Tuvaldeki içeriğin yerine Snack Menu şablonu yerleştirilsin mi?")) { changeMenu(createSnackMenuTemplate()); setPreviewOrientation("portrait"); } }}>Snack Menu şablonunu uygula</button>}
-            <div className="preview-orientation-switch" role="group" aria-label="Önizleme yönü">
+            <span style={{ fontSize: "13px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.5px" }}>Live Screen Preview</span>
+            <div className="preview-orientation-switch" role="group" aria-label="Preview orientation">
               <button type="button" aria-pressed={previewOrientation === "landscape"} onClick={() => setPreviewOrientation("landscape")}>16:9</button>
-              <button type="button" aria-pressed={previewOrientation === "portrait"} onClick={() => setPreviewOrientation("portrait")}>{appType === "restaurant-menu" && (config.theme === "paper" || config.theme === "snack") ? "Dikey (A4)" : "9:16"}</button>
+              <button type="button" aria-pressed={previewOrientation === "portrait"} onClick={() => setPreviewOrientation("portrait")}>{appType === "restaurant-menu" && (config.theme === "paper" || config.theme === "snack") ? "Portrait (A4)" : "9:16"}</button>
             </div>
           </div>
 
-          <div className={`configure-preview-frame ${previewOrientation} ${appType === "restaurant-menu" ? "restaurant-menu-workspace" : ""}`} style={appType === "restaurant-menu" && (config.theme === "paper" || config.theme === "snack") && previewOrientation === "portrait" ? { aspectRatio: "210/297", width: "min(100%, calc((100vh - 230px) * .7071))" } : undefined}>
+          <div className={`configure-preview-frame ${previewOrientation} ${appType === "restaurant-menu" || appType === "clock" || appType === "weather" || appType === "events" ? "restaurant-menu-workspace" : ""}`} style={appType === "restaurant-menu" && (config.theme === "paper" || config.theme === "snack") && previewOrientation === "portrait" ? { aspectRatio: "210/297", width: "min(100%, calc((100vh - 230px) * .7071))" } : undefined}>
             {renderLivePreview()}
           </div>
 
           {appType !== "restaurant-menu" && <div style={{ fontSize: "12px", color: "#94a3b8", textAlign: "center", lineHeight: "1.5" }}>
-            Değişiklikler siz yazarken anında önizlemeye yansır. Yatay ve dikey ekran görünümünü üstteki düğmelerden kontrol edebilirsiniz.
+            {appType === "weather" ? "Sample weather preview. Published screens load live conditions for your selected location." : "Changes appear in the preview as you type. Use the controls above to check landscape and portrait layouts."}
           </div>}
         </div>
       </div>
@@ -409,7 +416,7 @@ function AppConfigureForm() {
 
 export default function ConfigurePage() {
   return (
-    <Suspense fallback={<div style={{ padding: "48px", textAlign: "center", color: "#64748b" }}>Yapılandırma sayfası yükleniyor...</div>}>
+    <Suspense fallback={<div style={{ padding: "48px", textAlign: "center", color: "#64748b" }}>Loading configuration...</div>}>
       <AppConfigureForm />
     </Suspense>
   );

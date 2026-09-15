@@ -7,7 +7,7 @@ test("event settings constrain schedules and colors", () => {
   const config = normalizeEventsConfig({ accentColor: "url(x)", events: Array.from({ length: 15 }, (_, i) => ({ title: `Event ${i}`, start: "30:90" })) });
   assert.equal(config.events.length, 10);
   assert.equal(config.events[0]!.start, "09:00");
-  assert.equal(config.accentColor, "#60a5fa");
+  assert.equal(config.accentColor, "#9b8159");
 });
 
 test("hotel guide settings constrain services", () => {

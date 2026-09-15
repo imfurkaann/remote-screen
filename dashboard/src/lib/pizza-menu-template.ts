@@ -25,16 +25,16 @@ export function createPizzaMenuTemplate() {
     textElements.push({ id, text, preset: id === "title" ? "heading" : "text" });
     portrait["text:" + id] = { x, y, width, height, fontScale: 1, align: "left", zIndex: 3, fontWeight: "normal", ...style };
   };
-  add("title", "PİZZA MENÜ", 22, 9, 56, 6, { fontScale: 2.2, align: "center", fontWeight: "bold", fontFamily: "serif" });
-  add("subtitle", "Bir Dilim Pizza", 22, 14.6, 56, 4, { fontScale: 1.22, align: "center" });
-  add("pizza-category", "PİZZA ÇEŞİTLERİ", 17, 22.3, 68, 4, { fontScale: 1.22, fontWeight: "bold", color: "#bd3034" });
+  add("title", "PIZZA MENU", 22, 9, 56, 6, { fontScale: 2.2, align: "center", fontWeight: "bold", fontFamily: "serif" });
+  add("subtitle", "A Slice of Pizza", 22, 14.6, 56, 4, { fontScale: 1.22, align: "center" });
+  add("pizza-category", "PIZZA SELECTION", 17, 22.3, 68, 4, { fontScale: 1.22, fontWeight: "bold", color: "#bd3034" });
   const rows = [
-    ["margherita", "Margherita", "450₺", "Domates sos, mozzarella, fesleğen", "Alerjen: Gluten, süt  Kalori: 900 kcal", 28],
-    ["pepperoni", "Pepperoni", "620₺", "Domates sos, mozzarella, pepperoni", "Alerjen: Gluten, süt  Kalori: 1100 kcal", 36.5],
-    ["prosciutto", "Prosciutto", "650₺", "Mozzarella, prosciutto, roka", "Alerjen: Gluten, süt  Kalori: 1050 kcal", 45],
-    ["vegetariana", "Vegetariana", "700₺", "Sebzeler, mozzarella", "Alerjen: Gluten, süt  Kalori: 900 kcal", 53.5],
-    ["iced-tea", "Ev Yapımı Soğuk Çay", "150₺", "Şeftali, Limon, Elma", "Kalori: 75 kcal", 69],
-    ["lemonade", "Limonata", "180₺", "Limon, Portakal, Su", "Kalori: 90 kcal", 77.5]
+    ["margherita", "Margherita", "450₺", "Tomato sauce, mozzarella, basil", "Allergens: Gluten, dairy  Calories: 900 kcal", 28],
+    ["pepperoni", "Pepperoni", "620₺", "Tomato sauce, mozzarella, pepperoni", "Allergens: Gluten, dairy  Calories: 1100 kcal", 36.5],
+    ["prosciutto", "Prosciutto", "650₺", "Mozzarella, prosciutto, arugula", "Allergens: Gluten, dairy  Calories: 1050 kcal", 45],
+    ["vegetariana", "Vegetariana", "700₺", "Vegetables, mozzarella", "Allergens: Gluten, dairy  Calories: 900 kcal", 53.5],
+    ["iced-tea", "Homemade Iced Tea", "150₺", "Peach, lemon, apple", "Calories: 75 kcal", 69],
+    ["lemonade", "Lemonade", "180₺", "Lemon, orange, water", "Calories: 90 kcal", 77.5]
   ] as const;
   for (const [id, name, price, description, details, y] of rows) {
     add(id + "-name", name, 18.5, y, 49, 3.2, { fontWeight: "bold" });
@@ -42,12 +42,12 @@ export function createPizzaMenuTemplate() {
     add(id + "-description", description, 19.7, y + 2.3, 62, 3.2);
     add(id + "-details", details, 19.7, y + 5.1, 62, 3.2);
   }
-  add("drinks-category", "İÇECEKLER", 17, 64, 68, 4, { fontScale: 1.22, fontWeight: "bold", color: "#bd3034" });
+  add("drinks-category", "DRINKS", 17, 64, 68, 4, { fontScale: 1.22, fontWeight: "bold", color: "#bd3034" });
   const imageElements = [
-    { id: "olives", name: "Zeytin süslemesi", source: "builtin:olives" },
-    { id: "citrus", name: "Portakal süslemesi", source: "builtin:citrus" },
-    { id: "mint", name: "Turkuaz yaprak", source: "builtin:mint" },
-    { id: "leaves", name: "Zeytin yaprakları", source: "builtin:leaves" }
+    { id: "olives", name: "Olive decoration", source: "builtin:olives" },
+    { id: "citrus", name: "Orange decoration", source: "builtin:citrus" },
+    { id: "mint", name: "Turquoise leaf", source: "builtin:mint" },
+    { id: "leaves", name: "Olive leaves", source: "builtin:leaves" }
   ];
   for (const [id, x, y, width, height] of [
     ["olives",18,3,16,12], ["citrus",62,0,14,7], ["mint",0,88,12,9], ["leaves",93,81,7,14]
@@ -64,7 +64,7 @@ export function createPizzaMenuTemplate() {
     }
   }
   return {
-    restaurantName: "", heading: "", subtitle: "", locale: "tr" as const, currency: "₺" as const,
+    restaurantName: "", heading: "", subtitle: "", locale: "en" as const, currency: "₺" as const,
     currencyPosition: "after" as const, layout: "editorial" as const, theme: "paper" as const,
     accentColor: "#bd3034", categories: [], items: [], showDescriptions: true, showUnavailable: false, footer: "",
     editor: { version: 2 as const, snapToGrid: false, textElements, imageElements, layouts: { landscape, portrait } }
@@ -89,17 +89,17 @@ export function createSnackMenuTemplate() {
     const y=32.4+i*8.65;
     text(id+"-name",name,16.5,y,54,5.5);
     text(id+"-price",price,74,y,9.5,5.5,{align:"right",fontWeight:"bold"});
-    image(id+"-line",name+" ayırıcı çizgi","builtin:snack-line",16.5,y+3,67,3);
+    image(id+"-line",name+" divider line","builtin:snack-line",16.5,y+3,67,3);
   });
   text("snack-footer","GRAB YOUR FAVORITE SNACK NOW!",17.5,84.7,65,4,{fontScale:.67,align:"center"});
-  image("snack-pill","Alt yazı çerçevesi","builtin:snack-pill",15.5,83.1,69,6.5);
-  image("snack-top","Üst dama deseni","builtin:snack-checker",0,0,100,8);
-  image("snack-bottom","Alt dama deseni","builtin:snack-checker",0,92.2,100,7.8);
-  image("snack-cookie","Kurabiye çizimi","builtin:snack-cookie",0,0,20,12);
-  image("snack-orange","Portakal çizimi","builtin:snack-orange",84,87,16,13);
-  image("snack-cherries","Kiraz çizimi","builtin:snack-cherries",84,10,13,10);
-  image("snack-stars-right","Sağ yıldızlar","builtin:snack-stars",91,27.5,9,11);
-  image("snack-stars-left","Sol yıldızlar","builtin:snack-stars",0,61,9,11);
+  image("snack-pill","Footer frame","builtin:snack-pill",15.5,83.1,69,6.5);
+  image("snack-top","Top checkerboard","builtin:snack-checker",0,0,100,8);
+  image("snack-bottom","Bottom checkerboard","builtin:snack-checker",0,92.2,100,7.8);
+  image("snack-cookie","Cookie illustration","builtin:snack-cookie",0,0,20,12);
+  image("snack-orange","Orange illustration","builtin:snack-orange",84,87,16,13);
+  image("snack-cherries","Cherry illustration","builtin:snack-cherries",84,10,13,10);
+  image("snack-stars-right","Right stars","builtin:snack-stars",91,27.5,9,11);
+  image("snack-stars-left","Left stars","builtin:snack-stars",0,61,9,11);
   for(const [id,rect] of Object.entries(portrait)) landscape[id]={...rect};
   landscape["text:snack-title"]={...portrait["text:snack-title"],x:20,y:10,width:60,height:22};
   landscape["image:snack-pill"]={...portrait["image:snack-pill"],x:28,y:81,width:44,height:10};

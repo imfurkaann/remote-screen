@@ -11,19 +11,19 @@ test("pizza template edits and removals persist through server save and reload",
   await page.waitForURL(/\/screens/);
   await page.goto("http://localhost:3000/apps/configure?type=restaurant-menu");
   const canvas = page.getByTestId("restaurant-menu-canvas");
-  await expect(canvas).toContainText("PİZZA MENÜ");
+  await expect(canvas).toContainText("PIZZA MENU");
   await expect(canvas).toContainText("Vegetariana");
   await expect(canvas.locator("img")).toHaveCount(4);
   await canvas.screenshot({ path: "test-results/pizza-template.png" });
   const title = canvas.locator('[data-canvas-id="text:title"]');
   await title.dblclick();
-  await page.getByLabel("Metni düzenle", { exact: true }).fill("ŞİRKET PİZZA");
+  await page.getByLabel("Edit text", { exact: true }).fill("HOUSE PIZZA");
   await page.getByPlaceholder("Uygulama adı...").fill("Pizza menüsü — kayıt kontrolü");
   await canvas.locator('[data-canvas-id="image:olives"]').click({ position: { x: 10, y: 10 } });
   await page.getByRole("button", { name: "Seçili öğeyi sil", exact: true }).click();
   await expect(canvas.locator("img")).toHaveCount(3);
-  await page.getByRole("button", { name: "T Metin", exact: true }).click();
-  await page.getByRole("button", { name: "T Metin kutusu ekle", exact: true }).click();
+  await page.getByRole("button", { name: "T Text", exact: true }).click();
+  await page.getByRole("button", { name: "T Add text box", exact: true }).click();
   const extra = canvas.locator('[data-canvas-id^="text:text-"]').last();
   await extra.dblclick();
   await page.getByLabel("Metni düzenle", { exact: true }).fill("Yeni şirket notu");
@@ -34,10 +34,10 @@ test("pizza template edits and removals persist through server save and reload",
   expect(response.status()).toBe(201);
   const result = await response.json();
   const id = result.app._id;
-  expect(result.app.appConfig.editor.textElements.some((e: any) => e.text === "ŞİRKET PİZZA")).toBe(true);
+  expect(result.app.appConfig.editor.textElements.some((e: any) => e.text === "HOUSE PIZZA")).toBe(true);
   // A fresh navigation reads the saved app from the API, with no local draft.
   await page.goto(`http://localhost:3000/apps/configure?id=${id}&type=restaurant-menu`);
-  await expect(canvas).toContainText("ŞİRKET PİZZA");
+  await expect(canvas).toContainText("HOUSE PIZZA");
   await expect(canvas).toContainText("Yeni şirket notu");
   await expect(canvas.locator("img")).toHaveCount(3);
   await canvas.locator('[data-canvas-id="text:margherita-price"]').dblclick();
@@ -46,14 +46,14 @@ test("pizza template edits and removals persist through server save and reload",
   await canvas.locator('[data-canvas-id="text:lemonade-details"]').click();
   await page.getByRole("button", { name: "Seçili öğeyi sil", exact: true }).click();
   await expect(canvas).not.toContainText("90 kcal");
-  await page.getByRole("button", { name: "Yüklemeler", exact: true }).click();
+  await page.getByRole("button", { name: "Uploads", exact: true }).click();
   await page.locator('input[type="file"]').setInputFiles({
     name: "pizza-logo-test.png", mimeType: "image/png",
     buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aGZkAAAAASUVORK5CYII=", "base64")
   });
   await page.getByTitle("pizza-logo-test.png — tasarıma ekle", { exact: true }).first().click();
   await expect(canvas.locator("img")).toHaveCount(4);
-  await page.getByRole("button", { name: "Yüklemeler panelini kapat" }).click();
+  await page.getByRole("button", { name: "Close uploads panel" }).click();
   const update = page.waitForResponse(r => r.url().includes(`/api/apps/update-app/${id}`) && r.request().method() === "PUT");
   await page.getByRole("button", { name: /Kaydet/ }).click();
   expect((await update).status()).toBe(200);
@@ -66,7 +66,7 @@ test("pizza template edits and removals persist through server save and reload",
   await canvas.screenshot({ path: "test-results/pizza-landscape.png" });
   const render = await page.request.get(`http://localhost:4100/api/v1/apps/render/${id}`);
   expect(render.ok()).toBe(true);
-  expect(await render.text()).toContain("ŞİRKET PİZZA");
+  expect(await render.text()).toContain("HOUSE PIZZA");
   await page.goto(`http://localhost:4100/api/v1/apps/render/${id}`);
   await page.setViewportSize({ width: 740, height: 1046 });
   await page.screenshot({ path: "test-results/pizza-saved-render.png" });

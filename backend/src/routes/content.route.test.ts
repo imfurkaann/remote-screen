@@ -552,7 +552,7 @@ describe("content lifecycle", () => {
         headers,
         body: JSON.stringify({
           name: "Lobby Clock",
-          config: { timezone: "Europe/Istanbul", showSeconds: false, theme: "paper" }
+          config: { timezone: "Asia/Tokyo", showSeconds: false, theme: "paper", heading: "HEAD OFFICE", caption: "Welcome to our office", layout: "analog", format: "12h" }
         })
       }
     );
@@ -589,10 +589,56 @@ describe("content lifecycle", () => {
     );
     assert.equal(renderResponse.status, 200);
     assert.match(renderResponse.headers.get("cache-control") ?? "", /immutable/);
-    assert.match(await renderResponse.text(), /window\.__remoteScreenTick = update/);
+    const clockHtml = await renderResponse.text();
+    assert.match(clockHtml, /window\.__remoteScreenTick = update/);
+    assert.match(clockHtml, /HEAD OFFICE/);
+    assert.match(clockHtml, /Welcome to our office/);
+    assert.match(clockHtml, /data-clock-layout="analog"/);
+    const savedClock = await MediaModel.findById(createAppPayload.app._id).lean();
+    assert.equal(savedClock?.appConfig?.timezone, "Asia/Tokyo");
+    assert.equal(savedClock?.appConfig?.heading, "HEAD OFFICE");
+    assert.equal(savedClock?.appConfig?.format, "12h");
 
     const unversionedRender = await fetch(`${baseUrl}/api/v1/apps/render/${createAppPayload.app._id}`);
     assert.match(unversionedRender.headers.get("cache-control") ?? "", /must-revalidate/);
+  });
+
+  it("persists weather text and settings and publishes the locked design", async () => {
+    const baseUrl=await startServer();
+    const headers={authorization:`Bearer ${makeUserToken("tenant_owner")}`,"content-type":"application/json"};
+    const created=await fetch(`${baseUrl}/api/v1/apps/create-app`,{method:"POST",headers,body:JSON.stringify({name:"Office Weather",appType:"weather",config:{city:"London",heading:"OFFICE WEATHER",caption:"Welcome",layout:"split",theme:"paper"}})});
+    assert.equal(created.status,201);
+    const {app}=await created.json() as {app:{_id:string}};
+    const updated=await fetch(`${baseUrl}/api/v1/apps/update-app/${app._id}`,{method:"PUT",headers,body:JSON.stringify({name:"Office Weather",config:{city:"Paris",heading:"PARIS OFFICE",caption:"Have a lovely day",layout:"minimal",units:"imperial",forecastDays:3,theme:"sunset"}})});
+    assert.equal(updated.status,200);
+    const saved=await MediaModel.findById(app._id).lean();
+    assert.equal(saved?.appConfig?.city,"Paris");
+    assert.equal(saved?.appConfig?.heading,"PARIS OFFICE");
+    assert.equal(saved?.appConfig?.units,"imperial");
+    const rendered=await fetch(`${baseUrl}/api/v1/apps/render/${app._id}`);
+    assert.equal(rendered.status,200);
+    const html=await rendered.text();
+    assert.match(html,/PARIS OFFICE/);
+    assert.match(html,/Have a lovely day/);
+    assert.match(html,/data-theme="paper" data-layout="minimal"/);
+  });
+
+  it("persists meeting edits and publishes the chosen event layout",async()=>{
+    const baseUrl=await startServer();
+    const headers={authorization:`Bearer ${makeUserToken("tenant_owner")}`,"content-type":"application/json"};
+    const created=await fetch(`${baseUrl}/api/v1/apps/create-app`,{method:"POST",headers,body:JSON.stringify({name:"Meetings",appType:"events",config:{heading:"Office",layout:"agenda"}})});
+    assert.equal(created.status,201);
+    const {app}=await created.json() as {app:{_id:string}};
+    const config={heading:"Board Schedule",layout:"cards",timezone:"Europe/London",theme:"paper",events:[{id:"board",title:"Board Meeting",host:"Executive Team",room:"London Room",start:"09:00",end:"11:00",direction:"right"}]};
+    const updated=await fetch(`${baseUrl}/api/v1/apps/update-app/${app._id}`,{method:"PUT",headers,body:JSON.stringify({name:"Meetings",config})});
+    assert.equal(updated.status,200);
+    const saved=await MediaModel.findById(app._id).lean();
+    assert.equal(saved?.appConfig?.timezone,"Europe/London");
+    assert.equal(saved?.appConfig?.heading,"Board Schedule");
+    const response=await fetch(`${baseUrl}/api/v1/apps/render/${app._id}`);
+    assert.equal(response.status,200);
+    const html=await response.text();
+    assert.match(html,/Board Meeting/);assert.match(html,/London Room/);assert.match(html,/data-layout="cards"/);
   });
 
   it("deletes a playlist and clears it from assigned devices", async () => {

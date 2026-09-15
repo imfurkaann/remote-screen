@@ -10,10 +10,10 @@ test("restaurant menu blocks can be selected, moved, resized and kept per orient
   await page.waitForURL(/\/screens/);
 
   await page.goto(`${baseUrl}/apps/configure?type=restaurant-menu`);
-  const heading = page.getByRole("button", { name: "Menü başlığı metin bloğu" });
+  const heading = page.getByRole("button", { name: "Menu heading text block" });
   await expect(heading).toBeVisible();
   await heading.click();
-  await expect(page.getByRole("button", { name: "Yazıyı büyüt" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Increase font size" })).toBeVisible();
 
   const before = await heading.boundingBox();
   if (!before) throw new Error("Menu heading does not have a visible bounding box");
@@ -36,7 +36,7 @@ test("restaurant menu blocks can be selected, moved, resized and kept per orient
   expect(resized?.width).toBeGreaterThan(moved.width + 18);
 
   await page.getByRole("button", { name: "9:16" }).click();
-  await expect(page.getByRole("button", { name: "Menü başlığı metin bloğu" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Menu heading text block" })).toBeVisible();
   await page.getByRole("button", { name: "16:9" }).click();
   const restored = await heading.boundingBox();
   expect(restored?.x).toBeGreaterThan(before.x + 20);

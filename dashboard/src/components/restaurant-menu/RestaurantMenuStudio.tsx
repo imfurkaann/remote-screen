@@ -1,5 +1,5 @@
 "use client";
-import { createPizzaMenuTemplate, MENU_DECORATIONS, menuDecorationSource } from "@/lib/pizza-menu-template";
+import { createPizzaMenuTemplate, createSnackMenuTemplate, MENU_DECORATIONS, menuDecorationSource } from "@/lib/pizza-menu-template";
 import { createClientId } from "@/lib/client-uuid";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -94,27 +94,27 @@ const EMPTY_EDITOR: RestaurantMenuEditorConfig = {
 };
 
 const THEMES = {
-  snack: { name: "Snack Menu", note: "Mavi dama desenli", bg: "#f8f9ff", surface: "#f8f9ff", text: "#3861b0", muted: "#3861b0", line: "transparent", accent: "#3861b0" },
-  paper: { name: "Pizza Menü", note: "Beyaz, sade ve düzenlenebilir", bg: "#ffffff", surface: "#ffffff", text: "#000000", muted: "#000000", line: "transparent", accent: "#bd3034" },
-  charcoal: { name: "Antrasit", note: "Modern ve güçlü", bg: "linear-gradient(145deg,#111315,#1d2225 58%,#272e31)", surface: "rgba(255,255,255,.055)", text: "#f7f5ef", muted: "#b8b5ad", line: "rgba(255,255,255,.11)", accent: "#f3c969" },
-  cream: { name: "Krem", note: "Sade ve premium", bg: "linear-gradient(145deg,#fffdf7,#f4ecdd 62%,#eadbc4)", surface: "rgba(255,255,255,.7)", text: "#29231d", muted: "#786d62", line: "rgba(41,35,29,.12)", accent: "#9a5b2b" },
-  terracotta: { name: "Terakota", note: "Sıcak ve iştah açıcı", bg: "linear-gradient(145deg,#3b1712,#752d22 55%,#a94734)", surface: "rgba(255,255,255,.065)", text: "#fff8f2", muted: "#f4c7ba", line: "rgba(255,255,255,.13)", accent: "#ffd08a" },
-  forest: { name: "Orman", note: "Doğal ve seçkin", bg: "linear-gradient(145deg,#0b241d,#164537 58%,#23634f)", surface: "rgba(255,255,255,.06)", text: "#f2fbf6", muted: "#b7d8ca", line: "rgba(255,255,255,.13)", accent: "#e8ce7d" }
+  snack: { name: "Snack Menu", note: "Blue checkerboard pattern", bg: "#f8f9ff", surface: "#f8f9ff", text: "#3861b0", muted: "#3861b0", line: "transparent", accent: "#3861b0" },
+  paper: { name: "Pizza Menu", note: "Clean, white, and editable", bg: "#ffffff", surface: "#ffffff", text: "#000000", muted: "#000000", line: "transparent", accent: "#bd3034" },
+  charcoal: { name: "Charcoal", note: "Modern and bold", bg: "linear-gradient(145deg,#111315,#1d2225 58%,#272e31)", surface: "rgba(255,255,255,.055)", text: "#f7f5ef", muted: "#b8b5ad", line: "rgba(255,255,255,.11)", accent: "#f3c969" },
+  cream: { name: "Cream", note: "Clean and premium", bg: "linear-gradient(145deg,#fffdf7,#f4ecdd 62%,#eadbc4)", surface: "rgba(255,255,255,.7)", text: "#29231d", muted: "#786d62", line: "rgba(41,35,29,.12)", accent: "#9a5b2b" },
+  terracotta: { name: "Terracotta", note: "Warm and inviting", bg: "linear-gradient(145deg,#3b1712,#752d22 55%,#a94734)", surface: "rgba(255,255,255,.065)", text: "#fff8f2", muted: "#f4c7ba", line: "rgba(255,255,255,.13)", accent: "#ffd08a" },
+  forest: { name: "Forest", note: "Natural and refined", bg: "linear-gradient(145deg,#0b241d,#164537 58%,#23634f)", surface: "rgba(255,255,255,.06)", text: "#f2fbf6", muted: "#b7d8ca", line: "rgba(255,255,255,.13)", accent: "#e8ce7d" }
 } as const;
 
 const BASE_CATEGORIES: RestaurantMenuCategory[] = [
-  { id: "starters", name: "Başlangıçlar" },
-  { id: "mains", name: "Ana Yemekler" },
-  { id: "drinks", name: "İçecekler" }
+  { id: "starters", name: "Starters" },
+  { id: "mains", name: "Main Courses" },
+  { id: "drinks", name: "Drinks" }
 ];
 
 const BASE_ITEMS: RestaurantMenuItem[] = [
-  { id: "soup", categoryId: "starters", name: "Günün Çorbası", description: "Mevsim ürünleri ve taze otlar", price: "140", badge: "chef", available: true },
-  { id: "bruschetta", categoryId: "starters", name: "Domatesli Bruschetta", description: "Ekşi maya, fesleğen ve zeytinyağı", price: "210", badge: "vegan", available: true },
-  { id: "beef", categoryId: "mains", name: "Dana Bonfile", description: "Patates püresi, ızgara sebze ve demi-glace", price: "620", badge: "popular", available: true },
-  { id: "pasta", categoryId: "mains", name: "Trüflü Makarna", description: "Taze makarna, parmesan ve trüf kreması", price: "390", badge: "new", available: true },
-  { id: "lemonade", categoryId: "drinks", name: "Ev Yapımı Limonata", description: "Taze nane ile", price: "120", badge: "none", available: true },
-  { id: "coffee", categoryId: "drinks", name: "Filtre Kahve", description: "Günün çekirdeği", price: "110", badge: "none", available: true }
+  { id: "soup", categoryId: "starters", name: "Soup of the Day", description: "Seasonal produce and fresh herbs", price: "140", badge: "chef", available: true },
+  { id: "bruschetta", categoryId: "starters", name: "Tomato Bruschetta", description: "Sourdough, basil, and olive oil", price: "210", badge: "vegan", available: true },
+  { id: "beef", categoryId: "mains", name: "Beef Tenderloin", description: "Mashed potato, grilled vegetables, and demi-glace", price: "620", badge: "popular", available: true },
+  { id: "pasta", categoryId: "mains", name: "Truffle Pasta", description: "Fresh pasta, parmesan, and truffle cream", price: "390", badge: "new", available: true },
+  { id: "lemonade", categoryId: "drinks", name: "Homemade Lemonade", description: "With fresh mint", price: "120", badge: "none", available: true },
+  { id: "coffee", categoryId: "drinks", name: "Filter Coffee", description: "Daily selected beans", price: "110", badge: "none", available: true }
 ];
 
 export const DEFAULT_RESTAURANT_MENU_CONFIG: RestaurantMenuConfig = createPizzaMenuTemplate();
@@ -173,14 +173,14 @@ function normalizeEditor(value: unknown): RestaurantMenuEditorConfig {
       if (!raw || typeof raw !== "object") return [];
       const item = raw as Record<string, unknown>;
       const preset: RestaurantMenuTextPreset = item.preset === "heading" || item.preset === "subheading" || item.preset === "body" ? item.preset : "text";
-      return [{ id: safeId(item.id, `text-${index + 1}`), text: editable(item.text, "Metninizi yazın", 500), preset }];
+      return [{ id: safeId(item.id, `text-${index + 1}`), text: editable(item.text, "Enter your text", 500), preset }];
     }) : [],
     imageElements: Array.isArray(editor.imageElements) ? editor.imageElements.slice(0, 40).flatMap((raw, index) => {
       if (!raw || typeof raw !== "object") return [];
       const item = raw as Record<string, unknown>;
       const source = normalizeUploadedSource(item.source);
       if (!source) return [];
-      return [{ id: safeId(item.id, `image-${index + 1}`), name: editable(item.name, `Görsel ${index + 1}`, 180), source }];
+      return [{ id: safeId(item.id, `image-${index + 1}`), name: editable(item.name, `Image ${index + 1}`, 180), source }];
     }) : [],
     layouts: {
       landscape: normalizeCanvasLayout(layouts.landscape),
@@ -243,28 +243,62 @@ function Choice({ selected, title, note, onClick }: { selected: boolean; title: 
 }
 
 const PRESETS: Record<"restaurant" | "cafe" | "breakfast", Pick<RestaurantMenuConfig, "heading" | "subtitle" | "categories" | "items">> = {
-  restaurant: { heading: "Günün Menüsü", subtitle: "Mevsiminde, taze ve özenle hazırlanmış lezzetler.", categories: BASE_CATEGORIES, items: BASE_ITEMS },
+  restaurant: { heading: "Today's Menu", subtitle: "Fresh, seasonal dishes prepared with care.", categories: BASE_CATEGORIES, items: BASE_ITEMS },
   cafe: {
-    heading: "Kahve & Tatlı", subtitle: "Günün her anına eşlik eden taze tatlar.",
-    categories: [{ id: "coffee", name: "Kahveler" }, { id: "cold", name: "Soğuk İçecekler" }, { id: "dessert", name: "Tatlılar" }],
+    heading: "Coffee & Desserts", subtitle: "Fresh flavors for every moment of the day.",
+    categories: [{ id: "coffee", name: "Coffee" }, { id: "cold", name: "Cold Drinks" }, { id: "dessert", name: "Desserts" }],
     items: [
-      { id: "latte", categoryId: "coffee", name: "Cafe Latte", description: "Çift espresso ve ipeksi süt", price: "145", badge: "popular", available: true },
-      { id: "filter", categoryId: "coffee", name: "Filtre Kahve", description: "Günün çekirdeği", price: "120", badge: "none", available: true },
-      { id: "coldbrew", categoryId: "cold", name: "Cold Brew", description: "18 saat soğuk demleme", price: "165", badge: "new", available: true },
-      { id: "cheesecake", categoryId: "dessert", name: "San Sebastian", description: "Akışkan dokulu fırın cheesecake", price: "220", badge: "chef", available: true }
+      { id: "latte", categoryId: "coffee", name: "Café Latte", description: "Double espresso and silky milk", price: "145", badge: "popular", available: true },
+      { id: "filter", categoryId: "coffee", name: "Filter Coffee", description: "Daily selected beans", price: "120", badge: "none", available: true },
+      { id: "coldbrew", categoryId: "cold", name: "Cold Brew", description: "Cold brewed for 18 hours", price: "165", badge: "new", available: true },
+      { id: "cheesecake", categoryId: "dessert", name: "San Sebastian", description: "Creamy baked cheesecake", price: "220", badge: "chef", available: true }
     ]
   },
   breakfast: {
-    heading: "Kahvaltı Menüsü", subtitle: "Güne taze, yerel ve doyurucu bir başlangıç.",
-    categories: [{ id: "plates", name: "Kahvaltılar" }, { id: "eggs", name: "Yumurtalar" }, { id: "drinks", name: "İçecekler" }],
+    heading: "Breakfast Menu", subtitle: "A fresh, local, and satisfying start to the day.",
+    categories: [{ id: "plates", name: "Breakfast Plates" }, { id: "eggs", name: "Eggs" }, { id: "drinks", name: "Drinks" }],
     items: [
-      { id: "spread", categoryId: "plates", name: "Serpme Kahvaltı", description: "İki kişilik zengin kahvaltı seçkisi", price: "790", badge: "popular", available: true },
-      { id: "healthy", categoryId: "plates", name: "Fit Tabak", description: "Avokado, lor, yumurta ve yeşillik", price: "320", badge: "new", available: true },
-      { id: "menemen", categoryId: "eggs", name: "Menemen", description: "Domates, biber ve çiftlik yumurtası", price: "240", badge: "chef", available: true },
-      { id: "tea", categoryId: "drinks", name: "Sınırsız Çay", description: "Kahvaltı boyunca", price: "90", badge: "none", available: true }
+      { id: "spread", categoryId: "plates", name: "Breakfast Spread", description: "A generous breakfast selection for two", price: "790", badge: "popular", available: true },
+      { id: "healthy", categoryId: "plates", name: "Healthy Plate", description: "Avocado, curd cheese, egg, and greens", price: "320", badge: "new", available: true },
+      { id: "menemen", categoryId: "eggs", name: "Menemen", description: "Tomato, peppers, and farm eggs", price: "240", badge: "chef", available: true },
+      { id: "tea", categoryId: "drinks", name: "Unlimited Tea", description: "Served throughout breakfast", price: "90", badge: "none", available: true }
     ]
   }
 };
+
+export type RestaurantMenuTemplateId = "pizza" | "snack" | "restaurant" | "cafe" | "breakfast";
+
+export const RESTAURANT_MENU_TEMPLATES: { id: RestaurantMenuTemplateId; name: string; description: string; orientation: "landscape" | "portrait" }[] = [
+  { id: "pizza", name: "Pizza Menu", description: "A modern illustrated A4 pizza menu", orientation: "portrait" },
+  { id: "snack", name: "Snack Menu", description: "A playful retro layout for snacks", orientation: "portrait" },
+  { id: "restaurant", name: "Restaurant", description: "A classic layout for starters, mains, and drinks", orientation: "landscape" },
+  { id: "cafe", name: "Café", description: "Cards focused on coffee, cold drinks, and desserts", orientation: "landscape" },
+  { id: "breakfast", name: "Breakfast", description: "A warm layout for breakfast plates and drinks", orientation: "landscape" }
+];
+
+export function createRestaurantMenuTemplate(templateId: RestaurantMenuTemplateId): RestaurantMenuConfig {
+  if (templateId === "pizza") return normalizeRestaurantMenuConfig(structuredClone(DEFAULT_RESTAURANT_MENU_CONFIG));
+  if (templateId === "snack") return normalizeRestaurantMenuConfig(createSnackMenuTemplate());
+
+  const preset = PRESETS[templateId];
+  const appearances: Record<typeof templateId, Pick<RestaurantMenuConfig, "theme" | "layout" | "accentColor">> = {
+    restaurant: { theme: "charcoal", layout: "columns", accentColor: "#d6a75f" },
+    cafe: { theme: "cream", layout: "board", accentColor: "#9a5b2b" },
+    breakfast: { theme: "terracotta", layout: "editorial", accentColor: "#c65d3b" }
+  };
+  return normalizeRestaurantMenuConfig({
+    restaurantName: templateId === "restaurant" ? "TABLE & FLAME" : templateId === "cafe" ? "CORNER CAFÉ" : "GOOD MORNING",
+    ...preset,
+    ...appearances[templateId],
+    locale: "en",
+    currency: "₺",
+    currencyPosition: "after",
+    showDescriptions: true,
+    showUnavailable: false,
+    footer: "Enjoy your meal",
+    editor: EMPTY_EDITOR
+  });
+}
 
 export function RestaurantMenuSettings({ config: raw, onChange }: { config: Record<string, unknown>; onChange: (next: RestaurantMenuConfig) => void }) {
   const config = normalizeRestaurantMenuConfig(raw);
@@ -285,52 +319,52 @@ export function RestaurantMenuSettings({ config: raw, onChange }: { config: Reco
   const patchItem = (index: number, patch: Partial<RestaurantMenuItem>) => set("items", config.items.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item));
   const addItem = () => config.items.length < 24 && set("items", [...config.items, { id: `item-${Date.now().toString(36)}`, categoryId: config.categories[0]!.id, name: config.locale === "tr" ? "Yeni ürün" : "New item", description: "", price: "", badge: "none", available: true }]);
   return <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-    <div><strong style={{ color: "#0f172a" }}>Restoran Menüsü</strong><p style={{ margin: "5px 0 0", color: "#64748b", fontSize: 11, lineHeight: 1.5 }}>Fiyatları ve ürünleri saniyeler içinde güncellenebilen profesyonel dijital menü oluşturun.</p></div>
+    <div><strong style={{ color: "#0f172a" }}>Restaurant Menu</strong><p style={{ margin: "5px 0 0", color: "#64748b", fontSize: 11, lineHeight: 1.5 }}>Create a professional digital menu with instantly editable prices and products.</p></div>
     <section style={section}>
-      <span style={label}>Hızlı şablon</span><div style={{ display: "flex", gap: 8 }}><Choice selected={false} title="Restoran" onClick={() => applyPreset("restaurant")} /><Choice selected={false} title="Kafe" onClick={() => applyPreset("cafe")} /><Choice selected={false} title="Kahvaltı" onClick={() => applyPreset("breakfast")} /></div>
-      <small style={{ color: "#94a3b8", lineHeight: 1.45 }}>Şablon seçimi mevcut kategori ve ürün listesini değiştirir.</small>
+      <span style={label}>Quick template</span><div style={{ display: "flex", gap: 8 }}><Choice selected={false} title="Restaurant" onClick={() => applyPreset("restaurant")} /><Choice selected={false} title="Café" onClick={() => applyPreset("cafe")} /><Choice selected={false} title="Breakfast" onClick={() => applyPreset("breakfast")} /></div>
+      <small style={{ color: "#94a3b8", lineHeight: 1.45 }}>Choosing a template replaces the current categories and products.</small>
     </section>
     <section style={section}>
-      <label style={label}>İşletme adı<input maxLength={80} value={config.restaurantName} onChange={event => set("restaurantName", event.target.value)} style={{ ...input, display: "block", marginTop: 6 }} /></label>
-      <label style={label}>Menü başlığı<input maxLength={100} value={config.heading} onChange={event => set("heading", event.target.value)} style={{ ...input, display: "block", marginTop: 6 }} /></label>
-      <label style={label}>Kısa açıklama<textarea maxLength={220} rows={2} value={config.subtitle} onChange={event => set("subtitle", event.target.value)} style={{ ...input, display: "block", marginTop: 6, resize: "vertical" }} /></label>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}><select aria-label="Dil" value={config.locale} onChange={event => set("locale", event.target.value as RestaurantMenuConfig["locale"])} style={input}><option value="tr">Türkçe</option><option value="en">English</option></select><select aria-label="Para birimi" value={config.currency} onChange={event => { const currency = event.target.value as RestaurantMenuConfig["currency"]; onChange({ ...config, currency, currencyPosition: currency === "$" || currency === "£" ? "before" : "after" }); }} style={input}>{["₺", "$", "€", "£"].map(value => <option key={value}>{value}</option>)}</select></div>
+      <label style={label}>Business name<input maxLength={80} value={config.restaurantName} onChange={event => set("restaurantName", event.target.value)} style={{ ...input, display: "block", marginTop: 6 }} /></label>
+      <label style={label}>Menu heading<input maxLength={100} value={config.heading} onChange={event => set("heading", event.target.value)} style={{ ...input, display: "block", marginTop: 6 }} /></label>
+      <label style={label}>Short description<textarea maxLength={220} rows={2} value={config.subtitle} onChange={event => set("subtitle", event.target.value)} style={{ ...input, display: "block", marginTop: 6, resize: "vertical" }} /></label>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}><select aria-label="Language" value={config.locale} onChange={event => set("locale", event.target.value as RestaurantMenuConfig["locale"])} style={input}><option value="tr">Turkish</option><option value="en">English</option></select><select aria-label="Currency" value={config.currency} onChange={event => { const currency = event.target.value as RestaurantMenuConfig["currency"]; onChange({ ...config, currency, currencyPosition: currency === "$" || currency === "£" ? "before" : "after" }); }} style={input}>{["₺", "$", "€", "£"].map(value => <option key={value}>{value}</option>)}</select></div>
     </section>
     <section style={section}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><span style={label}>Kategoriler ({config.categories.length}/6)</span><button type="button" onClick={addCategory} disabled={config.categories.length >= 6} style={{ padding: "7px 10px", border: "1px solid #cbd5e1", background: "#f8fafc", color: "#334155" }}>+ Ekle</button></div>
-      {config.categories.map((category, index) => <div key={category.id} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 7 }}><input aria-label={`Kategori ${index + 1}`} maxLength={60} value={category.name} onChange={event => patchCategory(index, event.target.value)} style={input} /><button type="button" aria-label={`Kategori ${index + 1} sil`} disabled={config.categories.length <= 1} onClick={() => removeCategory(index)} className="studio-delete-button">Sil</button></div>)}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><span style={label}>Categories ({config.categories.length}/6)</span><button type="button" onClick={addCategory} disabled={config.categories.length >= 6} style={{ padding: "7px 10px", border: "1px solid #cbd5e1", background: "#f8fafc", color: "#334155" }}>+ Add</button></div>
+      {config.categories.map((category, index) => <div key={category.id} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 7 }}><input aria-label={`Category ${index + 1}`} maxLength={60} value={category.name} onChange={event => patchCategory(index, event.target.value)} style={input} /><button type="button" aria-label={`Delete category ${index + 1}`} disabled={config.categories.length <= 1} onClick={() => removeCategory(index)} className="studio-delete-button">Delete</button></div>)}
     </section>
     <section style={section}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><span style={label}>Ürünler ({config.items.length}/24)</span><button type="button" onClick={addItem} disabled={config.items.length >= 24} style={{ padding: "7px 10px", border: "1px solid #cbd5e1", background: "#f8fafc", color: "#334155" }}>+ Ürün ekle</button></div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><span style={label}>Products ({config.items.length}/24)</span><button type="button" onClick={addItem} disabled={config.items.length >= 24} style={{ padding: "7px 10px", border: "1px solid #cbd5e1", background: "#f8fafc", color: "#334155" }}>+ Add product</button></div>
       {config.items.map((item, index) => <div key={item.id} style={{ display: "grid", gap: 8, padding: 11, border: "1px solid #e2e8f0", borderRadius: 11, background: "#f8fafc" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><b style={{ fontSize: 11, color: "#475569" }}>Ürün {index + 1}</b><button type="button" disabled={config.items.length <= 1} onClick={() => set("items", config.items.filter((_, itemIndex) => itemIndex !== index))} className="studio-delete-button">Sil</button></div>
-        <div className="studio-field-grid"><input aria-label="Ürün adı" maxLength={90} value={item.name} onChange={event => patchItem(index, { name: event.target.value })} placeholder="Ürün adı" style={input} /><input aria-label="Fiyat" maxLength={24} value={item.price} onChange={event => patchItem(index, { price: event.target.value })} placeholder="0,00" inputMode="decimal" style={input} /></div>
-        <input aria-label="Ürün açıklaması" maxLength={180} value={item.description} onChange={event => patchItem(index, { description: event.target.value })} placeholder="Kısa ürün açıklaması" style={input} />
-        <div className="studio-field-grid"><select aria-label="Kategori" value={item.categoryId} onChange={event => patchItem(index, { categoryId: event.target.value })} style={input}>{config.categories.map(category => <option key={category.id} value={category.id}>{category.name || "Adsız kategori"}</option>)}</select><select aria-label="Ürün etiketi" value={item.badge} onChange={event => patchItem(index, { badge: event.target.value as MenuBadge })} style={input}><option value="none">Etiketsiz</option><option value="popular">Popüler</option><option value="new">Yeni</option><option value="chef">Şefin seçimi</option><option value="vegan">Vegan</option></select></div>
-        <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11, color: "#475569" }}>Satışta<input type="checkbox" checked={item.available} onChange={event => patchItem(index, { available: event.target.checked })} /></label>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><b style={{ fontSize: 11, color: "#475569" }}>Product {index + 1}</b><button type="button" disabled={config.items.length <= 1} onClick={() => set("items", config.items.filter((_, itemIndex) => itemIndex !== index))} className="studio-delete-button">Delete</button></div>
+        <div className="studio-field-grid"><input aria-label="Product name" maxLength={90} value={item.name} onChange={event => patchItem(index, { name: event.target.value })} placeholder="Product name" style={input} /><input aria-label="Price" maxLength={24} value={item.price} onChange={event => patchItem(index, { price: event.target.value })} placeholder="0.00" inputMode="decimal" style={input} /></div>
+        <input aria-label="Product description" maxLength={180} value={item.description} onChange={event => patchItem(index, { description: event.target.value })} placeholder="Short product description" style={input} />
+        <div className="studio-field-grid"><select aria-label="Category" value={item.categoryId} onChange={event => patchItem(index, { categoryId: event.target.value })} style={input}>{config.categories.map(category => <option key={category.id} value={category.id}>{category.name || "Untitled category"}</option>)}</select><select aria-label="Product badge" value={item.badge} onChange={event => patchItem(index, { badge: event.target.value as MenuBadge })} style={input}><option value="none">No badge</option><option value="popular">Popular</option><option value="new">New</option><option value="chef">Chef's pick</option><option value="vegan">Vegan</option></select></div>
+        <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11, color: "#475569" }}>Available<input type="checkbox" checked={item.available} onChange={event => patchItem(index, { available: event.target.checked })} /></label>
       </div>)}
     </section>
     <section style={section}>
-      <span style={label}>Yerleşim</span><div style={{ display: "flex", gap: 8 }}><Choice selected={config.layout === "columns"} title="Sütunlar" note="Klasik menü" onClick={() => set("layout", "columns")} /><Choice selected={config.layout === "board"} title="Pano" note="Ürün kartları" onClick={() => set("layout", "board")} /><Choice selected={config.layout === "editorial"} title="Editoryal" note="Premium görünüm" onClick={() => set("layout", "editorial")} /></div>
-      <span style={label}>Tema</span><div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 8 }}>{(Object.keys(THEMES) as RestaurantMenuConfig["theme"][]).map(key => <button type="button" key={key} aria-pressed={config.theme === key} onClick={() => onChange({ ...config, theme: key, accentColor: THEMES[key].accent })} style={{ padding: 9, textAlign: "left", border: config.theme === key ? "1px solid #9a5b2b" : "1px solid #dbe3ec", background: config.theme === key ? "#fff7ed" : "#fff" }}><span style={{ display: "block", height: 27, borderRadius: 7, background: THEMES[key].bg }} /><b style={{ display: "block", marginTop: 6, fontSize: 10, color: "#334155" }}>{THEMES[key].name}</b><small style={{ color: "#94a3b8", fontSize: 8 }}>{THEMES[key].note}</small></button>)}</div>
-      <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11, color: "#475569" }}>Açıklamaları göster<input type="checkbox" checked={config.showDescriptions} onChange={event => set("showDescriptions", event.target.checked)} /></label>
-      <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11, color: "#475569" }}>Tükenen ürünleri göster<input type="checkbox" checked={config.showUnavailable} onChange={event => set("showUnavailable", event.target.checked)} /></label>
-      <label style={label}>Alt bilgi<textarea maxLength={220} rows={2} value={config.footer} onChange={event => set("footer", event.target.value)} style={{ ...input, display: "block", marginTop: 6, resize: "vertical" }} /></label>
+      <span style={label}>Layout</span><div style={{ display: "flex", gap: 8 }}><Choice selected={config.layout === "columns"} title="Columns" note="Classic menu" onClick={() => set("layout", "columns")} /><Choice selected={config.layout === "board"} title="Board" note="Product cards" onClick={() => set("layout", "board")} /><Choice selected={config.layout === "editorial"} title="Editorial" note="Premium look" onClick={() => set("layout", "editorial")} /></div>
+      <span style={label}>Theme</span><div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 8 }}>{(Object.keys(THEMES) as RestaurantMenuConfig["theme"][]).map(key => <button type="button" key={key} aria-pressed={config.theme === key} onClick={() => onChange({ ...config, theme: key, accentColor: THEMES[key].accent })} style={{ padding: 9, textAlign: "left", border: config.theme === key ? "1px solid #9a5b2b" : "1px solid #dbe3ec", background: config.theme === key ? "#fff7ed" : "#fff" }}><span style={{ display: "block", height: 27, borderRadius: 7, background: THEMES[key].bg }} /><b style={{ display: "block", marginTop: 6, fontSize: 10, color: "#334155" }}>{THEMES[key].name}</b><small style={{ color: "#94a3b8", fontSize: 8 }}>{THEMES[key].note}</small></button>)}</div>
+      <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11, color: "#475569" }}>Show descriptions<input type="checkbox" checked={config.showDescriptions} onChange={event => set("showDescriptions", event.target.checked)} /></label>
+      <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11, color: "#475569" }}>Show unavailable products<input type="checkbox" checked={config.showUnavailable} onChange={event => set("showUnavailable", event.target.checked)} /></label>
+      <label style={label}>Footer<textarea maxLength={220} rows={2} value={config.footer} onChange={event => set("footer", event.target.value)} style={{ ...input, display: "block", marginTop: 6, resize: "vertical" }} /></label>
     </section>
     <section style={section}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}><span style={label}>Serbest yerleşim</span><span style={{ padding: "4px 7px", borderRadius: 999, background: "#ecfdf5", color: "#047857", fontSize: 9, fontWeight: 800 }}>CANVA TİPİ</span></div>
-      <p style={{ margin: 0, color: "#64748b", fontSize: 10, lineHeight: 1.55 }}>Önizlemede bir metin bloğunu seçin, sürükleyerek taşıyın; sağ alt tutamacından boyutlandırın. Yatay ve dikey düzenler ayrı kaydedilir.</p>
-      <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11, color: "#475569" }}>Akıllı ızgaraya hizala<input type="checkbox" checked={config.editor.snapToGrid} onChange={event => set("editor", { ...config.editor, snapToGrid: event.target.checked })} /></label>
-      <button type="button" onClick={() => set("editor", { ...EMPTY_EDITOR, snapToGrid: config.editor.snapToGrid, layouts: { landscape: {}, portrait: {} } })} style={{ minHeight: 40, border: "1px solid #cbd5e1", borderRadius: 10, background: "#f8fafc", color: "#334155", fontSize: 11, fontWeight: 750 }}>Tüm yerleşimi otomatik düzene döndür</button>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}><span style={label}>Freeform layout</span><span style={{ padding: "4px 7px", borderRadius: 999, background: "#ecfdf5", color: "#047857", fontSize: 9, fontWeight: 800 }}>CANVAS STYLE</span></div>
+      <p style={{ margin: 0, color: "#64748b", fontSize: 10, lineHeight: 1.55 }}>Select a text block in the preview and drag it to move; resize it from the bottom-right handle. Landscape and portrait layouts are saved separately.</p>
+      <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11, color: "#475569" }}>Snap to smart grid<input type="checkbox" checked={config.editor.snapToGrid} onChange={event => set("editor", { ...config.editor, snapToGrid: event.target.checked })} /></label>
+      <button type="button" onClick={() => set("editor", { ...EMPTY_EDITOR, snapToGrid: config.editor.snapToGrid, layouts: { landscape: {}, portrait: {} } })} style={{ minHeight: 40, border: "1px solid #cbd5e1", borderRadius: 10, background: "#f8fafc", color: "#334155", fontSize: 11, fontWeight: 750 }}>Reset all layout to automatic</button>
     </section>
   </div>;
 }
 
 const TEXT_PRESETS: Record<RestaurantMenuTextPreset, { label: string; text: string; fontScale: number; width: number; height: number }> = {
-  text: { label: "Metin kutusu ekle", text: "Metninizi yazın", fontScale: 1, width: 30, height: 7 },
-  heading: { label: "Başlık ekle", text: "Başlığınızı yazın", fontScale: 2.2, width: 52, height: 12 },
-  subheading: { label: "Alt başlık ekle", text: "Alt başlığınızı yazın", fontScale: 1.45, width: 42, height: 9 },
-  body: { label: "Birkaç satır gövde metni ekle", text: "Metninizi buraya yazın. Birkaç satırlık açıklama ekleyebilirsiniz.", fontScale: .85, width: 38, height: 13 }
+  text: { label: "Add text box", text: "Enter your text", fontScale: 1, width: 30, height: 7 },
+  heading: { label: "Add heading", text: "Enter your heading", fontScale: 2.2, width: 52, height: 12 },
+  subheading: { label: "Add subheading", text: "Enter your subheading", fontScale: 1.45, width: 42, height: 9 },
+  body: { label: "Add body text", text: "Enter your text here. You can add a few lines of description.", fontScale: .85, width: 38, height: 13 }
 };
 
 function transformMenuText(value: string, transform: RestaurantMenuCanvasElement["textTransform"]): string {
@@ -377,7 +411,7 @@ export function RestaurantMenuTextTools({ config: raw, onChange }: { config: Rec
       if (query.trim()) params.set("search", query.trim());
       const response = await fetch(`/api/content/media?${params}`, { cache: "no-store" });
       const payload = await response.json().catch(() => ({})) as { media?: RestaurantUploadMedia[]; message?: string };
-      if (!response.ok) throw new Error(payload.message || "Görseller yüklenemedi.");
+      if (!response.ok) throw new Error(payload.message || "Images could not be loaded.");
       setUploads((payload.media ?? []).flatMap(item => {
         const source = normalizeUploadedSource(item.media_url);
         return item.mime_type.startsWith("image/") && source ? [{ ...item, media_url: source }] : [];
@@ -396,7 +430,7 @@ export function RestaurantMenuTextTools({ config: raw, onChange }: { config: Rec
   }, [panel, search]);
 
   const addText = (preset: RestaurantMenuTextPreset) => {
-    if (config.editor.textElements.length >= 40) { window.alert("En fazla 40 metin öğesi ekleyebilirsiniz."); return; }
+    if (config.editor.textElements.length >= 40) { window.alert("You can add up to 40 text elements."); return; }
     const definition = TEXT_PRESETS[preset];
     const id = `text-${Date.now().toString(36)}`;
     const item: RestaurantMenuTextElement = { id, text: definition.text, preset };
@@ -418,7 +452,7 @@ export function RestaurantMenuTextTools({ config: raw, onChange }: { config: Rec
   };
 
   const addImage = (media: RestaurantUploadMedia) => {
-    if (config.editor.imageElements.length >= 40) { setUploadError("En fazla 40 görsel ekleyebilirsiniz."); return; }
+    if (config.editor.imageElements.length >= 40) { setUploadError("You can add up to 40 images."); return; }
     const source = normalizeUploadedSource(media.media_url);
     if (!source) return;
     const id = `image-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
@@ -452,9 +486,9 @@ export function RestaurantMenuTextTools({ config: raw, onChange }: { config: Rec
         form.append("file", file);
         const response = await fetch("/api/content/media/upload", { method: "POST", body: form });
         const payload = await response.json().catch(() => ({})) as { media?: RestaurantUploadMedia; message?: string };
-        if (!response.ok || !payload.media) throw new Error(payload.message || `${file.name} yüklenemedi.`);
+        if (!response.ok || !payload.media) throw new Error(payload.message || `${file.name} could not be uploaded.`);
         const source = normalizeUploadedSource(payload.media.media_url);
-        if (!source) throw new Error(`${file.name} için geçerli görsel adresi alınamadı.`);
+        if (!source) throw new Error(`A valid image URL could not be obtained for ${file.name}.`);
         added.push({ ...payload.media, media_url: source });
       }
       setUploads(current => [...added, ...current.filter(item => !added.some(upload => upload.id === item.id))]);
@@ -468,35 +502,35 @@ export function RestaurantMenuTextTools({ config: raw, onChange }: { config: Rec
   return <aside className="restaurant-editor-rail">
     <button type="button" className="restaurant-tool-tile" aria-expanded={panel === "text"} aria-controls="restaurant-text-panel" onClick={() => setPanel(value => value === "text" ? null : "text")}>
       <span className="restaurant-tool-icon">T</span>
-      <span>Metin</span>
+      <span>Text</span>
     </button>
     <button type="button" className="restaurant-tool-tile" aria-expanded={panel === "uploads"} aria-controls="restaurant-upload-panel" onClick={() => setPanel(value => value === "uploads" ? null : "uploads")}>
       <span className="restaurant-tool-icon upload" aria-hidden="true">↥</span>
-      <span>Yüklemeler</span>
+      <span>Uploads</span>
     </button>
     {panel === "text" && <div id="restaurant-text-panel" className="restaurant-text-panel">
-      <div className="restaurant-text-panel-header"><div><strong>Metin ekle</strong><small>Tuvale yeni bir yazı alanı yerleştirin</small></div><button type="button" aria-label="Metin panelini kapat" onClick={() => setPanel(null)}>×</button></div>
-      <button type="button" className="restaurant-add-text-primary" onClick={() => addText("text")}><span>T</span> Metin kutusu ekle</button>
-      <div className="restaurant-text-style-title">Varsayılan metin stilleri</div>
-      <button type="button" className="restaurant-text-preset heading" onClick={() => addText("heading")}>Başlık ekle</button>
-      <button type="button" className="restaurant-text-preset subheading" onClick={() => addText("subheading")}>Alt başlık ekle</button>
-      <button type="button" className="restaurant-text-preset body" onClick={() => addText("body")}>Birkaç satır gövde metni ekle</button>
-      <p className="restaurant-text-panel-tip">Eklenen metni taşımak için sürükleyin, içeriğini değiştirmek için çift tıklayın.</p>
+      <div className="restaurant-text-panel-header"><div><strong>Add text</strong><small>Place a new text area on the canvas</small></div><button type="button" aria-label="Close text panel" onClick={() => setPanel(null)}>×</button></div>
+      <button type="button" className="restaurant-add-text-primary" onClick={() => addText("text")}><span>T</span> Add text box</button>
+      <div className="restaurant-text-style-title">Default text styles</div>
+      <button type="button" className="restaurant-text-preset heading" onClick={() => addText("heading")}>Add heading</button>
+      <button type="button" className="restaurant-text-preset subheading" onClick={() => addText("subheading")}>Add subheading</button>
+      <button type="button" className="restaurant-text-preset body" onClick={() => addText("body")}>Add a few lines of body text</button>
+      <p className="restaurant-text-panel-tip">Drag added text to move it; double-click to edit its content.</p>
     </div>}
     {panel === "uploads" && <div id="restaurant-upload-panel" className="restaurant-text-panel restaurant-upload-panel">
-      <div className="restaurant-text-panel-header"><div><strong>Yüklemeler</strong><small>Görsellerinizi yükleyin ve tasarımda kullanın</small></div><button type="button" aria-label="Yüklemeler panelini kapat" onClick={() => setPanel(null)}>×</button></div>
-      <label className="restaurant-upload-search"><span aria-hidden="true">⌕</span><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Görsellerde arayın" aria-label="Yüklenen görsellerde ara" /></label>
+      <div className="restaurant-text-panel-header"><div><strong>Uploads</strong><small>Upload images and use them in your design</small></div><button type="button" aria-label="Close uploads panel" onClick={() => setPanel(null)}>×</button></div>
+      <label className="restaurant-upload-search"><span aria-hidden="true">⌕</span><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search images" aria-label="Search uploaded images" /></label>
       <input ref={fileInputRef} hidden type="file" accept="image/*" multiple onChange={handleUpload} />
-      <button type="button" className="restaurant-add-text-primary restaurant-upload-primary" disabled={uploading} onClick={() => fileInputRef.current?.click()}>{uploading ? "Yükleniyor…" : "Dosya yükleyin"}</button>
+      <button type="button" className="restaurant-add-text-primary restaurant-upload-primary" disabled={uploading} onClick={() => fileInputRef.current?.click()}>{uploading ? "Uploading…" : "Upload files"}</button>
       {uploadError && <p className="restaurant-upload-error">{uploadError}</p>}
-      <div className="restaurant-upload-title"><span>Görseller</span><small>{uploads.length}</small></div>
-      {loadingUploads ? <div className="restaurant-upload-empty">Görseller yükleniyor…</div> : uploads.length ? <div className="restaurant-upload-grid">
-        {uploads.map(media => <button type="button" key={media.id} title={`${media.filename} — tasarıma ekle`} onClick={() => addImage(media)}>
+      <div className="restaurant-upload-title"><span>Images</span><small>{uploads.length}</small></div>
+      {loadingUploads ? <div className="restaurant-upload-empty">Loading images…</div> : uploads.length ? <div className="restaurant-upload-grid">
+        {uploads.map(media => <button type="button" key={media.id} title={`${media.filename} — add to design`} onClick={() => addImage(media)}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={mediaPreviewSource(media.media_url)} alt={media.filename} />
           <span>{media.filename}</span>
         </button>)}
-      </div> : <div className="restaurant-upload-empty">{search ? "Aramanızla eşleşen görsel bulunamadı." : "Henüz görsel yüklenmedi."}</div>}
+      </div> : <div className="restaurant-upload-empty">{search ? "No images match your search." : "No images uploaded yet."}</div>}
     </div>}
   </aside>;
 }
@@ -552,11 +586,13 @@ const automaticLayout = (
 export function RestaurantMenuPreview({
   config: raw,
   orientation = "landscape",
-  onChange
+  onChange,
+  compact = false
 }: {
   config: Record<string, unknown>;
   orientation?: "landscape" | "portrait";
   onChange?: (next: RestaurantMenuConfig) => void;
+  compact?: boolean;
 }) {
   const config = useMemo(() => normalizeRestaurantMenuConfig(raw), [raw]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -576,19 +612,19 @@ export function RestaurantMenuPreview({
   const overrides = config.editor.layouts[orientation];
   const blocks = useMemo<CanvasBlock[]>(() => {
     const fixed: CanvasBlock[] = [
-      { id: "restaurantName", kind: "restaurantName", label: "İşletme adı", defaultLayout: automaticLayout(orientation, "restaurantName") },
-      { id: "heading", kind: "heading", label: "Menü başlığı", defaultLayout: automaticLayout(orientation, "heading") },
-      { id: "subtitle", kind: "subtitle", label: "Kısa açıklama", defaultLayout: automaticLayout(orientation, "subtitle") }
+      { id: "restaurantName", kind: "restaurantName", label: "Business name", defaultLayout: automaticLayout(orientation, "restaurantName") },
+      { id: "heading", kind: "heading", label: "Menu heading", defaultLayout: automaticLayout(orientation, "heading") },
+      { id: "subtitle", kind: "subtitle", label: "Short description", defaultLayout: automaticLayout(orientation, "subtitle") }
     ];
     shownCategories.forEach((category, categoryIndex) => {
-      fixed.push({ id: `category:${category.id}`, kind: "category", label: `${category.name} başlığı`, category, defaultLayout: automaticLayout(orientation, "category", categoryIndex, 0, shownCategories.length) });
+      fixed.push({ id: `category:${category.id}`, kind: "category", label: `${category.name} heading`, category, defaultLayout: automaticLayout(orientation, "category", categoryIndex, 0, shownCategories.length) });
       items.filter(item => item.categoryId === category.id).slice(0, itemLimit).forEach((item, itemIndex) => {
         fixed.push({ id: `item:${item.id}`, kind: "item", label: item.name, item, defaultLayout: automaticLayout(orientation, "item", categoryIndex, itemIndex, shownCategories.length) });
       });
     });
     fixed.push({ id: "footer", kind: "footer", label: "Alt bilgi", defaultLayout: automaticLayout(orientation, "footer") });
     config.editor.textElements.forEach(element => {
-      fixed.push({ id: `text:${element.id}`, kind: "customText", label: element.text.slice(0, 60) || "Boş metin", textElement: element, defaultLayout: automaticLayout(orientation, "customText") });
+      fixed.push({ id: `text:${element.id}`, kind: "customText", label: element.text.slice(0, 60) || "Empty text", textElement: element, defaultLayout: automaticLayout(orientation, "customText") });
     });
     config.editor.imageElements.forEach(element => {
       fixed.push({ id: `image:${element.id}`, kind: "image", label: element.name, imageElement: element, defaultLayout: automaticLayout(orientation, "image") });
@@ -654,7 +690,7 @@ export function RestaurantMenuPreview({
     const isImage = block.kind === "image";
     const elements = isImage ? config.editor.imageElements : config.editor.textElements;
     if (elements.length >= 40) {
-      window.alert(isImage ? "En fazla 40 görsel ekleyebilirsiniz." : "En fazla 40 metin öğesi ekleyebilirsiniz.");
+      window.alert(isImage ? "You can add up to 40 images." : "You can add up to 40 text elements.");
       return;
     }
     const id = createClientId();
@@ -740,14 +776,14 @@ export function RestaurantMenuPreview({
   };
   const frame: CSSProperties = {
     width: "100%",
-    minHeight: 320,
+    minHeight: compact ? 0 : 320,
     aspectRatio: portrait ? ((config.theme === "paper" || config.theme === "snack") ? "210/297" : "9/16") : "16/9",
     overflow: "hidden",
     position: "relative",
     containerType: "inline-size",
     touchAction: editablePreview ? "none" : "auto",
     userSelect: editablePreview ? "none" : "auto",
-    borderRadius: 18,
+    borderRadius: compact ? 9 : 18,
     color: theme.text,
     background: theme.bg,
     border: `1px solid ${theme.line}`,
@@ -804,9 +840,9 @@ export function RestaurantMenuPreview({
         data-canvas-id={block.id}
         role={editablePreview ? "button" : undefined}
         tabIndex={editablePreview ? 0 : undefined}
-        aria-label={editablePreview ? `${block.label} metin bloğu` : undefined}
+        aria-label={editablePreview ? `${block.label} text block` : undefined}
         aria-pressed={editablePreview ? selected : undefined}
-        title={editablePreview ? `${block.label} — sürükleyin veya ok tuşlarıyla taşıyın` : undefined}
+        title={editablePreview ? `${block.label} — drag or use the arrow keys to move` : undefined}
         style={blockStyle}
         onPointerDown={event => selectAndStart(event, block, "move")}
         onKeyDown={event => handleKeyDown(event, block)}
@@ -830,7 +866,7 @@ export function RestaurantMenuPreview({
         {block.kind === "footer" && <div style={{ color: gradient ? "inherit" : rect.color ?? theme.muted, fontSize: "1em", lineHeight: 1.3, overflowWrap: "anywhere" }}>{config.footer}</div>}
         {block.kind === "customText" && block.textElement && (editingId === block.id ? <textarea
           data-text-editor="true"
-          aria-label="Metni düzenle"
+          aria-label="Edit text"
           value={block.textElement.text}
           maxLength={500}
           onChange={event => updateText(block.textElement!.id, event.target.value)}
@@ -854,12 +890,12 @@ export function RestaurantMenuPreview({
         />}
         {selected && block.kind === "image" && <>
           <span className="restaurant-rotation-line" aria-hidden="true" />
-          <button type="button" className="restaurant-rotation-handle" aria-label="Görseli döndür" title="Sürükleyerek döndür" onPointerDown={event => selectAndStart(event, block, "rotate")}>↻</button>
+          <button type="button" className="restaurant-rotation-handle" aria-label="Rotate image" title="Drag to rotate" onPointerDown={event => selectAndStart(event, block, "rotate")}>↻</button>
           <output className="restaurant-rotation-degree" aria-live="polite">{Math.round(rect.rotation ?? 0)}°</output>
         </>}
       </div>;
     })}
-    {editablePreview && selectedBlock?.kind === "image" && <div className="restaurant-text-toolbar"><button type="button" aria-label="Seçili öğeyi kopyala" title="Kopyala (Ctrl+D / ⌘D)" onClick={() => duplicateBlock(selectedBlock)}>Kopyala</button><button type="button" aria-label="Seçili öğeyi sil" onClick={() => removeBlock(selectedBlock)}>Görseli sil</button></div>}
+    {editablePreview && selectedBlock?.kind === "image" && <div className="restaurant-text-toolbar"><button type="button" aria-label="Duplicate selected element" title="Duplicate (Ctrl+D / ⌘D)" onClick={() => duplicateBlock(selectedBlock)}>Duplicate</button><button type="button" aria-label="Delete selected element" onClick={() => removeBlock(selectedBlock)}>Delete image</button></div>}
     {editablePreview && selectedBlock && selectedBlock.kind !== "image" && selectedLayout && (() => {
       const unit = baseFont(selectedBlock.kind) * 10;
       const point = Math.min(Math.floor(unit * 2.4), Math.max(Math.ceil(unit * .55), Math.round(selectedLayout.fontScale * unit)));
@@ -867,38 +903,38 @@ export function RestaurantMenuPreview({
       const nextTransform = selectedLayout.textTransform === "uppercase" ? "lowercase" : selectedLayout.textTransform === "lowercase" ? "sentence" : "uppercase";
       const nextAlign = selectedLayout.align === "left" ? "center" : selectedLayout.align === "center" ? "right" : "left";
       return <div className="restaurant-text-toolbar">
-        {selectedBlock.kind === "customText" && <button type="button" aria-label="Seçili öğeyi kopyala" title="Kopyala (Ctrl+D / ⌘D)" onClick={() => duplicateBlock(selectedBlock)}>Kopyala</button>}
-        {selectedBlock.kind === "customText" && <button type="button" aria-label="Seçili öğeyi sil" onClick={() => removeBlock(selectedBlock)}>Sil</button>}
+        {selectedBlock.kind === "customText" && <button type="button" aria-label="Duplicate selected element" title="Duplicate (Ctrl+D / ⌘D)" onClick={() => duplicateBlock(selectedBlock)}>Duplicate</button>}
+        {selectedBlock.kind === "customText" && <button type="button" aria-label="Delete selected element" onClick={() => removeBlock(selectedBlock)}>Delete</button>}
         <div className="restaurant-point-control">
-          <button type="button" aria-label="Punto küçült" onClick={() => setPoint(point - 1)}>−</button>
-          <input aria-label="Punto" type="number" min={Math.ceil(unit * .55)} max={Math.floor(unit * 2.4)} value={point} onChange={event => setPoint(Number(event.target.value) || point)} />
-          <button type="button" aria-label="Punto büyüt" onClick={() => setPoint(point + 1)}>+</button>
+          <button type="button" aria-label="Decrease font size" onClick={() => setPoint(point - 1)}>−</button>
+          <input aria-label="Font size" type="number" min={Math.ceil(unit * .55)} max={Math.floor(unit * 2.4)} value={point} onChange={event => setPoint(Number(event.target.value) || point)} />
+          <button type="button" aria-label="Increase font size" onClick={() => setPoint(point + 1)}>+</button>
         </div>
         <div ref={colorPickerRef} className="restaurant-color-picker">
-          <button type="button" className="restaurant-color-control" aria-label="Metin rengini seç" aria-expanded={colorPaletteOpen} onClick={() => setColorPaletteOpen(value => !value)}>
+          <button type="button" className="restaurant-color-control" aria-label="Choose text color" aria-expanded={colorPaletteOpen} onClick={() => setColorPaletteOpen(value => !value)}>
             <span style={{ background: selectedLayout.color ?? theme.text }} />
             <b>A</b>
           </button>
-          {colorPaletteOpen && <div className="restaurant-color-palette" role="dialog" aria-label="Metin renkleri">
+          {colorPaletteOpen && <div className="restaurant-color-palette" role="dialog" aria-label="Text colors">
             <section>
-              <h4><span aria-hidden="true">◉</span> Varsayılan tek renkler</h4>
-              <div className="restaurant-color-swatches">{MENU_SOLID_COLORS.map(color => <button key={color} type="button" aria-label={`${color} rengini seç`} aria-pressed={selectedLayout.color === color} className="restaurant-color-swatch" style={{ background: color }} onClick={() => { patchSelected({ color }); setColorPaletteOpen(false); }} />)}</div>
+              <h4><span aria-hidden="true">◉</span> Default solid colors</h4>
+              <div className="restaurant-color-swatches">{MENU_SOLID_COLORS.map(color => <button key={color} type="button" aria-label={`Choose ${color}`} aria-pressed={selectedLayout.color === color} className="restaurant-color-swatch" style={{ background: color }} onClick={() => { patchSelected({ color }); setColorPaletteOpen(false); }} />)}</div>
             </section>
             <section>
-              <h4><span aria-hidden="true">▣</span> Varsayılan gradyanlı renkler</h4>
-              <div className="restaurant-color-swatches">{MENU_GRADIENT_COLORS.map((color, index) => <button key={color} type="button" aria-label={`${index + 1}. gradyanı seç`} aria-pressed={selectedLayout.color === color} className="restaurant-color-swatch" style={{ background: color }} onClick={() => { patchSelected({ color }); setColorPaletteOpen(false); }} />)}</div>
+              <h4><span aria-hidden="true">▣</span> Default gradient colors</h4>
+              <div className="restaurant-color-swatches">{MENU_GRADIENT_COLORS.map((color, index) => <button key={color} type="button" aria-label={`Choose gradient ${index + 1}`} aria-pressed={selectedLayout.color === color} className="restaurant-color-swatch" style={{ background: color }} onClick={() => { patchSelected({ color }); setColorPaletteOpen(false); }} />)}</div>
             </section>
           </div>}
         </div>
-        <button type="button" className="restaurant-format-button" aria-label="Kalın" aria-pressed={selectedLayout.fontWeight === "bold"} onClick={() => patchSelected({ fontWeight: selectedLayout.fontWeight === "bold" ? "normal" : "bold" })}><b>B</b></button>
-        <button type="button" className="restaurant-format-button" aria-label="İtalik" aria-pressed={selectedLayout.fontStyle === "italic"} onClick={() => patchSelected({ fontStyle: selectedLayout.fontStyle === "italic" ? "normal" : "italic" })}><i>I</i></button>
-        <button type="button" className="restaurant-format-button underline" aria-label="Altı çizili" aria-pressed={selectedLayout.textDecoration === "underline"} onClick={() => patchSelected({ textDecoration: selectedLayout.textDecoration === "underline" ? "none" : "underline" })}>U</button>
-        <button type="button" className="restaurant-format-button strike" aria-label="Üstü çizili" aria-pressed={selectedLayout.textDecoration === "line-through"} onClick={() => patchSelected({ textDecoration: selectedLayout.textDecoration === "line-through" ? "none" : "line-through" })}>S</button>
+        <button type="button" className="restaurant-format-button" aria-label="Bold" aria-pressed={selectedLayout.fontWeight === "bold"} onClick={() => patchSelected({ fontWeight: selectedLayout.fontWeight === "bold" ? "normal" : "bold" })}><b>B</b></button>
+        <button type="button" className="restaurant-format-button" aria-label="Italic" aria-pressed={selectedLayout.fontStyle === "italic"} onClick={() => patchSelected({ fontStyle: selectedLayout.fontStyle === "italic" ? "normal" : "italic" })}><i>I</i></button>
+        <button type="button" className="restaurant-format-button underline" aria-label="Underline" aria-pressed={selectedLayout.textDecoration === "underline"} onClick={() => patchSelected({ textDecoration: selectedLayout.textDecoration === "underline" ? "none" : "underline" })}>U</button>
+        <button type="button" className="restaurant-format-button strike" aria-label="Strikethrough" aria-pressed={selectedLayout.textDecoration === "line-through"} onClick={() => patchSelected({ textDecoration: selectedLayout.textDecoration === "line-through" ? "none" : "line-through" })}>S</button>
         <span className="restaurant-toolbar-divider" />
-        <button type="button" className="restaurant-format-button case" aria-label="Büyük küçük harf biçimini değiştir" title="Sırayla: büyük harf, küçük harf, yalnızca ilk harf büyük" onClick={() => patchSelected({ textTransform: nextTransform })}>aA</button>
-        <button type="button" className="restaurant-format-button" aria-label="Metin hizasını değiştir" title="Sol, orta ve sağ hizalama arasında geçiş yapar" onClick={() => patchSelected({ align: nextAlign })}>{selectedLayout.align === "left" ? "☰" : selectedLayout.align === "center" ? "≡" : "☷"}</button>
-        <button type="button" className="restaurant-format-button list" aria-label="Madde işaretli liste" aria-pressed={selectedLayout.listStyle === "bullet"} disabled={selectedBlock.kind !== "customText"} onClick={() => patchSelected({ listStyle: selectedLayout.listStyle === "bullet" ? "none" : "bullet" })}>•<span>☰</span></button>
-        <button type="button" className="restaurant-format-button list number" aria-label="Numaralı liste" aria-pressed={selectedLayout.listStyle === "number"} disabled={selectedBlock.kind !== "customText"} onClick={() => patchSelected({ listStyle: selectedLayout.listStyle === "number" ? "none" : "number" })}>1.<span>☰</span></button>
+        <button type="button" className="restaurant-format-button case" aria-label="Change letter case" title="Cycle through uppercase, lowercase, and sentence case" onClick={() => patchSelected({ textTransform: nextTransform })}>aA</button>
+        <button type="button" className="restaurant-format-button" aria-label="Change text alignment" title="Cycle through left, center, and right alignment" onClick={() => patchSelected({ align: nextAlign })}>{selectedLayout.align === "left" ? "☰" : selectedLayout.align === "center" ? "≡" : "☷"}</button>
+        <button type="button" className="restaurant-format-button list" aria-label="Bulleted list" aria-pressed={selectedLayout.listStyle === "bullet"} disabled={selectedBlock.kind !== "customText"} onClick={() => patchSelected({ listStyle: selectedLayout.listStyle === "bullet" ? "none" : "bullet" })}>•<span>☰</span></button>
+        <button type="button" className="restaurant-format-button list number" aria-label="Numbered list" aria-pressed={selectedLayout.listStyle === "number"} disabled={selectedBlock.kind !== "customText"} onClick={() => patchSelected({ listStyle: selectedLayout.listStyle === "number" ? "none" : "number" })}>1.<span>☰</span></button>
       </div>;
     })()}
   </div>;

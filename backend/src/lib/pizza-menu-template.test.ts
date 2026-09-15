@@ -19,12 +19,12 @@ test("pizza defaults survive normalization including empty legacy fields and rem
   const reopened = normalizeRestaurantMenuConfig(JSON.parse(JSON.stringify(saved)));
   assert.equal(reopened.editor.imageElements.length, 0);
   assert.equal(reopened.editor.textElements.length, 0);
-  assert.doesNotMatch(renderRestaurantMenuHtml("Menu", reopened), /Masa &amp; Ateş|Günün Menüsü|Margherita/);
+  assert.doesNotMatch(renderRestaurantMenuHtml("Menu", reopened), /Table &amp; Flame|Today&#39;s Menu|Margherita/);
 });
 
 test("template renderer includes all products and safe built-in images", () => {
   const html = renderRestaurantMenuHtml("Pizza", createPizzaMenuTemplate());
-  for (const text of ["PİZZA MENÜ", "Vegetariana", "Ev Yapımı Soğuk Çay", "1100 kcal"]) assert.ok(html.includes(text));
+  for (const text of ["PIZZA MENU", "Vegetariana", "Homemade Iced Tea", "1100 kcal"]) assert.ok(html.includes(text));
   assert.ok(html.includes("data:image/svg+xml;charset=utf-8,"));
   const config = createPizzaMenuTemplate();
   config.editor.imageElements.push({ id: "bad", name: "bad", source: "javascript:alert(1)" });
